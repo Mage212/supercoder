@@ -1,106 +1,161 @@
-# SuperCoder
+# 🤖 SuperCoder
 
-Welcome to SuperCoder! A coding agent that runs in your terminal.
+**AI Coding Assistant for the Terminal** — A powerful, extensible, and terminal-native coding agent designed to help you build, search, and fix code with natural language.
 
-<img width="1323" alt="image" src="https://github.com/user-attachments/assets/bf8944b7-4c64-405e-92c3-5217caa351e6" />
+---
 
-## Features
+## ✨ Core Features
 
-SuperCoder equips you with an array of powerful tools to simplify your development workflow. It offers the following features:
+### 🔍 Code Search
+Performs complex code searches across your project to quickly locate specific patterns using `git grep` with context-aware output and fallback to standard `grep`.
 
-- Code Search: Performs complex code searches across your project to quickly locate specific patterns.
-- Project Structure Exploration: Provides an organized view of your project's folders and files, making navigation a breeze.
-- Code Editing: Enables you to modify your codebase seamlessly with natural language commands.
-- Bug Fixing: Automatically fixes bugs and implements improvements based on your detailed requests.
-- Cursor Rules Support: Leverages Cursor Rules to intelligently understand and modify your code at precise locations.
+### 📁 Project Structure Exploration
+Provides an organized, tree-based view of your project's folders and files, intelligently ignoring build artifacts and junk files (`.git`, `node_modules`, etc.).
 
-## Installation
+### ✏️ Intelligent Code Editing
+Modifies your codebase seamlessly using diff-based operations. Supported operations include:
+- `search_replace`: Precise text replacement.
+- `insert_after`/`insert_before`: Contextual code insertion.
+- `replace_lines`: Range-based line modification.
+- `create`: New file generation.
 
-We have a pre-built binary that works on Linux, MacOS and Windows.
+### 📜 Supercoder Rules (Custom rules)
+Leverage project-specific rules to guide the agent. Place `.md` files in `.supercoder/rules/` and they will be automatically loaded into the agent's context.
 
-- **Step 1:** Download the ZIP bundle from the [Release](https://github.com/huytd/supercoder/releases) page.
+### 🗺️ RepoMap Support
+Uses `tree-sitter` and `networkx` to generate a high-level map of your repository, helping the LLM understand relationships between files and symbols.
 
-  <img width="258" alt="image" src="https://github.com/user-attachments/assets/7d2d7196-1a35-4752-a6d0-5816955b81dc" />
-  
-- **Step 2:** Extract to a folder on your computer, and make sure the `bin/supercoder` or `bin/supercoder.bat` binary is accessible in your system's `PATH`.
-- **Step 3:** In your terminal, run the `supercoder` command from any folder you want to work on.
+### 🧠 Context Management
+- **Token Counter**: Real-time monitoring of context usage.
+- **Smart Compaction**: Use `/compact` to summarize conversation history and free up token space without losing key context.
 
-## Usage
+---
 
-### Configure the Agent
+## 🚀 Getting Started
 
-#### Option 1: Using OpenAI API
-Before running the agent, you need to have the `OPENAI_API_KEY` environment variable configured. You can obtain an API key by signing up at [OpenAI](https://platform.openai.com/).
+### Installation
 
-```shell
-export OPENAI_API_KEY=<API_KEY>
-export OPENAI_MODEL=<MODEL> # default to "o3-mini", so watch your wallet
+**From GitHub (recommended):**
+```bash
+pip install git+https://github.com/Mage212/supercoder.git
 ```
 
-#### Option 2: Using Local Models or any OpenAI-compatible API
-If you have a local model or any other OpenAI-compatible API, you can configure SuperCoder to use it, by setting the following environment variables:
-
-```shell
-export SUPERCODER_BASE_URL=<URL>
-export SUPERCODER_API_KEY=<URL>
-export SUPERCODER_MODEL=<URL>
+**For development (editable mode):**
+```bash
+git clone https://github.com/Mage212/supercoder.git
+cd supercoder
+pip install -e .
 ```
 
-Note that, if you are using Google Gemini, you will need to set `SUPERCODER_GEMINI_MODE=true` as well.
+### Configuration
 
-It's important to note that the model you are using should support tools calling.
+SuperCoder supports multiple models and endpoints. Configure them via environment variables or a config file.
 
-### Running the Coding Agent
+**Configuration files (in order of priority):**
+1. Environment variables (highest priority)
+2. `.supercoder.yaml` in your project directory
+3. `~/.supercoder/config.yaml` (global config)
 
-After building the project, extract and run the generated binary. Once running, you can type natural language commands such as:
+**Environment Variables:**
+```bash
+export SUPERCODER_API_KEY="sk-..."
+export SUPERCODER_MODEL="gpt-4o"
+export SUPERCODER_BASE_URL="https://api.openai.com/v1"  # Optional
+```
 
-- "Search for usage of function XYZ"
-- "Edit file path/to/file.scala to add a new method"
-- "Show me the project structure"
+**Custom Endpoints (OpenRouter, Ollama, LM Studio, etc.):**
+```bash
+export SUPERCODER_BASE_URL="https://openrouter.ai/api/v1"
+export SUPERCODER_API_KEY="sk-or-..."
+export SUPERCODER_MODEL="openai/gpt-4o"
+```
 
-The agent will interpret your commands and invoke the appropriate tool.
+**Example `.supercoder.yaml`:**
+```yaml
+api_key: "sk-..."
+model: "gpt-4o"
+base_url: "https://api.openai.com/v1"
+max_context_tokens: 32000
+use_repo_map: true
 
-### Interacting with the Tools
+# Multiple model profiles
+model_profiles:
+  gpt4:
+    model: "gpt-4o"
+    base_url: "https://api.openai.com/v1"
+  local:
+    model: "qwen2.5-coder:7b"
+    base_url: "http://localhost:11434/v1"
+    api_key: "ollama"
+```
 
-SuperCoder supports the following tools:
+---
 
-- **CodeSearchTool**: Helps in searching for specific code patterns across the project.
-- **CodeEditTool**: Allows editing of files within the project.
-- **FileReadTool**: Reads and displays file content.
-- **ProjectStructureTool**: Provides an overview of the project folders and files.
-- **CodeExecutionTool**: Executes shell commands based on the agent's assessment.
+## ⌨️ Usage
 
-## Development
+Launch the interactive REPL:
 
-For development purposes, follow these instructions to set up your environment:
+```bash
+supercoder
+```
 
-### Prerequisites
+### CLI Options
 
-- Java 8 or above
-- SBT (Scala Build Tool)
+```bash
+supercoder --help
+supercoder --model gpt-4o          # Use specific model
+supercoder --debug                 # Enable debug mode
+supercoder --no-repo-map           # Disable RepoMap
+```
 
-### Setup
+### Slash Commands
 
-1. Clone the repository:
-    ```bash
-    git clone <repository-url>
-    cd SuperCoder
-    ```
+| Command | Description |
+|---------|-------------|
+| `/help` | Show available commands |
+| `/tools` | List active tools and their descriptions |
+| `/compact` | Summarize history to save context tokens |
+| `/stats` | View current token usage and context status |
+| `/clear` | Clear conversation history |
+| `/config` | Show current active configuration |
+| `/models` | List available model profiles |
+| `/model <name>` | Switch to a specific model profile |
+| `/debug` | Toggle verbose debug logging |
+| `/exit` | Exit the application |
 
-2. Build the project using SBT:
-    ```bash
-    sbt compile
-    ```
+---
 
-3. Run tests to ensure everything is working as expected:
-    ```bash
-    sbt test
-    ```
+## 📁 Project Structure
 
-## Contributing
+```text
+supercoder/
+├── agent/          # CoderAgent logic and prompts
+├── context/        # Token counting and context window management
+├── llm/            # LLM providers (OpenAI-compatible endpoints)
+├── repomap/        # Repository mapping logic (tree-sitter)
+├── tools/          # Core tools (Search, Edit, Structure, Exec)
+├── rules_loader.py # Supercoder Rules loading logic
+├── config.py       # Configuration management
+├── logging.py      # Conversation logging
+└── main.py         # CLI entry point
+```
 
-Contributions, issues, and feature requests are welcome! Please check the [issues page](issues) if you want to contribute.
+---
 
-## License
+## 📦 Dependencies
 
-This project is open source and available under the MIT License.
+**Core:**
+- `openai` — LLM API client
+- `click` — CLI framework
+- `rich` — Beautiful terminal output
+- `prompt-toolkit` — Interactive input
+- `networkx` — Graph-based RepoMap
+- `tree-sitter-languages` — Code parsing for RepoMap
+- `tiktoken` — Token counting
+- `pyyaml` — Configuration files
+
+---
+
+## ⚖️ License
+
+MIT

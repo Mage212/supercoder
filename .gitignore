@@ -1,32 +1,45 @@
 # macOS
 .DS_Store
 
-# sbt specific
-dist/*
-target/
-lib_managed/
-src_managed/
-project/boot/
-project/plugins/project/
-project/local-plugins.sbt
-.history
-.ensime
-.ensime_cache/
-.sbt-scripted/
-local.sbt
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Bloop
-.bsp
+# Virtual Environment
+venv/
+ENV/
 
-# VS Code
+# IDEs
+.idea/
 .vscode/
 
-# Metals
-.bloop/
-.metals/
-metals.sbt
+# Project specific
+.env
+.supercoder/
+! .supercoder/rules/
+! .supercoder/repomap/
+logs/
+*.log
 
-# IDEA
-.idea
-.idea_modules
-/.worksheet/
+# Tests
+.pytest_cache/
+tests/

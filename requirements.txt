@@ -1,0 +1,23 @@
+# SuperCoder Python Dependencies
+# Install: pip install -r requirements.txt
+
+# Core dependencies
+openai>=2.13.0
+click>=8.3.1
+rich>=14.2.0
+prompt-toolkit>=3.0.52
+tiktoken>=0.12.0
+pyyaml>=6.0.0
+pygments>=2.17.0
+
+# RepoMap
+tree-sitter-languages>=1.10.2
+networkx>=3.6.1
+
+# Optional: Local model support
+# llama-cpp-python>=0.2.0
+
+# Development
+# pytest>=7.0.0
+# black>=23.0.0
+# ruff>=0.1.0
