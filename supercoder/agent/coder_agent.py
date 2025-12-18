@@ -2,12 +2,14 @@
 
 import re
 import json
+from datetime import datetime
 from pathlib import Path
 from rich.console import Console
 
 from ..llm.base import BaseLLM, Message
 from ..tools.base import BaseTool
 from ..context.window_manager import ContextWindowManager, ContextConfig
+from ..context.session_manager import SessionManager, ChatSession
 from ..repomap import RepoMap
 from ..rules_loader import SupercoderRulesLoader
 from ..logging import get_logger
@@ -51,6 +53,10 @@ class CoderAgent:
         
         # Multi-format tool call parser
         self.tool_parser = ToolCallParser(debug=False)
+        
+        # Session management
+        self.session_manager = SessionManager(self.repo_root)
+        self.current_session: ChatSession | None = None
         
         self.debug = False
 
@@ -116,6 +122,8 @@ class CoderAgent:
             self.context.add_message(Message("assistant", response_text))
             # Log model response
             get_logger().log_model_response(response_text, self.llm.model)
+            # Auto-save session
+            self._save_current_session()
         
         # Check for tool calls (may be multiple)
         tool_calls = self._extract_all_tool_calls(response_text)
@@ -185,6 +193,32 @@ class CoderAgent:
         self.debug = enabled
         self.tool_parser.debug = enabled
     
+    # Session management methods
+    def start_new_session(self) -> None:
+        """Create and activate a new session."""
+        self.current_session = self.session_manager.create_new_session()
+    
+    def load_session(self, session_id: str) -> bool:
+        """Load an existing session and restore context.
+        
+        Returns True if session was loaded successfully.
+        """
+        session = self.session_manager.load_session(session_id)
+        if session:
+            self.current_session = session
+            # Clear existing context and restore from session
+            self.context.clear()
+            for msg in session.messages:
+                self.context.add_message(msg)
+            return True
+        return False
+    
+    def _save_current_session(self) -> None:
+        """Save current session state."""
+        if self.current_session:
+            self.current_session.messages = self.context.get_messages()
+            self.session_manager.save_session(self.current_session)
+    
     def compact_context(self) -> tuple[str, "ContextStats", "ContextStats"]:
         """Compact the current context by summarizing it.
         
@@ -229,6 +263,12 @@ class CoderAgent:
         
         # Clear history and set summary as initial context
         self.context.set_initial_summary(summary)
+        
+        # Update session with compacted state
+        if self.current_session:
+            self.session_manager.update_session_after_compact(
+                self.current_session, summary
+            )
         
         # Get stats after compaction
         stats_after = self.context.get_stats()

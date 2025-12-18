@@ -21,6 +21,8 @@ class SuperCoderREPL:
         self.commands = {
             "/clear": self.cmd_clear,
             "/compact": self.cmd_compact,
+            "/continue": self.cmd_continue,
+            "/sessions": self.cmd_sessions,
             "/help": self.cmd_help,
             "/tools": self.cmd_tools,
             "/config": self.cmd_config,
@@ -41,7 +43,7 @@ class SuperCoderREPL:
         })
         
         command_completer = WordCompleter(
-            ['/clear', '/compact', '/help', '/tools', '/stats', '/debug', '/models', '/model', '/config', '/exit', '/quit'],
+            ['/clear', '/compact', '/continue', '/sessions', '/help', '/tools', '/stats', '/debug', '/models', '/model', '/config', '/exit', '/quit'],
             ignore_case=True
         )
         
@@ -61,6 +63,9 @@ class SuperCoderREPL:
         """Start the REPL loop."""
         self.console.print("[bold green]SuperCoder CLI[/] - Type /help for commands")
         self.console.print(f"[dim]Model: {self.agent.llm.model}[/]")
+        
+        # Start a new session on fresh start
+        self.agent.start_new_session()
         
         while True:
             try:
@@ -217,18 +222,85 @@ class SuperCoderREPL:
         self.console.print(Panel(Markdown(preview), border_style="dim"))
         
         return False
+    
+    def cmd_continue(self, _):
+        """Continue a previous session."""
+        sessions = self.agent.session_manager.list_sessions()
+        
+        if not sessions:
+            self.console.print("[yellow]No previous sessions found[/]")
+            return False
+        
+        self.console.print("\n[bold]Available Sessions:[/]")
+        for i, session in enumerate(sessions, 1):
+            compacted = " [dim](compacted)[/]" if session.get("is_compacted") else ""
+            modified = session.get("last_modified", "")[:16].replace("T", " ")  # Format datetime
+            title = session.get("title", "Untitled")
+            msg_count = session.get("message_count", 0)
+            self.console.print(f"  [cyan]{i}[/]. {title}{compacted}")
+            self.console.print(f"      [dim]{modified} • {msg_count} messages[/]")
+        
+        self.console.print("\n[dim]Enter session number (or 'cancel'):[/]")
+        
+        try:
+            choice = self.session.prompt("Select> ").strip()
+            
+            if choice.lower() == "cancel" or not choice:
+                self.console.print("[dim]Cancelled[/]")
+                return False
+            
+            idx = int(choice) - 1
+            if 0 <= idx < len(sessions):
+                session_id = sessions[idx]["id"]
+                if self.agent.load_session(session_id):
+                    self.console.print(f"[green]✓ Resumed session[/]")
+                    stats = self.agent.context.get_stats()
+                    self.console.print(f"[dim]Loaded {stats.message_count} messages, {stats.used_tokens:,} tokens[/]")
+                else:
+                    self.console.print("[red]Failed to load session[/]")
+            else:
+                self.console.print("[red]Invalid selection[/]")
+        except ValueError:
+            self.console.print("[red]Invalid selection[/]")
+        except (KeyboardInterrupt, EOFError):
+            self.console.print("\n[dim]Cancelled[/]")
+        
+        return False
+    
+    def cmd_sessions(self, _):
+        """List available sessions."""
+        sessions = self.agent.session_manager.list_sessions()
+        
+        if not sessions:
+            self.console.print("[yellow]No sessions found[/]")
+            return False
+        
+        self.console.print("\n[bold]Saved Sessions:[/]")
+        for session in sessions:
+            compacted = " (compacted)" if session.get("is_compacted") else ""
+            modified = session.get("last_modified", "")[:16].replace("T", " ")
+            title = session.get("title", "Untitled")
+            msg_count = session.get("message_count", 0)
+            self.console.print(f"  • {title}{compacted}")
+            self.console.print(f"    [dim]{modified} • {msg_count} messages[/]")
+        
+        self.console.print(f"\n[dim]Total: {len(sessions)} sessions (max 10)[/]")
+        self.console.print("[dim]Use /continue to resume a session[/]")
+        return False
 
     def cmd_help(self, _):
         self.console.print("\n[bold]Available Commands:[/]")
-        self.console.print("  /clear   - Clear conversation history")
-        self.console.print("  /compact - Summarize context and reduce tokens")
-        self.console.print("  /stats   - Show context window stats")
-        self.console.print("  /tools   - List available tools")
-        self.console.print("  /models  - List available model profiles")
-        self.console.print("  /model   - Switch model: /model <name>")
-        self.console.print("  /config  - Show current configuration")
-        self.console.print("  /debug   - Toggle debug mode")
-        self.console.print("  /exit    - Quit SuperCoder")
+        self.console.print("  /continue - Resume a previous session")
+        self.console.print("  /sessions - List saved sessions")
+        self.console.print("  /clear    - Clear conversation history")
+        self.console.print("  /compact  - Summarize context and reduce tokens")
+        self.console.print("  /stats    - Show context window stats")
+        self.console.print("  /tools    - List available tools")
+        self.console.print("  /models   - List available model profiles")
+        self.console.print("  /model    - Switch model: /model <name>")
+        self.console.print("  /config   - Show current configuration")
+        self.console.print("  /debug    - Toggle debug mode")
+        self.console.print("  /exit     - Quit SuperCoder")
         self.console.print()
         return False
 

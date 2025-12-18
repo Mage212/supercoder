@@ -29,6 +29,12 @@ Uses `tree-sitter` and `networkx` to generate a high-level map of your repositor
 - **Token Counter**: Real-time monitoring of context usage.
 - **Smart Compaction**: Use `/compact` to summarize conversation history and free up token space without losing key context.
 
+### 💾 Session Persistence
+- **Auto-Save**: Your conversation is automatically saved after each message exchange.
+- **Resume Sessions**: Use `/continue` to pick up where you left off after closing SuperCoder.
+- **Session History**: Up to 10 sessions are stored in `.supercoder/sessions/`.
+- **Compact Integration**: When you `/compact`, the session file is also updated with the summary.
+
 ---
 
 ## 🚀 Getting Started
@@ -113,6 +119,8 @@ supercoder --no-repo-map           # Disable RepoMap
 | Command | Description |
 |---------|-------------|
 | `/help` | Show available commands |
+| `/continue` | Resume a previous session |
+| `/sessions` | List saved sessions |
 | `/tools` | List active tools and their descriptions |
 | `/compact` | Summarize history to save context tokens |
 | `/stats` | View current token usage and context status |
@@ -130,13 +138,14 @@ supercoder --no-repo-map           # Disable RepoMap
 ```text
 supercoder/
 ├── agent/          # CoderAgent logic and prompts
-├── context/        # Token counting and context window management
+├── context/        # Token counting, context window, and session management
 ├── llm/            # LLM providers (OpenAI-compatible endpoints)
 ├── repomap/        # Repository mapping logic (tree-sitter)
 ├── tools/          # Core tools (Search, Edit, Structure, Exec)
 ├── rules_loader.py # Supercoder Rules loading logic
 ├── config.py       # Configuration management
 ├── logging.py      # Conversation logging
+├── repl.py         # Interactive REPL interface
 └── main.py         # CLI entry point
 ```
 
