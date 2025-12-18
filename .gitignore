@@ -42,4 +42,3 @@ logs/
 
 # Tests
 .pytest_cache/
-tests/
