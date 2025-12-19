@@ -1,12 +1,10 @@
 """Multi-format tool call parser.
 
-Supports various LLM output formats for tool calling:
+Supports tool calling formats based on model's tool_calling_type configuration:
 1. Our native format: <@TOOL>{"name": "...", "arguments": "..."}</@TOOL>
-2. Qwen-style: <|start|>...<|channel|>...to=tool:name...<|message|>...<|call|>
-3. JSON code blocks: ```json {"tool": "...", "args": {...}} ```
+2. Qwen-style: to=tool:name {...}
+3. JSON code blocks: ```json {"tool": "...", "arguments": {...}} ```
 4. XML: <function_call name="...">...</function_call>
-5. Pythonic: tool_name(arg1="value1")
-6. Generic JSON with tool/function keys
 """
 
 import re
@@ -44,56 +42,29 @@ class BaseToolParser(ABC):
 
 
 class SupercoderTagParser(BaseToolParser):
-    """Parse our native <@TOOL>...</@TOOL> format, including inside ```tool_code blocks."""
+    """Parse our native <@TOOL>...</@TOOL> format.
+    
+    Expected format:
+    <@TOOL>{"name": "tool-name", "arguments": {"arg1": "value1"}}</@TOOL>
+    """
     
     name = "supercoder_tag"
     pattern = re.compile(r'<@TOOL>(.*?)</@TOOL>', re.DOTALL)
-    # Pattern to extract content from ```tool_code blocks
-    code_block_pattern = re.compile(r'```tool_code\s*\n?(.*?)\n?```', re.DOTALL)
     
     def try_parse(self, text: str) -> ToolCall | None:
-        # First, try to extract from tool_code block if present
-        code_match = self.code_block_pattern.search(text)
-        if code_match:
-            text = code_match.group(1)
-        
         match = self.pattern.search(text)
         if not match:
             return None
         
         try:
             content = match.group(1).strip()
-            
-            # Try standard JSON format first: {"name": "...", "arguments": {...}}
-            try:
-                data = json.loads(content)
-                return ToolCall(
-                    name=data.get("name", ""),
-                    arguments=data.get("arguments", ""),
-                    raw_match=match.group(0),
-                    format_name=self.name
-                )
-            except json.JSONDecodeError:
-                pass
-            
-            # Try alternative format: tool-name{"arg": "value", ...}
-            # e.g., command-exec{"command": "ls", "timeout": 60}
-            alt_pattern = re.match(r'^([a-z-]+)(\{.+\})$', content, re.DOTALL)
-            if alt_pattern:
-                tool_name = alt_pattern.group(1)
-                args_json = alt_pattern.group(2)
-                try:
-                    args = json.loads(args_json)
-                    return ToolCall(
-                        name=tool_name,
-                        arguments=args,
-                        raw_match=match.group(0),
-                        format_name=self.name + "_alt"
-                    )
-                except json.JSONDecodeError:
-                    pass
-            
-            return None
+            data = json.loads(content)
+            return ToolCall(
+                name=data.get("name", ""),
+                arguments=data.get("arguments", ""),
+                raw_match=match.group(0),
+                format_name=self.name
+            )
         except (json.JSONDecodeError, KeyError):
             return None
     
@@ -101,45 +72,16 @@ class SupercoderTagParser(BaseToolParser):
         """Parse ALL tool calls from text, not just the first one."""
         results = []
         
-        # First, try to extract from tool_code block if present
-        code_match = self.code_block_pattern.search(text)
-        if code_match:
-            text = code_match.group(1)
-        
-        # Find all matches
         for match in self.pattern.finditer(text):
             try:
                 content = match.group(1).strip()
-                
-                # Try standard JSON format first
-                try:
-                    data = json.loads(content)
-                    results.append(ToolCall(
-                        name=data.get("name", ""),
-                        arguments=data.get("arguments", ""),
-                        raw_match=match.group(0),
-                        format_name=self.name
-                    ))
-                    continue
-                except json.JSONDecodeError:
-                    pass
-                
-                # Try alternative format: tool-name{...}
-                alt_pattern = re.match(r'^([a-z-]+)(\{.+\})$', content, re.DOTALL)
-                if alt_pattern:
-                    tool_name = alt_pattern.group(1)
-                    args_json = alt_pattern.group(2)
-                    try:
-                        args = json.loads(args_json)
-                        results.append(ToolCall(
-                            name=tool_name,
-                            arguments=args,
-                            raw_match=match.group(0),
-                            format_name=self.name + "_alt"
-                        ))
-                    except json.JSONDecodeError:
-                        pass
-                        
+                data = json.loads(content)
+                results.append(ToolCall(
+                    name=data.get("name", ""),
+                    arguments=data.get("arguments", ""),
+                    raw_match=match.group(0),
+                    format_name=self.name
+                ))
             except (json.JSONDecodeError, KeyError):
                 continue
         
@@ -147,146 +89,73 @@ class SupercoderTagParser(BaseToolParser):
 
 
 class QwenStyleParser(BaseToolParser):
-    """Parse Qwen/OSS model format: various Qwen-style patterns
+    """Parse Qwen-style formats.
     
-    Examples:
-    <|start|>assistant<|channel|>commentary to=tool:project-structure <|message|>...<|call|>
-    <|start|>assistant<|channel|>commentary to=TOOL project-structure <|message|>...<|call|>
-    <|channel|>commentary to=code-search <|constrain|>...<|message|>{...}
-    to=tool.file-read {"fileName":"hello.py"}
+    Supports:
+    1. Simple format (as instructed): to=tool:file-read {"path": "main.py"}
+    2. Full Qwen format (model default): <|start|>...<|channel|>...to=tool:name...<|message|>{...}<|call|>
     """
     
     name = "qwen_style"
     
-    # Pattern 1: Full Qwen format with <|start|>...<|call|>
-    pattern_full = re.compile(
-        r'<\|start\|>.*?to=(?:tool[:\s.]|TOOL\s+)(\S+).*?<\|message\|>(.*?)<\|call\|>',
-        re.DOTALL | re.IGNORECASE
-    )
-    
-    # Pattern 2: Simple format: to=tool.name {...} or to=tool:name {...}
+    # Pattern 1: Simple format (what we instruct in prompt)
     pattern_simple = re.compile(
-        r'to=tool[:\.](\S+)\s+(\{.*\})',
+        r'to=tool[:\.]([a-zA-Z0-9_-]+)\s+(\{.*?\})',
+        re.DOTALL
+    )
+    
+    # Pattern 2: Full Qwen format with markers (what model actually uses)
+    pattern_full = re.compile(
+        r'<\|start\|>.*?to=(?:tool[:\s.])?([a-zA-Z0-9_-]+).*?<\|message\|>(\{.*?\})<\|call\|>',
         re.DOTALL | re.IGNORECASE
     )
     
-    # Pattern 3: gpt-oss format - captures tool name only, JSON extracted separately
-    pattern_gpt_oss_base = re.compile(
-        r'<\|channel\|>.*?to=(?:TOOL\s+)?([\w-]+).*?<\|message\|>',
+    # Pattern 3: channel format without start (some models)
+    pattern_channel = re.compile(
+        r'<\|channel\|>.*?to=([a-zA-Z0-9_-]+).*?<\|message\|>(\{.*?\})',
         re.DOTALL | re.IGNORECASE
     )
-    
-    def _extract_json_at_position(self, text: str, start_pos: int) -> tuple[dict, str] | None:
-        """Extract JSON object starting at position, handling nested braces and escaped quotes.
-        
-        Uses json.JSONDecoder.raw_decode() to find exact JSON boundaries.
-        Returns (parsed_dict, raw_json_string) or None if no valid JSON found.
-        """
-        if start_pos >= len(text):
-            return None
-        
-        # Skip whitespace
-        while start_pos < len(text) and text[start_pos] in ' \t\n\r':
-            start_pos += 1
-        
-        if start_pos >= len(text) or text[start_pos] != '{':
-            return None
-        
-        try:
-            decoder = json.JSONDecoder()
-            obj, end_idx = decoder.raw_decode(text[start_pos:])
-            if isinstance(obj, dict):
-                json_str = text[start_pos:start_pos + end_idx]
-                return obj, json_str
-        except json.JSONDecodeError:
-            pass
-        
-        return None
     
     def try_parse(self, text: str) -> ToolCall | None:
-        # Try full Qwen format first (has explicit <|call|> end marker)
-        match = self.pattern_full.search(text)
-        if match:
-            tool_name = match.group(1).strip()
-            message_content = match.group(2).strip()
-            return self._create_tool_call(tool_name, message_content, match.group(0))
-        
-        # Try gpt-oss format: <|channel|>...to=name...<|message|>{JSON}
-        match = self.pattern_gpt_oss_base.search(text)
-        if match:
-            tool_name = match.group(1).strip()
-            # Extract JSON starting after <|message|>
-            json_start = match.end()
-            json_result = self._extract_json_at_position(text, json_start)
-            if json_result:
-                args, raw_json = json_result
-                return ToolCall(
-                    name=self._map_tool_name(tool_name),
-                    arguments=args,
-                    raw_match=match.group(0) + raw_json,
-                    format_name=self.name
-                )
-        
-        # Try simple format: to=tool.name {...}
+        # Try simple format first (what we instructed)
         match = self.pattern_simple.search(text)
         if match:
-            tool_name = match.group(1).strip()
-            # Try to extract valid JSON from the captured group
-            json_text = match.group(2)
-            json_result = self._extract_json_at_position(json_text, 0)
-            if json_result:
-                args, raw_json = json_result
-                return ToolCall(
-                    name=self._map_tool_name(tool_name),
-                    arguments=args,
-                    raw_match=match.group(0),
-                    format_name=self.name
-                )
+            return self._parse_match(match)
+        
+        # Try full Qwen format (what model may use)
+        match = self.pattern_full.search(text)
+        if match:
+            return self._parse_match(match)
+        
+        # Try channel format
+        match = self.pattern_channel.search(text)
+        if match:
+            return self._parse_match(match)
         
         return None
     
-    def _map_tool_name(self, tool_name: str) -> str:
-        """Map tool names from Qwen format to our tool names."""
-        tool_name_map = {
-            "create": "code-edit",
-            "read": "file-read", 
-            "search": "code-search",
-            "exec": "command-exec",
-        }
-        return tool_name_map.get(tool_name, tool_name)
-    
-    def _create_tool_call(self, tool_name: str, message_content: str, raw_match: str) -> ToolCall:
-        """Create a ToolCall from parsed components."""
-        mapped_name = self._map_tool_name(tool_name)
+    def _parse_match(self, match) -> ToolCall | None:
+        tool_name = match.group(1).strip()
+        json_text = match.group(2)
         
-        # Try to parse message as JSON arguments
         try:
-            args = json.loads(message_content)
-            if mapped_name == "code-edit" and isinstance(args, dict) and "filepath" in args:
-                args["operation"] = args.get("operation", "create")
+            args = json.loads(json_text)
+            return ToolCall(
+                name=tool_name,
+                arguments=args,
+                raw_match=match.group(0),
+                format_name=self.name
+            )
         except json.JSONDecodeError:
-            args = message_content
-        
-        return ToolCall(
-            name=mapped_name,
-            arguments=args,
-            raw_match=raw_match,
-            format_name=self.name
-        )
-
-
+            return None
 
 
 class JsonBlockParser(BaseToolParser):
-    """Parse JSON code blocks with tool/function info.
+    """Parse JSON code blocks with tool info.
     
-    Examples:
+    Expected format (as instructed in system prompt):
     ```json
-    {"tool": "file_read", "args": {"path": "main.py"}}
-    ```
-    
-    ```json
-    {"function": "code_edit", "arguments": {"filepath": "test.py"}}
+    {"tool": "file-read", "arguments": {"path": "main.py"}}
     ```
     """
     
@@ -302,12 +171,12 @@ class JsonBlockParser(BaseToolParser):
             content = match.group(1).strip()
             data = json.loads(content)
             
-            # Support various key names
-            name = data.get("tool") or data.get("function") or data.get("name") or data.get("tool_name")
+            # Support key names as instructed: "tool" and "arguments"
+            name = data.get("tool") or data.get("name")
             if not name:
                 return None
             
-            args = data.get("args") or data.get("arguments") or data.get("parameters") or data.get("params") or {}
+            args = data.get("arguments") or data.get("args") or {}
             
             return ToolCall(
                 name=name,
@@ -322,160 +191,35 @@ class JsonBlockParser(BaseToolParser):
 class XmlFunctionParser(BaseToolParser):
     """Parse XML-style function calls.
     
-    Examples:
-    <function_call name="file_read">{"path": "main.py"}</function_call>
-    <tool_call name="code_edit" args='{"filepath": "test.py"}' />
-    <tool name="search">query text</tool>
+    Expected format (as instructed in system prompt):
+    <function_call name="file-read">{"path": "main.py"}</function_call>
     """
     
     name = "xml_function"
-    patterns = [
-        # <function_call name="...">...</function_call>
-        re.compile(r'<function_call\s+name=["\']([^"\']+)["\']>(.*?)</function_call>', re.DOTALL),
-        # <tool_call name="..." args="..." />
-        re.compile(r'<tool_call\s+name=["\']([^"\']+)["\']\s+args=["\']([^"\']+)["\']', re.DOTALL),
-        # <tool name="...">...</tool>
-        re.compile(r'<tool\s+name=["\']([^"\']+)["\']>(.*?)</tool>', re.DOTALL),
-        # <call_function name="...">...</call_function>
-        re.compile(r'<call_function\s+name=["\']([^"\']+)["\']>(.*?)</call_function>', re.DOTALL),
-    ]
+    pattern = re.compile(
+        r'<function_call\s+name=["\']([^"\']+)["\']>(.*?)</function_call>',
+        re.DOTALL
+    )
     
     def try_parse(self, text: str) -> ToolCall | None:
-        for pattern in self.patterns:
-            match = pattern.search(text)
-            if match:
-                name = match.group(1)
-                args_str = match.group(2).strip() if len(match.groups()) > 1 else ""
-                
-                # Try to parse as JSON
-                try:
-                    args = json.loads(args_str) if args_str else {}
-                except json.JSONDecodeError:
-                    args = args_str
-                
-                return ToolCall(
-                    name=name,
-                    arguments=args,
-                    raw_match=match.group(0),
-                    format_name=self.name
-                )
-        return None
-
-
-class PythonicParser(BaseToolParser):
-    """Parse function-call style syntax.
-    
-    Examples:
-    file_read(path="main.py")
-    code_edit(filepath="test.py", operation="create", content="hello")
-    
-    Note: Only matches known tool names to avoid false positives.
-    """
-    
-    name = "pythonic"
-    known_tools = {
-        "file-read", "code-edit", "code-search", "project-structure", 
-        "command-exec", "read_file", "write_file", "search", "execute"
-    }
-    
-    def try_parse(self, text: str) -> ToolCall | None:
-        # Match tool_name(args) pattern
-        for tool_name in self.known_tools:
-            pattern = re.compile(rf'{tool_name}\s*\((.*?)\)', re.DOTALL)
-            match = pattern.search(text)
-            if match:
-                args_str = match.group(1).strip()
-                args = self._parse_kwargs(args_str)
-                if args is not None:
-                    return ToolCall(
-                        name=tool_name,
-                        arguments=args,
-                        raw_match=match.group(0),
-                        format_name=self.name
-                    )
-        return None
-    
-    def _parse_kwargs(self, args_str: str) -> dict | None:
-        """Parse Python kwargs string to dict."""
-        if not args_str:
-            return {}
+        match = self.pattern.search(text)
+        if not match:
+            return None
         
-        # Try simple key=value parsing
-        result = {}
-        # Match key="value" or key='value' or key=value patterns
-        pattern = re.compile(r'(\w+)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|(\S+))')
+        name = match.group(1)
+        args_str = match.group(2).strip()
         
-        for match in pattern.finditer(args_str):
-            key = match.group(1)
-            value = match.group(2) or match.group(3) or match.group(4)
-            result[key] = value
+        try:
+            args = json.loads(args_str) if args_str else {}
+        except json.JSONDecodeError:
+            args = args_str
         
-        return result if result else None
-
-
-class GenericJsonParser(BaseToolParser):
-    """Parse any JSON object that looks like a tool call.
-    
-    This is a fallback parser that tries to find JSON with tool-related keys.
-    The value of the tool/function key should be the tool name.
-    """
-    
-    name = "generic_json"
-    # Match JSON objects
-    pattern = re.compile(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', re.DOTALL)
-    
-    tool_keys = {"tool", "function", "name", "tool_name", "action"}
-    args_keys = {"args", "arguments", "parameters", "params", "input"}
-    
-    # Known valid tool names to validate against
-    valid_tools = {"file-read", "code-edit", "code-search", "project-structure", "command-exec"}
-    
-    def try_parse(self, text: str) -> ToolCall | None:
-        for match in self.pattern.finditer(text):
-            try:
-                data = json.loads(match.group(0))
-                if not isinstance(data, dict):
-                    continue
-                
-                # Check for tool-like structure - get the VALUE of the tool key
-                name = None
-                for key in self.tool_keys:
-                    if key in data:
-                        value = data[key]
-                        # The value must be a string (the actual tool name)
-                        if isinstance(value, str) and value:
-                            name = value
-                            break
-                
-                if not name:
-                    continue
-                
-                # Validate it's a known tool name to avoid false positives
-                if name not in self.valid_tools:
-                    continue
-                
-                # Get arguments
-                args = {}
-                for key in self.args_keys:
-                    if key in data:
-                        args = data[key]
-                        break
-                
-                # If no explicit args key, use remaining keys as args
-                if not args:
-                    args = {k: v for k, v in data.items() if k not in self.tool_keys}
-                
-                return ToolCall(
-                    name=name,
-                    arguments=args,
-                    raw_match=match.group(0),
-                    format_name=self.name
-                )
-            except json.JSONDecodeError:
-                continue
-        
-        return None
-
+        return ToolCall(
+            name=name,
+            arguments=args,
+            raw_match=match.group(0),
+            format_name=self.name
+        )
 
 
 class ToolCallParser:
@@ -490,14 +234,12 @@ class ToolCallParser:
     
     def __init__(self, debug: bool = False):
         self.debug = debug
-        # Parsers in priority order
+        # Parsers in priority order - matching our supported tool_calling_types
         self.parsers: list[BaseToolParser] = [
-            SupercoderTagParser(),
-            QwenStyleParser(),
-            JsonBlockParser(),
-            XmlFunctionParser(),
-            PythonicParser(),
-            GenericJsonParser(),
+            SupercoderTagParser(),  # tool_calling_type: supercoder
+            QwenStyleParser(),      # tool_calling_type: qwen_like
+            JsonBlockParser(),      # tool_calling_type: json_block
+            XmlFunctionParser(),    # tool_calling_type: xml_function
         ]
     
     def parse(self, text: str) -> ToolCall | None:
@@ -546,4 +288,3 @@ class ToolCallParser:
     def supported_formats(self) -> list[str]:
         """Return list of supported format names."""
         return [p.name for p in self.parsers]
-
