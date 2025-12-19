@@ -1,6 +1,6 @@
 [project]
 name = "supercoder"
-version = "0.2.0"
+version = "0.2.2"
 description = "AI Coding Assistant for the Terminal"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -9,7 +9,6 @@ authors = [
     {name = "SuperCoder Team"}
 ]
 keywords = ["ai", "coding", "assistant", "llm", "cli"]
-
 dependencies = [
     "openai>=2.13.0",
     "click>=8.3.1",
@@ -21,6 +20,11 @@ dependencies = [
     "pygments>=2.17.0",
     "tiktoken>=0.12.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Mage212/supercoder"
+Repository = "https://github.com/Mage212/supercoder"
+Issues = "https://github.com/Mage212/supercoder/issues"
 
 [project.optional-dependencies]
 dev = [

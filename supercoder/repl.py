@@ -3,6 +3,7 @@
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.syntax import Syntax
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.styles import Style as PromptStyle
@@ -83,10 +84,32 @@ class SuperCoderREPL:
                         break
                     continue
                 
-                # Process chat - replace input line with styled version
-                # Move cursor up one line and clear it, then print styled message
+                # Process chat - replace input line(s) with styled version
+                # Calculate actual terminal lines (including wrapped text)
                 import sys
-                sys.stdout.write("\033[A\033[2K")  # Move up + clear line
+                import shutil
+                
+                terminal_width = shutil.get_terminal_size().columns
+                prompt_prefix_len = 5  # "You> "
+                
+                # Calculate total visual lines by accounting for terminal wrapping
+                visual_lines = 0
+                for line in user_input.split('\n'):
+                    # First line includes prompt, subsequent lines don't (in prompt_toolkit)
+                    if visual_lines == 0:
+                        line_len = len(line) + prompt_prefix_len
+                    else:
+                        line_len = len(line)
+                    
+                    # Count how many terminal lines this logical line takes
+                    if line_len == 0:
+                        visual_lines += 1
+                    else:
+                        visual_lines += (line_len + terminal_width - 1) // terminal_width
+                
+                # Move up and clear each visual line
+                for _ in range(visual_lines):
+                    sys.stdout.write("\033[A\033[2K")  # Move up + clear line
                 sys.stdout.flush()
                 self.console.print(f"[bold green]You>[/] [on grey23]{user_input}[/]")
                 self._handle_chat(user_input)
@@ -101,16 +124,20 @@ class SuperCoderREPL:
 
     def _handle_chat(self, message):
         """Handle chat interaction with clean output (no streaming)."""
-        self.console.print("[bold blue]Assistant[/]")
-        
+        # User message is already displayed by the main loop with styling
+
         # Collect full response first, then display
         response_text = ""
         tool_calls = []
         tool_results = []
         errors = []
+        waiting_processes = []  # Track processes waiting for user decision
+        
+        # Track active files (files touched by tools)
+        touched_files = set()
         
         # Show spinner while processing
-        with self.console.status("[dim]Thinking...[/]", spinner="dots"):
+        with self.console.status("[bold blue]SuperCoder is thinking...[/]", spinner="dots") as status:
             for event in self.agent.chat_stream(message):
                 event_type = event.get("type")
                 content = event.get("content")
@@ -119,27 +146,156 @@ class SuperCoderREPL:
                     response_text += content
                 elif event_type == "tool_call":
                     tool_calls.append(content)
+                    # Track files from tool args
+                    self._track_files(content, touched_files)
                 elif event_type == "tool_result":
                     tool_results.append(content)
                 elif event_type == "error":
                     errors.append(content)
+                elif event_type == "command_waiting":
+                    # Process is waiting - need user interaction
+                    status.stop()  # Stop spinner to allow interaction
+                    self._handle_command_waiting(event)
+                    # Continue iteration - the process has been handled
         
-        # Display tool calls and results
-        for i, tc in enumerate(tool_calls):
-            self._display_tool_call(tc)
-            if i < len(tool_results):
-                self._display_tool_result(tool_results[i])
-        
-        # Display errors
+        # 1. Display Tool Calls & Results first (Implementation Detail)
+        if tool_calls:
+            self.console.print() # Spacer
+            for i, tc in enumerate(tool_calls):
+                self._display_tool_call(tc)
+                if i < len(tool_results):
+                    self._display_tool_result(tool_results[i])
+            self.console.print() # Spacer
+
+        # 2. Display Errors
         for error in errors:
-            self.console.print(f"[red]Error: {error}[/]")
+            self.console.print(Panel(f"[red]{error}[/]", title="[bold red]Error[/]", border_style="red"))
         
-        # Display clean text (filter out special tokens)
+        # 3. Display Assistant Response
         clean_text = self._filter_special_tokens(response_text)
         if clean_text:
-            self.console.print(Markdown(clean_text))
+            self.console.print(Panel(
+                Markdown(clean_text),
+                title="[bold blue]SuperCoder[/]",
+                border_style="blue",
+                box=self._get_box_style()
+            ))
+        
+        # 4. Display Status Footer (Tokens & Files)
+        self._display_status_footer(touched_files)
         
         self.console.print()
+
+    def _track_files(self, tool_call, touched_files):
+        """Extract file paths from tool arguments to track active files."""
+        name = tool_call.get("name")
+        args = tool_call.get("arguments", {})
+        
+        # Handle string args (sometimes args is a JSON string)
+        if isinstance(args, str):
+            try:
+                import json
+                args = json.loads(args)
+            except:
+                return
+
+        if not isinstance(args, dict):
+            return
+
+        # Look for common file arguments
+        for key in ['file', 'path', 'filename', 'target_file', 'source_file']:
+            if key in args and isinstance(args[key], str):
+                from pathlib import Path
+                try:
+                    p = Path(args[key])
+                    # Store relative path if possible
+                    try:
+                        rel_path = p.relative_to(self.agent.repo_root)
+                        touched_files.add(str(rel_path))
+                    except ValueError:
+                        touched_files.add(p.name)
+                except:
+                    pass
+
+    def _display_status_footer(self, touched_files):
+        """Display a status footer with token usage and active files."""
+        stats = self.agent.context.get_stats()
+        
+        parts = []
+        # Token usage
+        parts.append(f"[dim]Context: {stats.used_tokens:,}/{stats.total_tokens:,} tokens[/]")
+        
+        # Active files
+        if touched_files:
+            files_str = ", ".join(sorted(touched_files))
+            parts.append(f"[dim]Active Files: {files_str}[/]")
+            
+        # Cost estimate (rough approximation)
+        # Assuming generic pricing, just to show we can
+        # cost = (stats.used_tokens / 1000) * 0.002 # Example
+        # parts.append(f"[dim]Est. Cost: ${cost:.4f}[/]")
+
+        self.console.print(" | ".join(parts), justify="right")
+
+    def _get_box_style(self):
+        """Return a box style for panels."""
+        from rich import box
+        return box.ROUNDED
+
+    def _handle_command_waiting(self, event):
+        """Handle a command that appears to be waiting for input."""
+        content = event.get("content", "")
+        process = event.get("process")
+        tool_name = event.get("tool_name", "command-exec")
+        
+        # Display warning
+        self.console.print(Panel(
+            f"[yellow]{content}[/]",
+            title="[bold yellow]⚠️ Process Stalled[/]",
+            border_style="yellow",
+            box=self._get_box_style()
+
+        ))
+        
+        # Simple stdin-based menu (most reliable across terminals)
+        self.console.print("\n[bold]Options:[/]")
+        self.console.print("  [cyan]k[/] - Kill the process")
+        self.console.print("  [cyan]w[/] - Wait longer (continue until timeout)")
+        
+        try:
+            import sys
+            self.console.print("\n[bold cyan]Action [k/w]>[/] ", end="")
+            choice = sys.stdin.readline().strip().lower()
+            
+            if choice.startswith("k"):
+                if process and hasattr(process, 'kill'):
+                    try:
+                        process.kill()
+                        process.wait(timeout=5)
+                        self.console.print("[green]✓ Process killed[/]")
+                        return "killed"
+                    except Exception as e:
+                        self.console.print(f"[red]Failed to kill process: {e}[/]")
+                        return f"error: {e}"
+                return "killed"
+            else:
+                self.console.print("[dim]Continuing to wait for process...[/]")
+                return "wait"
+                
+        except (KeyboardInterrupt, EOFError):
+            # User pressed Ctrl+C - kill the process
+            if process and hasattr(process, 'kill'):
+                try:
+                    process.kill()
+                    process.wait(timeout=5)
+                    self.console.print("\n[green]✓ Process killed (interrupted)[/]")
+                except Exception:
+                    pass
+            return "killed"
+
+
+
+
     
     def _filter_special_tokens(self, text: str) -> str:
         """Remove special tokens from display text while preserving normal content."""
@@ -167,10 +323,25 @@ class SuperCoderREPL:
         """Display tool call in a panel."""
         name = tool_call.get("name")
         args = tool_call.get("arguments")
+        
+        # Parse args if string
+        if isinstance(args, str):
+            try:
+                import json
+                args_obj = json.loads(args)
+                # Pretty print JSON args
+                args_str = json.dumps(args_obj, indent=2)
+            except:
+                args_str = args
+        else:
+            import json
+            args_str = json.dumps(args, indent=2)
+
         self.console.print(Panel(
-            f"[dim]{args}[/]",
+            Syntax(args_str, "json", theme="monokai", word_wrap=True),
             title=f"[bold yellow]🔧 Tool Call: {name}[/]",
-            border_style="yellow"
+            border_style="yellow",
+            box=self._get_box_style()
         ))
 
     def _display_tool_result(self, result_data):
@@ -178,14 +349,67 @@ class SuperCoderREPL:
         name = result_data.get("name")
         result = result_data.get("result", "")
         
+        # Check if result contains a diff (unified diff format)
+        if self._is_diff_result(result):
+            self._display_diff_result(name, result)
+            return
+        
         # Truncate long results for display
         display_result = result[:500] + "..." if len(result) > 500 else result
         
         self.console.print(Panel(
             f"[dim]{display_result}[/]",
             title=f"[bold green]✔ Result: {name}[/]",
-            border_style="green"
+            border_style="green",
+            box=self._get_box_style()
         ))
+    
+    def _is_diff_result(self, result: str) -> bool:
+        """Check if result contains unified diff format."""
+        if not result:
+            return False
+        # Look for unified diff markers (--- and +++ may be at start or after newline)
+        has_minus = result.startswith("---") or "\n---" in result
+        has_plus = "\n+++" in result
+        return has_minus and has_plus
+    
+    def _display_diff_result(self, name: str, result: str):
+        """Display a result containing diff with syntax highlighting."""
+        # Split result into message and diff parts
+        lines = result.split("\n")
+        message_lines = []
+        diff_lines = []
+        in_diff = False
+        
+        for line in lines:
+            # Check for unified diff markers to start capturing diff
+            # --- file header, +++ file header, @@ hunk header
+            if line.startswith("--- ") or line.startswith("+++ ") or line.startswith("@@"):
+                in_diff = True
+            
+            if in_diff:
+                # Once in diff mode, capture all lines (including +/- content lines)
+                diff_lines.append(line)
+            else:
+                message_lines.append(line)
+        
+        # Display message part (success message)
+        if message_lines:
+            message = "\n".join(message_lines).strip()
+            if message:
+                self.console.print(f"[bold green]✔ {name}[/]: {message}")
+        
+        # Display diff with syntax highlighting
+        if diff_lines:
+            diff_text = "\n".join(diff_lines)
+            syntax = Syntax(diff_text, "diff", theme="monokai", line_numbers=False)
+            self.console.print(Panel(
+                syntax, 
+                title="[bold cyan]Changes[/]", 
+                border_style="cyan",
+                box=self._get_box_style()
+            ))
+
 
     # Commands
     def cmd_clear(self, _):
@@ -387,7 +611,19 @@ class SuperCoderREPL:
         # Switch in LLM client
         self.agent.llm.switch_model(profile)
         
+        # Update tool calling type in agent (rebuilds system prompt if needed)
+        self.agent.set_tool_calling_type(profile.tool_calling_type)
+        
+        # Reset prompt_toolkit buffer to prevent double input issue
+        # This clears any stale state that might cause the next input to be processed twice
+        try:
+            if hasattr(self.session, 'app') and self.session.app is not None:
+                self.session.app.current_buffer.reset()
+        except Exception:
+            pass  # Ignore if not in active input session
+        
         self.console.print(f"[green]✓ Switched to {profile_name}[/]")
         self.console.print(f"[dim]Model: {profile.model}[/]")
         self.console.print(f"[dim]Endpoint: {profile.endpoint}[/]")
+        self.console.print(f"[dim]Tool calling: {profile.tool_calling_type}[/]")
         return False

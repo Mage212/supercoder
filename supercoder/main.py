@@ -69,12 +69,18 @@ def main(model: str, endpoint: str, debug: bool, temperature: float, max_context
     # Initialize LLM and agent
     try:
         llm = OpenAIClient(config)
+        
+        # Get tool_calling_type from current model profile
+        profile = config.get_model_profile(config.current_profile_name)
+        tool_calling_type = profile.tool_calling_type if profile else "supercoder"
+        
         agent = CoderAgent(
             llm, 
             tools=ALL_TOOLS, 
             context_config=context_config,
             use_repo_map=repo_map,
-            repo_root="."  # Default to current directory
+            repo_root=".",  # Default to current directory
+            tool_calling_type=tool_calling_type
         )
         agent.set_debug(debug)
     except Exception as e:

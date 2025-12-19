@@ -1,5 +1,6 @@
 """Diff-based code editing tool."""
 
+import difflib
 from pathlib import Path
 from .base import BaseTool, ToolDefinition
 
@@ -70,12 +71,26 @@ class CodeEditTool(BaseTool):
         except Exception as e:
             return f"Error: {e}"
     
+    def _generate_diff(self, before: str, after: str, filepath: Path) -> str:
+        """Generate unified diff between before and after content."""
+        diff_lines = difflib.unified_diff(
+            before.splitlines(),
+            after.splitlines(),
+            fromfile=str(filepath),
+            tofile=str(filepath),
+            lineterm=""
+        )
+        # Join with newlines to create proper diff output
+        return "\n".join(diff_lines)
+    
     def _create_file(self, path: Path, content: str) -> str:
         """Create a new file."""
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content)
-            return f"✅ Created file: {path}"
+            # For new files, show the content as all additions
+            diff = self._generate_diff("", content, path)
+            return f"✅ Created file: {path}\n\n{diff}" if diff else f"✅ Created file: {path}"
         except Exception as e:
             return f"Error creating file: {e}"
     
@@ -84,37 +99,43 @@ class CodeEditTool(BaseTool):
         if not search:
             return "Error: search string is required"
         
-        content = path.read_text()
+        content_before = path.read_text()
         
-        if search not in content:
+        if search not in content_before:
             # Try to find similar matches
-            lines = content.splitlines()
+            lines = content_before.splitlines()
             similar = [l.strip()[:60] for l in lines if search[:20] in l][:3]
             hint = f"\nSimilar lines found:\n" + "\n".join(similar) if similar else ""
             return f"Error: Search string not found in {path}{hint}"
         
         # Count occurrences
-        count = content.count(search)
+        count = content_before.count(search)
         
-        new_content = content.replace(search, replace)
-        path.write_text(new_content)
+        content_after = content_before.replace(search, replace)
+        path.write_text(content_after)
         
-        return f"✅ Replaced {count} occurrence(s) in {path}"
+        # Generate diff
+        diff = self._generate_diff(content_before, content_after, path)
+        return f"✅ Replaced {count} occurrence(s) in {path}\n\n{diff}"
     
     def _insert_after(self, path: Path, after: str, content: str) -> str:
         """Insert content after a matching line."""
         if not after:
             return "Error: 'after' string is required"
         
-        lines = path.read_text().splitlines()
+        content_before = path.read_text()
+        lines = content_before.splitlines()
         
         for i, line in enumerate(lines):
             if after in line:
                 # Insert new content after this line
                 new_lines = content.splitlines()
                 lines = lines[:i + 1] + new_lines + lines[i + 1:]
-                path.write_text("\n".join(lines) + "\n")
-                return f"✅ Inserted {len(new_lines)} line(s) after line {i + 1} in {path}"
+                content_after = "\n".join(lines) + "\n"
+                path.write_text(content_after)
+                
+                diff = self._generate_diff(content_before, content_after, path)
+                return f"✅ Inserted {len(new_lines)} line(s) after line {i + 1} in {path}\n\n{diff}"
         
         return f"Error: Line containing '{after[:50]}' not found"
     
@@ -123,20 +144,25 @@ class CodeEditTool(BaseTool):
         if not before:
             return "Error: 'before' string is required"
         
-        lines = path.read_text().splitlines()
+        content_before = path.read_text()
+        lines = content_before.splitlines()
         
         for i, line in enumerate(lines):
             if before in line:
                 new_lines = content.splitlines()
                 lines = lines[:i] + new_lines + lines[i:]
-                path.write_text("\n".join(lines) + "\n")
-                return f"✅ Inserted {len(new_lines)} line(s) before line {i + 1} in {path}"
+                content_after = "\n".join(lines) + "\n"
+                path.write_text(content_after)
+                
+                diff = self._generate_diff(content_before, content_after, path)
+                return f"✅ Inserted {len(new_lines)} line(s) before line {i + 1} in {path}\n\n{diff}"
         
         return f"Error: Line containing '{before[:50]}' not found"
     
     def _replace_lines(self, path: Path, start: int, end: int, content: str) -> str:
         """Replace a range of lines."""
-        lines = path.read_text().splitlines()
+        content_before = path.read_text()
+        lines = content_before.splitlines()
         total = len(lines)
         
         if start < 1 or start > total:
@@ -146,14 +172,22 @@ class CodeEditTool(BaseTool):
         
         new_lines = content.splitlines() if content else []
         lines = lines[:start - 1] + new_lines + lines[end:]
-        path.write_text("\n".join(lines) + "\n")
+        content_after = "\n".join(lines) + "\n"
+        path.write_text(content_after)
         
-        return f"✅ Replaced lines {start}-{end} with {len(new_lines)} line(s) in {path}"
+        diff = self._generate_diff(content_before, content_after, path)
+        return f"✅ Replaced lines {start}-{end} with {len(new_lines)} line(s) in {path}\n\n{diff}"
     
     def _append(self, path: Path, content: str) -> str:
         """Append content to end of file."""
-        current = path.read_text()
-        if not current.endswith("\n"):
-            current += "\n"
-        path.write_text(current + content + "\n")
-        return f"✅ Appended to {path}"
+        content_before = path.read_text()
+        if not content_before.endswith("\n"):
+            content_before_normalized = content_before + "\n"
+        else:
+            content_before_normalized = content_before
+        content_after = content_before_normalized + content + "\n"
+        path.write_text(content_after)
+        
+        diff = self._generate_diff(content_before, content_after, path)
+        return f"✅ Appended to {path}\n\n{diff}"
+

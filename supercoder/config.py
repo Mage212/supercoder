@@ -28,18 +28,21 @@ models:
   #   api_key: "sk-or-v1-..."
   #   endpoint: "https://openrouter.ai/api/v1"
   #   model: "openai/gpt-oss-20b:free"
+  #   tool_calling_type: "qwen_like"  # Format for tool calls: supercoder, qwen_like, json_block, xml_function
   
   # Example: Local Ollama
   # ollama:
   #   api_key: "ollama"
   #   endpoint: "http://localhost:11434/v1"
   #   model: "llama3.2"
+  #   tool_calling_type: "supercoder"  # default
 
 # Shared settings (applied to all models)
 temperature: 0.2
 top_p: 0.1
 max_context_tokens: 32000
 reserved_for_response: 4096
+request_timeout: 60.0
 debug: false
 """
 
@@ -66,6 +69,8 @@ class ModelProfile:
     api_key: str = ""
     endpoint: str = "https://api.openai.com/v1"
     model: str = "gpt-4o-mini"
+    request_timeout: float = 60.0
+    tool_calling_type: str = "supercoder"  # supercoder, qwen_like, json_block, xml_function
     
     @property
     def base_url(self) -> str:
@@ -88,6 +93,7 @@ class Config:
     debug: bool = False
     max_context_tokens: int = 32000
     reserved_for_response: int = 4096
+    request_timeout: float = 60.0
     
     # Multi-model support
     default_model: str = "default"
@@ -143,6 +149,8 @@ class Config:
                     api_key=profile_data.get("api_key", ""),
                     endpoint=profile_data.get("endpoint", profile_data.get("base_url", "https://api.openai.com/v1")),
                     model=profile_data.get("model", "gpt-4o-mini"),
+                    request_timeout=float(profile_data.get("request_timeout", config_data.get("request_timeout", 60.0))),
+                    tool_calling_type=profile_data.get("tool_calling_type", "supercoder"),
                 )
         
         # Create instance with shared settings
@@ -160,6 +168,7 @@ class Config:
             config.api_key = profile.api_key
             config.base_url = profile.endpoint
             config.model = profile.model
+            config.request_timeout = profile.request_timeout
             config._current_profile = default_name
         
         # Override with environment variables (highest priority)
@@ -202,6 +211,7 @@ class Config:
         self.api_key = profile.api_key
         self.base_url = profile.endpoint
         self.model = profile.model
+        self.request_timeout = profile.request_timeout
         self._current_profile = name
         return True
     

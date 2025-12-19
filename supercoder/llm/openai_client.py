@@ -17,11 +17,24 @@ class OpenAIClient(BaseLLM):
     - Any OpenAI-compatible endpoint
     """
     
+    # App identification for OpenRouter statistics
+    APP_NAME = "SuperCoder CLI"
+    APP_URL = "https://github.com/Mage212/supercoder"
+    
     def __init__(self, config: Config):
         self.config = config
+        
+        # Add headers for OpenRouter app identification
+        default_headers = {
+            "HTTP-Referer": self.APP_URL,
+            "X-Title": self.APP_NAME,
+        }
+        
         self.client = OpenAI(
             api_key=config.api_key,
             base_url=config.base_url,
+            default_headers=default_headers,
+            timeout=config.request_timeout,
         )
         self.model = config.model
         self.temperature = config.temperature
@@ -32,9 +45,15 @@ class OpenAIClient(BaseLLM):
         
         Reinitializes the OpenAI client with new credentials.
         """
+        default_headers = {
+            "HTTP-Referer": self.APP_URL,
+            "X-Title": self.APP_NAME,
+        }
         self.client = OpenAI(
             api_key=profile.api_key,
             base_url=profile.endpoint,
+            default_headers=default_headers,
+            timeout=profile.request_timeout,
         )
         self.model = profile.model
     

@@ -1,6 +1,19 @@
 # 🤖 SuperCoder
 
+[![Version](https://img.shields.io/badge/version-0.2.2-blue.svg)](https://github.com/Mage212/supercoder)
+[![Python](https://img.shields.io/badge/python-3.11+-green.svg)](https://python.org)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 **AI Coding Assistant for the Terminal** — A powerful, extensible, and terminal-native coding agent designed to help you build, search, and fix code with natural language.
+
+---
+
+## 🆕 What's New in v0.2.2
+
+- **Improved UI**: Enhanced chat interface with styled user/assistant messages and better visual feedback
+- **Interactive Command Execution**: EOF-based input handling to prevent command hangs
+- **Custom Headers**: Tool name and repository link now passed in HTTP headers for better API compatibility
+- **Tool Calling Configuration**: New `tool_calling_type` parameter in config to specify model-specific tool calling instructions (supports `supercoder`, `qwen_like`, `json_block`, `xml_function`)
 
 ---
 

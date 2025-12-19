@@ -1,10 +1,12 @@
 """System prompts for the agent."""
 
+from .tool_calling_prompts import get_tool_calling_prompt
+
 # Compact prompt optimized for local/smaller models
+# Tool calling instructions are injected dynamically based on model's tool_calling_type
 SYSTEM_PROMPT = """You are a coding assistant.
 
-# Tool Calling
-Call tools with <@TOOL>{{"name": "<tool-name>", "arguments": "<json-args>"}}</@TOOL>
+{tool_calling_instructions}
 
 Available tools:
 {tools}
@@ -45,12 +47,18 @@ Create a summary in this format:
 """
 
 
-def build_system_prompt(tools: list, rules: str = "") -> str:
+def build_system_prompt(
+    tools: list, 
+    rules: str = "", 
+    tool_calling_type: str = "supercoder"
+) -> str:
     """Build system prompt with available tools and project rules.
     
     Args:
         tools: List of available tools.
         rules: Optional project-specific rules to include.
+        tool_calling_type: Type of tool calling format to use in instructions.
+                          Valid: supercoder, qwen_like, json_block, xml_function
     """
     if not tools:
         tool_list = "(no tools available yet)"
@@ -60,11 +68,16 @@ def build_system_prompt(tools: list, rules: str = "") -> str:
             for t in tools
         )
     
-    prompt = SYSTEM_PROMPT.format(tools=tool_list)
+    # Get tool calling instructions for this model type
+    tool_calling_instructions = get_tool_calling_prompt(tool_calling_type)
+    
+    prompt = SYSTEM_PROMPT.format(
+        tools=tool_list,
+        tool_calling_instructions=tool_calling_instructions
+    )
     
     # Add project rules if provided
     if rules:
         prompt += f"\n{rules}"
     
     return prompt
-

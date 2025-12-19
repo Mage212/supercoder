@@ -57,6 +57,38 @@ class TestQwenStyleParser:
         parser = QwenStyleParser()
         text = "Regular text without Qwen markers"
         assert parser.try_parse(text) is None
+    
+    def test_gpt_oss_format_with_nested_json(self):
+        """Test gpt-oss format with nested quotes in JSON content."""
+        parser = QwenStyleParser()
+        text = '<|channel|>commentary to=code-edit <|constrain|>json<|message|>{"filepath":"test.py","content":"print(\'hello\')"}'
+        result = parser.try_parse(text)
+        
+        assert result is not None
+        assert result.name == "code-edit"
+        assert result.arguments["filepath"] == "test.py"
+        assert result.arguments["content"] == "print('hello')"
+    
+    def test_gpt_oss_format_with_escaped_quotes(self):
+        """Test gpt-oss format with escaped double quotes."""
+        parser = QwenStyleParser()
+        text = '<|channel|>commentary to=code-edit <|message|>{"filepath":"x.py","content":"say \\"hello\\""}'
+        result = parser.try_parse(text)
+        
+        assert result is not None
+        assert result.name == "code-edit"
+        assert result.arguments["content"] == 'say "hello"'
+    
+    def test_gpt_oss_format_simple(self):
+        """Test basic gpt-oss format without nested content."""
+        parser = QwenStyleParser()
+        text = '<|channel|>commentary to=file-read <|constrain|>json<|message|>{"fileName":"main.py","startLine":1,"endLine":100}'
+        result = parser.try_parse(text)
+        
+        assert result is not None
+        assert result.name == "file-read"
+        assert result.arguments["fileName"] == "main.py"
+
 
 
 class TestJsonBlockParser:
@@ -142,19 +174,21 @@ class TestGenericJsonParser:
     
     def test_json_with_tool_key(self):
         parser = GenericJsonParser()
-        text = 'The tool call is: {"tool": "file_read", "path": "main.py"}'
+        # Use valid tool name from valid_tools set
+        text = 'The tool call is: {"tool": "file-read", "path": "main.py"}'
         result = parser.try_parse(text)
         
         assert result is not None
-        assert result.name == "file_read"
+        assert result.name == "file-read"
     
     def test_json_with_action_key(self):
         parser = GenericJsonParser()
-        text = '{"action": "code_edit", "params": {"filepath": "test.py"}}'
+        # Use valid tool name from valid_tools set
+        text = '{"action": "code-edit", "params": {"filepath": "test.py"}}'
         result = parser.try_parse(text)
         
         assert result is not None
-        assert result.name == "code_edit"
+        assert result.name == "code-edit"
 
 
 class TestToolCallParser:

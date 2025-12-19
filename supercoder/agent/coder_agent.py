@@ -28,7 +28,8 @@ class CoderAgent:
         tools: list[BaseTool] | None = None,
         context_config: ContextConfig | None = None,
         use_repo_map: bool = False,
-        repo_root: str = "."
+        repo_root: str = ".",
+        tool_calling_type: str = "supercoder"
     ):
         self.llm = llm
         self.tools = {t.definition.name: t for t in (tools or [])}
@@ -43,8 +44,17 @@ class CoderAgent:
         self.rules_loader.ensure_rules_dir()  # Create .supercoder/rules/ if missing
         project_rules = self.rules_loader.get_rules_for_prompt()
         
+        # Store tool calling type for prompt generation
+        self.tool_calling_type = tool_calling_type
+        self._tools_list = tools or []  # Keep reference for prompt rebuilding
+        self._project_rules = project_rules
+        
         # Build system prompt template with tools and project rules
-        self.base_system_prompt = build_system_prompt(tools or [], rules=project_rules)
+        self.base_system_prompt = build_system_prompt(
+            self._tools_list, 
+            rules=project_rules, 
+            tool_calling_type=self.tool_calling_type
+        )
         
         # Setup context management
         config = context_config or ContextConfig()
@@ -76,6 +86,20 @@ class CoderAgent:
         self.context.set_system_prompt(prompt)
         # Log the updated system prompt
         get_logger().log_system_prompt(prompt)
+
+    def set_tool_calling_type(self, tool_calling_type: str) -> None:
+        """Update tool calling type and rebuild system prompt.
+        
+        Call this when switching to a model with a different tool_calling_type.
+        """
+        if tool_calling_type != self.tool_calling_type:
+            self.tool_calling_type = tool_calling_type
+            self.base_system_prompt = build_system_prompt(
+                self._tools_list,
+                rules=self._project_rules,
+                tool_calling_type=self.tool_calling_type
+            )
+            self._update_system_prompt()
 
     def chat_stream(self, user_message: str):
         """Process user message and yield response chunks.
@@ -142,7 +166,49 @@ class CoderAgent:
                     continue
                 
                 try:
-                    result = self.tools[name].execute(args)
+                    tool = self.tools[name]
+                    
+                    # Use streaming for command-exec to handle interactive commands
+                    if name == "command-exec" and hasattr(tool, 'execute_streaming'):
+                        result = ""
+                        process_to_kill = None
+                        
+                        for event in tool.execute_streaming(args):
+                            if event["type"] == "waiting_input":
+                                # Yield to REPL for user decision - REPL will kill the process if needed
+                                process_to_kill = event.get("process")
+                                yield {
+                                    "type": "command_waiting",
+                                    "content": event["content"],
+                                    "process": process_to_kill,
+                                    "tool_name": name
+                                }
+                                # After REPL handles it, the process is either killed or we continue
+                                # Check if process was killed
+                                if process_to_kill and process_to_kill.poll() is not None:
+                                    # Process was killed by REPL - tell model NOT to retry
+                                    partial_output = ''.join(event.get('stdout', []))
+                                    result = (
+                                        f"⚠️ INTERACTIVE PROCESS KILLED BY USER\n"
+                                        f"The command requires user input which cannot be provided in this environment.\n"
+                                        f"DO NOT attempt to run this command again.\n\n"
+                                        f"Partial output before kill:\n{partial_output}"
+                                    )
+                                    break
+                                # Otherwise continue waiting until timeout
+                            elif event["type"] == "output":
+                                # Incremental output - could stream to console
+                                pass
+                            elif event["type"] == "done":
+                                result = event["content"]
+                            elif event["type"] == "stalled":
+                                result = f"{event['content']}\n\n(waiting for command to complete...)"
+                            elif event["type"] == "error":
+                                result = event["content"]
+                    else:
+                        result = tool.execute(args)
+
+                    
                     yield {"type": "tool_result", "content": {"name": name, "result": result}}
                     # Log tool call and result
                     get_logger().log_tool_call(name, args)
@@ -161,6 +227,7 @@ class CoderAgent:
             
             # Let agent continue with tool results (recursive call handling)
             yield from self.chat_stream("")
+
 
     def _extract_tool_call(self, text: str) -> dict | None:
         """Extract tool call from response text using multi-format parser."""
