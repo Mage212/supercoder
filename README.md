@@ -89,24 +89,49 @@ export SUPERCODER_API_KEY="sk-or-..."
 export SUPERCODER_MODEL="openai/gpt-4o"
 ```
 
-**Example `.supercoder.yaml`:**
+**Example `~/.supercoder/config.yaml`:**
 ```yaml
-api_key: "sk-..."
-model: "gpt-4o"
-base_url: "https://api.openai.com/v1"
-max_context_tokens: 32000
-use_repo_map: true
+# Default model profile to use on startup
+default_model: "default"
 
-# Multiple model profiles
-model_profiles:
-  gpt4:
-    model: "gpt-4o"
-    base_url: "https://api.openai.com/v1"
-  local:
-    model: "qwen2.5-coder:7b"
-    base_url: "http://localhost:11434/v1"
+# Model profiles - define multiple LLM configurations
+models:
+  default:
+    api_key: "sk-..."
+    endpoint: "https://api.openai.com/v1"
+    model: "gpt-4o-mini"
+  
+  # OpenRouter with Qwen-style model
+  openrouter-qwen:
+    api_key: "sk-or-v1-..."
+    endpoint: "https://openrouter.ai/api/v1"
+    model: "openai/gpt-oss-20b:free"
+    tool_calling_type: "qwen_like"  # See Tool Calling Types below
+  
+  # Local Ollama
+  ollama:
     api_key: "ollama"
+    endpoint: "http://localhost:11434/v1"
+    model: "qwen2.5-coder:7b"
+    tool_calling_type: "supercoder"
+
+# Shared settings (applied to all models)
+temperature: 0.2
+max_context_tokens: 32000
+request_timeout: 60.0
+debug: false
 ```
+
+### Tool Calling Types
+
+Different models expect tools to be called in different formats. Use `tool_calling_type` to specify the format:
+
+| Type | Format | Best for |
+|------|--------|----------|
+| `supercoder` (default) | `<@TOOL>{"name": "...", "arguments": {...}}</@TOOL>` | Most instruction-following models |
+| `qwen_like` | `to=tool:name {"arg": "value"}` | Qwen, GPT-OSS, DeepResearch models |
+| `json_block` | ` ```json {"tool": "...", "arguments": {...}} ``` ` | Models trained on markdown |
+| `xml_function` | `<function_call name="...">...</function_call>` | XML-style models |
 
 ---
 
