@@ -12,6 +12,8 @@ from prompt_toolkit.completion import WordCompleter
 from pygments.lexers.python import PythonLexer
 from pygments.lexers.markup import MarkdownLexer
 
+from .agent.agent_modes import AgentMode
+
 class SuperCoderREPL:
     """Interactive Read-Eval-Print Loop for SuperCoder."""
     
@@ -20,6 +22,8 @@ class SuperCoderREPL:
         self.console = Console()
         self.session = self._setup_session()
         self.commands = {
+            "/ask": self.cmd_ask,
+            "/code": self.cmd_code,
             "/clear": self.cmd_clear,
             "/compact": self.cmd_compact,
             "/continue": self.cmd_continue,
@@ -44,7 +48,7 @@ class SuperCoderREPL:
         })
         
         command_completer = WordCompleter(
-            ['/clear', '/compact', '/continue', '/sessions', '/help', '/tools', '/stats', '/debug', '/models', '/model', '/config', '/exit', '/quit'],
+            ['/ask', '/code', '/clear', '/compact', '/continue', '/sessions', '/help', '/tools', '/stats', '/debug', '/models', '/model', '/config', '/exit', '/quit'],
             ignore_case=True
         )
         
@@ -70,7 +74,7 @@ class SuperCoderREPL:
         
         while True:
             try:
-                user_input = self.session.prompt("You> ").strip()
+                user_input = self.session.prompt(self._get_prompt()).strip()
                 
                 if not user_input:
                     continue
@@ -111,7 +115,7 @@ class SuperCoderREPL:
                 for _ in range(visual_lines):
                     sys.stdout.write("\033[A\033[2K")  # Move up + clear line
                 sys.stdout.flush()
-                self.console.print(f"[bold green]You>[/] [on grey23]{user_input}[/]")
+                self.console.print(f"[bold green]{self._get_prompt()}[/][on grey23]{user_input}[/]")
                 self._handle_chat(user_input)
                 
             except KeyboardInterrupt:
@@ -412,6 +416,61 @@ class SuperCoderREPL:
 
 
     # Commands
+    
+    def _get_prompt(self) -> str:
+        """Get prompt string based on current mode."""
+        if self.agent.mode == AgentMode.ASK:
+            return "ask> "
+        return "You> "
+    
+    def cmd_ask(self, user_input: str):
+        """Switch to ask mode or ask a question without editing.
+        
+        /ask          - Switch to ask mode (sticky)
+        /ask <text>   - Ask one question in ask mode, then return to previous mode
+        """
+        # Extract text after /ask command
+        parts = user_input.split(maxsplit=1)
+        question = parts[1].strip() if len(parts) > 1 else ""
+        
+        if question:
+            # One-shot ask: execute in ask mode, then return
+            original_mode = self.agent.mode
+            self.agent.set_mode(AgentMode.ASK)
+            try:
+                self._handle_chat(question)
+            finally:
+                self.agent.set_mode(original_mode)
+        else:
+            # Sticky switch to ask mode
+            self.agent.set_mode(AgentMode.ASK)
+            self.console.print("[cyan]Switched to ask mode[/] - questions only, no edits")
+            self.console.print("[dim]Use /code to switch back to editing mode[/]")
+        return False
+    
+    def cmd_code(self, user_input: str):
+        """Switch to code mode (can edit files).
+        
+        /code         - Switch to code mode (sticky)
+        /code <text>  - Execute one request in code mode
+        """
+        parts = user_input.split(maxsplit=1)
+        request = parts[1].strip() if len(parts) > 1 else ""
+        
+        if request:
+            # One-shot code request
+            original_mode = self.agent.mode
+            self.agent.set_mode(AgentMode.CODE)
+            try:
+                self._handle_chat(request)
+            finally:
+                self.agent.set_mode(original_mode)
+        else:
+            # Sticky switch to code mode
+            self.agent.set_mode(AgentMode.CODE)
+            self.console.print("[cyan]Switched to code mode[/] - can edit files")
+        return False
+
     def cmd_clear(self, _):
         self.agent.clear_history()
         self.console.print("[dim]History cleared[/]")
@@ -514,6 +573,8 @@ class SuperCoderREPL:
 
     def cmd_help(self, _):
         self.console.print("\n[bold]Available Commands:[/]")
+        self.console.print("  /ask      - Switch to ask mode (Q&A without edits)")
+        self.console.print("  /code     - Switch to code mode (can edit files)")
         self.console.print("  /continue - Resume a previous session")
         self.console.print("  /sessions - List saved sessions")
         self.console.print("  /clear    - Clear conversation history")

@@ -50,7 +50,8 @@ Create a summary in this format:
 def build_system_prompt(
     tools: list, 
     rules: str = "", 
-    tool_calling_type: str = "supercoder"
+    tool_calling_type: str = "supercoder",
+    mode_suffix: str = ""
 ) -> str:
     """Build system prompt with available tools and project rules.
     
@@ -59,6 +60,7 @@ def build_system_prompt(
         rules: Optional project-specific rules to include.
         tool_calling_type: Type of tool calling format to use in instructions.
                           Valid: supercoder, qwen_like, json_block, xml_function
+        mode_suffix: Additional prompt suffix for specific modes (e.g., ask mode).
     """
     if not tools:
         tool_list = "(no tools available yet)"
@@ -80,4 +82,9 @@ def build_system_prompt(
     if rules:
         prompt += f"\n{rules}"
     
+    # Add mode-specific suffix (e.g., ask mode restrictions)
+    if mode_suffix:
+        prompt += f"\n{mode_suffix}"
+    
     return prompt
+

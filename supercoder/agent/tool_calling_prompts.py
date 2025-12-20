@@ -12,12 +12,12 @@ TOOL_CALLING_PROMPTS = {
 Call tools with <@TOOL>{"name": "<tool-name>", "arguments": <json-args>}</@TOOL>
 
 **Example:**
-<@TOOL>{"name": "file-read", "arguments": {"path": "main.py"}}</@TOOL>
+<@TOOL>{"name": "file-read", "arguments": {"fileName": "main.py"}}</@TOOL>
 
 **Multiple tool calls:**
 You can call multiple tools in one response:
-<@TOOL>{"name": "file-read", "arguments": {"path": "file1.py"}}</@TOOL>
-<@TOOL>{"name": "file-read", "arguments": {"path": "file2.py"}}</@TOOL>
+<@TOOL>{"name": "file-read", "arguments": {"fileName": "file1.py"}}</@TOOL>
+<@TOOL>{"name": "file-read", "arguments": {"fileName": "file2.py"}}</@TOOL>
 """,
 
     # Qwen-style format used by gpt-oss, deepresearch, and similar models
@@ -26,12 +26,12 @@ Call tools using this format:
 to=tool:<tool-name> <json-arguments>
 
 **Example:**
-to=tool:file-read {"path": "main.py"}
+to=tool:file-read {"fileName": "main.py"}
 
 **Available argument formats:**
-to=tool:code-edit {"file": "app.py", "operation": "create", "content": "print('hello')"}
+to=tool:code-edit {"filepath": "app.py", "operation": "create", "content": "print('hello')"}
 to=tool:command-exec {"command": "ls -la", "timeout": 30}
-to=tool:code-search {"query": "def main", "path": "."}
+to=tool:code-search {"query": "def main"}
 to=tool:project-structure {"path": "."}
 
 **Important:** Always use valid JSON for arguments. Use double quotes for strings.
@@ -47,12 +47,12 @@ Call tools using JSON code blocks:
 
 **Example:**
 ```json
-{"tool": "file-read", "arguments": {"path": "main.py"}}
+{"tool": "file-read", "arguments": {"fileName": "main.py"}}
 ```
 
 **For code-edit:**
 ```json
-{"tool": "code-edit", "arguments": {"file": "app.py", "operation": "create", "content": "print('hello')"}}
+{"tool": "code-edit", "arguments": {"filepath": "app.py", "operation": "create", "content": "print('hello')"}}
 ```
 
 **Important:** Use proper JSON formatting with double quotes.
@@ -68,12 +68,12 @@ Call tools using XML syntax:
 
 **Example:**
 <function_call name="file-read">
-{"path": "main.py"}
+{"fileName": "main.py"}
 </function_call>
 
 **For code-edit:**
 <function_call name="code-edit">
-{"file": "app.py", "operation": "create", "content": "print('hello')"}
+{"filepath": "app.py", "operation": "create", "content": "print('hello')"}
 </function_call>
 """,
 

@@ -15,6 +15,7 @@ from ..rules_loader import SupercoderRulesLoader
 from ..logging import get_logger
 from .prompts import build_system_prompt, CONTEXT_SUMMARY_PROMPT
 from .tool_parser import ToolCallParser
+from .agent_modes import AgentMode, MODE_CONFIGS
 
 console = Console()
 
@@ -35,6 +36,9 @@ class CoderAgent:
         self.tools = {t.definition.name: t for t in (tools or [])}
         self.repo_root = Path(repo_root).resolve()
         
+        # Agent mode (code or ask)
+        self._mode = AgentMode.CODE
+        
         # RepoMap setup
         self.repo_map = RepoMap(self.repo_root) if use_repo_map else None
 
@@ -51,9 +55,10 @@ class CoderAgent:
         
         # Build system prompt template with tools and project rules
         self.base_system_prompt = build_system_prompt(
-            self._tools_list, 
+            self._get_tools_for_mode(), 
             rules=project_rules, 
-            tool_calling_type=self.tool_calling_type
+            tool_calling_type=self.tool_calling_type,
+            mode_suffix=MODE_CONFIGS[self._mode].prompt_suffix
         )
         
         # Setup context management
@@ -87,6 +92,39 @@ class CoderAgent:
         # Log the updated system prompt
         get_logger().log_system_prompt(prompt)
 
+    def _get_tools_for_mode(self) -> list:
+        """Return tools available in current mode."""
+        mode_config = MODE_CONFIGS[self._mode]
+        
+        if mode_config.allowed_tools is None:
+            # All tools allowed
+            return self._tools_list
+        
+        # Filter to only allowed tools
+        return [t for t in self._tools_list 
+                if t.definition.name in mode_config.allowed_tools]
+
+    @property
+    def mode(self) -> AgentMode:
+        """Get current agent mode."""
+        return self._mode
+    
+    def set_mode(self, mode: AgentMode) -> None:
+        """Switch agent mode and update available tools and prompt."""
+        if mode == self._mode:
+            return
+            
+        self._mode = mode
+        
+        # Rebuild system prompt with new mode's tools and suffix
+        self.base_system_prompt = build_system_prompt(
+            self._get_tools_for_mode(),
+            rules=self._project_rules,
+            tool_calling_type=self.tool_calling_type,
+            mode_suffix=MODE_CONFIGS[self._mode].prompt_suffix
+        )
+        self._update_system_prompt()
+
     def set_tool_calling_type(self, tool_calling_type: str) -> None:
         """Update tool calling type and rebuild system prompt.
         
@@ -95,9 +133,10 @@ class CoderAgent:
         if tool_calling_type != self.tool_calling_type:
             self.tool_calling_type = tool_calling_type
             self.base_system_prompt = build_system_prompt(
-                self._tools_list,
+                self._get_tools_for_mode(),
                 rules=self._project_rules,
-                tool_calling_type=self.tool_calling_type
+                tool_calling_type=self.tool_calling_type,
+                mode_suffix=MODE_CONFIGS[self._mode].prompt_suffix
             )
             self._update_system_prompt()
 
