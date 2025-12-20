@@ -2,11 +2,38 @@
 
 import difflib
 from pathlib import Path
+from typing import Optional, TYPE_CHECKING
 from .base import BaseTool, ToolDefinition
+from ..utils.atomic_writer import AtomicFileWriter
+
+if TYPE_CHECKING:
+    from ..checkpoint import CheckpointManager
 
 
 class CodeEditTool(BaseTool):
-    """Edit code using diff-based operations."""
+    """Edit code using diff-based operations with atomic writes."""
+    
+    def __init__(self, checkpoint_manager: Optional["CheckpointManager"] = None):
+        """Initialize with optional checkpoint manager.
+        
+        Args:
+            checkpoint_manager: Optional CheckpointManager for backup/rollback support
+        """
+        self.checkpoint = checkpoint_manager
+    
+    def _safe_write(self, path: Path, content: str) -> None:
+        """Write file with backup and atomic write.
+        
+        Args:
+            path: Target file path
+            content: Content to write
+        """
+        # Backup before modifying (if checkpoint is active)
+        if self.checkpoint:
+            self.checkpoint.backup_file(path)
+        
+        # Atomic write
+        AtomicFileWriter.write(path, content)
     
     @property
     def definition(self) -> ToolDefinition:
@@ -87,7 +114,12 @@ class CodeEditTool(BaseTool):
         """Create a new file."""
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content)
+            
+            # Track created file for rollback
+            if self.checkpoint:
+                self.checkpoint.track_created_file(path)
+                
+            AtomicFileWriter.write(path, content)
             # For new files, show the content as all additions
             diff = self._generate_diff("", content, path)
             return f"✅ Created file: {path}\n\n{diff}" if diff else f"✅ Created file: {path}"
@@ -112,7 +144,7 @@ class CodeEditTool(BaseTool):
         count = content_before.count(search)
         
         content_after = content_before.replace(search, replace)
-        path.write_text(content_after)
+        self._safe_write(path, content_after)
         
         # Generate diff
         diff = self._generate_diff(content_before, content_after, path)
@@ -132,7 +164,7 @@ class CodeEditTool(BaseTool):
                 new_lines = content.splitlines()
                 lines = lines[:i + 1] + new_lines + lines[i + 1:]
                 content_after = "\n".join(lines) + "\n"
-                path.write_text(content_after)
+                self._safe_write(path, content_after)
                 
                 diff = self._generate_diff(content_before, content_after, path)
                 return f"✅ Inserted {len(new_lines)} line(s) after line {i + 1} in {path}\n\n{diff}"
@@ -152,7 +184,7 @@ class CodeEditTool(BaseTool):
                 new_lines = content.splitlines()
                 lines = lines[:i] + new_lines + lines[i:]
                 content_after = "\n".join(lines) + "\n"
-                path.write_text(content_after)
+                self._safe_write(path, content_after)
                 
                 diff = self._generate_diff(content_before, content_after, path)
                 return f"✅ Inserted {len(new_lines)} line(s) before line {i + 1} in {path}\n\n{diff}"
@@ -173,7 +205,7 @@ class CodeEditTool(BaseTool):
         new_lines = content.splitlines() if content else []
         lines = lines[:start - 1] + new_lines + lines[end:]
         content_after = "\n".join(lines) + "\n"
-        path.write_text(content_after)
+        self._safe_write(path, content_after)
         
         diff = self._generate_diff(content_before, content_after, path)
         return f"✅ Replaced lines {start}-{end} with {len(new_lines)} line(s) in {path}\n\n{diff}"
@@ -186,7 +218,7 @@ class CodeEditTool(BaseTool):
         else:
             content_before_normalized = content_before
         content_after = content_before_normalized + content + "\n"
-        path.write_text(content_after)
+        self._safe_write(path, content_after)
         
         diff = self._generate_diff(content_before, content_after, path)
         return f"✅ Appended to {path}\n\n{diff}"

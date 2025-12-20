@@ -13,6 +13,8 @@ from ..context.session_manager import SessionManager, ChatSession
 from ..repomap import RepoMap
 from ..rules_loader import SupercoderRulesLoader
 from ..logging import get_logger
+from ..checkpoint import CheckpointManager
+from ..abort_controller import AbortController, AgentAbortedError
 from .prompts import build_system_prompt, CONTEXT_SUMMARY_PROMPT
 from .tool_parser import ToolCallParser
 from .agent_modes import AgentMode, MODE_CONFIGS
@@ -33,8 +35,21 @@ class CoderAgent:
         tool_calling_type: str = "supercoder"
     ):
         self.llm = llm
-        self.tools = {t.definition.name: t for t in (tools or [])}
         self.repo_root = Path(repo_root).resolve()
+        
+        # Abort controller for graceful interruption
+        self.abort_controller = AbortController()
+        
+        # Checkpoint manager for safe file editing with rollback
+        self.checkpoint_manager = CheckpointManager(self.repo_root)
+        
+        # Initialize tools and inject checkpoint_manager where needed
+        self.tools = {}
+        for t in (tools or []):
+            # Inject checkpoint_manager into code-edit tool
+            if t.definition.name == "code-edit" and hasattr(t, 'checkpoint'):
+                t.checkpoint = self.checkpoint_manager
+            self.tools[t.definition.name] = t
         
         # Agent mode (code or ask)
         self._mode = AgentMode.CODE
@@ -145,11 +160,20 @@ class CoderAgent:
         
         Yields:
             dict: Event dictionary with 'type' and 'content' keys.
-                  Types: 'token', 'tool_call', 'tool_result', 'error', 'done'
+                  Types: 'token', 'tool_call', 'tool_result', 'error', 'done', 'rollback', 'aborted'
         """
+        # Reset abort controller for new interaction
+        self.abort_controller.reset()
+        
         # Update RepoMap occasionally
         if self.repo_map:
             self._update_system_prompt()
+        
+        # Create checkpoint for this interaction (will be committed after successful tool execution)
+        checkpoint_active = False
+        if user_message:
+            self.checkpoint_manager.create(description=user_message[:100])
+            checkpoint_active = True
             
         # Add user message to context
         if user_message:
@@ -168,6 +192,10 @@ class CoderAgent:
         
         try:
             for chunk in self.llm.chat_stream(messages):
+                # Check for abort between chunks
+                if self.abort_controller.is_aborted:
+                    raise AgentAbortedError("Agent execution aborted by user")
+                
                 if not chunk.is_done:
                     # Yield token for real-time display
                     yield {"type": "token", "content": chunk.content}
@@ -176,7 +204,21 @@ class CoderAgent:
             # Signal end of text generation
             yield {"type": "done", "content": ""}
             
+        except AgentAbortedError:
+            # Handle abort - rollback and notify
+            if checkpoint_active:
+                restored = self.checkpoint_manager.rollback()
+                if restored:
+                    yield {"type": "rollback", "content": {"files": restored, "reason": "Aborted by user"}}
+            yield {"type": "aborted", "content": "Agent interrupted by user (ESC)"}
+            return
+            
         except Exception as e:
+            # Rollback on LLM error
+            if checkpoint_active:
+                restored = self.checkpoint_manager.rollback()
+                if restored:
+                    yield {"type": "rollback", "content": {"files": restored, "reason": str(e)}}
             yield {"type": "error", "content": str(e)}
             return
         
@@ -192,6 +234,7 @@ class CoderAgent:
         tool_calls = self._extract_all_tool_calls(response_text)
         if tool_calls:
             all_results = []
+            has_file_edits = False
             
             for tool_call_data in tool_calls:
                 yield {"type": "tool_call", "content": tool_call_data}
@@ -199,6 +242,10 @@ class CoderAgent:
                 # Execute tool
                 name = tool_call_data.get("name", "")
                 args = tool_call_data.get("arguments", "")
+                
+                # Track if we have file editing tools
+                if name == "code-edit":
+                    has_file_edits = True
                 
                 if name not in self.tools:
                     yield {"type": "error", "content": f"Unknown tool: {name}"}
@@ -257,6 +304,17 @@ class CoderAgent:
                     result = f"Error executing tool: {e}"
                     yield {"type": "error", "content": result}
                     all_results.append(f"[{name}]: {result}")
+                    # Rollback on tool error
+                    if checkpoint_active:
+                        restored = self.checkpoint_manager.rollback()
+                        if restored:
+                            yield {"type": "rollback", "content": {"files": restored, "reason": str(e)}}
+                        checkpoint_active = False
+            
+            # Commit checkpoint after successful file edits
+            if checkpoint_active and has_file_edits:
+                self.checkpoint_manager.commit()
+                checkpoint_active = False
             
             # Add combined tool results to context
             combined_results = "\n\n".join(all_results)
@@ -266,6 +324,11 @@ class CoderAgent:
             
             # Let agent continue with tool results (recursive call handling)
             yield from self.chat_stream("")
+        else:
+            # No tool calls - discard empty checkpoint
+            if checkpoint_active:
+                self.checkpoint_manager.rollback()  # Just cleanup, no files to restore
+
 
 
     def _extract_tool_call(self, text: str) -> dict | None:
@@ -319,6 +382,18 @@ class CoderAgent:
             return True
         return False
     
+    def handle_undo(self, restored_files: list[str]) -> None:
+        """Handle undo event by updating context."""
+        if not restored_files:
+            return
+            
+        file_list = ", ".join(f"`{Path(f).name}`" for f in restored_files)
+        message = f"[SYSTEM] Undo operation performed by user. The following files were reverted to their previous state: {file_list}. The content of these files in your context is now invalid. You must re-read them if needed."
+        
+        # Add as user message (more reliably attended to than system role mid-chat)
+        self.context.add_message(Message(role="user", content=message))
+        get_logger().log_system_prompt(f"Undo event: {message}")
+        
     def _save_current_session(self) -> None:
         """Save current session state."""
         if self.current_session:

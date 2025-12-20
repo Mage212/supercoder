@@ -1,5 +1,8 @@
 """Interactive REPL for SuperCoder."""
 
+import sys
+import threading
+import time
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -13,6 +16,8 @@ from pygments.lexers.python import PythonLexer
 from pygments.lexers.markup import MarkdownLexer
 
 from .agent.agent_modes import AgentMode
+from .abort_controller import InterruptHandler, KeyboardListener
+
 
 class SuperCoderREPL:
     """Interactive Read-Eval-Print Loop for SuperCoder."""
@@ -28,6 +33,7 @@ class SuperCoderREPL:
             "/compact": self.cmd_compact,
             "/continue": self.cmd_continue,
             "/sessions": self.cmd_sessions,
+            "/undo": self.cmd_undo,
             "/help": self.cmd_help,
             "/tools": self.cmd_tools,
             "/config": self.cmd_config,
@@ -41,6 +47,27 @@ class SuperCoderREPL:
             "/quit": self.cmd_quit,
         }
         
+        # Setup interrupt handler for double-ESC
+        self.interrupt_handler = InterruptHandler(
+            on_interrupt=self._on_interrupt,
+            on_first_press=self._on_first_esc,
+            timeout=0.5
+        )
+        
+        # Setup keyboard listener for background ESC detection
+        self.keyboard_listener = KeyboardListener(self.interrupt_handler)
+        
+    def _on_interrupt(self):
+        """Called when double-ESC triggers interrupt."""
+        self.agent.abort_controller.abort()
+        self.console.print("\n[bold red]⚠ Interrupting...[/]")
+    
+    def _on_first_esc(self):
+        """Called after first ESC press."""
+        # Use direct print to avoid conflict with Rich spinner in main thread
+        # \x1b[33m is Yellow, \x1b[0m is Reset
+        print("\r\x1b[33mPress ESC again to interrupt\x1b[0m", end="", flush=True)
+        
     def _setup_session(self):
         """Configure prompt_toolkit session."""
         style = PromptStyle.from_dict({
@@ -48,7 +75,7 @@ class SuperCoderREPL:
         })
         
         command_completer = WordCompleter(
-            ['/ask', '/code', '/clear', '/compact', '/continue', '/sessions', '/help', '/tools', '/stats', '/debug', '/models', '/model', '/config', '/exit', '/quit'],
+            ['/ask', '/code', '/clear', '/compact', '/continue', '/sessions', '/undo', '/help', '/tools', '/stats', '/debug', '/models', '/model', '/config', '/exit', '/quit'],
             ignore_case=True
         )
         
@@ -90,7 +117,6 @@ class SuperCoderREPL:
                 
                 # Process chat - replace input line(s) with styled version
                 # Calculate actual terminal lines (including wrapped text)
-                import sys
                 import shutil
                 
                 terminal_width = shutil.get_terminal_size().columns
@@ -135,32 +161,69 @@ class SuperCoderREPL:
         tool_calls = []
         tool_results = []
         errors = []
-        waiting_processes = []  # Track processes waiting for user decision
+        was_aborted = False
+        rollback_info = None
         
         # Track active files (files touched by tools)
         touched_files = set()
         
         # Show spinner while processing
+        # Show spinner while processing
         with self.console.status("[bold blue]SuperCoder is thinking...[/]", spinner="dots") as status:
-            for event in self.agent.chat_stream(message):
-                event_type = event.get("type")
-                content = event.get("content")
-                
-                if event_type == "token":
-                    response_text += content
-                elif event_type == "tool_call":
-                    tool_calls.append(content)
-                    # Track files from tool args
-                    self._track_files(content, touched_files)
-                elif event_type == "tool_result":
-                    tool_results.append(content)
-                elif event_type == "error":
-                    errors.append(content)
-                elif event_type == "command_waiting":
-                    # Process is waiting - need user interaction
-                    status.stop()  # Stop spinner to allow interaction
-                    self._handle_command_waiting(event)
-                    # Continue iteration - the process has been handled
+            # Start keyboard listener for abort
+            if hasattr(self, 'keyboard_listener'):
+                self.keyboard_listener.start()
+            
+            try:
+                for event in self.agent.chat_stream(message):
+                    event_type = event.get("type")
+                    content = event.get("content")
+                    
+                    if event_type == "token":
+                        response_text += content
+                    elif event_type == "tool_call":
+                        tool_calls.append(content)
+                        # Track files from tool args
+                        self._track_files(content, touched_files)
+                    elif event_type == "tool_result":
+                        tool_results.append(content)
+                    elif event_type == "error":
+                        errors.append(content)
+                    elif event_type == "aborted":
+                        was_aborted = True
+                        status.stop()
+                    elif event_type == "rollback":
+                        rollback_info = content
+                    elif event_type == "command_waiting":
+                        # Process is waiting - need user interaction
+                        status.stop()  # Stop spinner to allow interaction
+                        self._handle_command_waiting(event)
+                        # Continue iteration - the process has been handled
+            finally:
+                # Stop keyboard listener
+                if hasattr(self, 'keyboard_listener'):
+                    self.keyboard_listener.stop()
+        
+        # 0. Display Abort notification
+        if was_aborted:
+            self.console.print(Panel(
+                "[bold yellow]Agent execution was interrupted by user (ESC)[/]",
+                title="[bold yellow]⚠ Interrupted[/]",
+                border_style="yellow",
+                box=self._get_box_style()
+            ))
+        
+        # 0.5 Display Rollback info
+        if rollback_info:
+            files = rollback_info.get("files", [])
+            reason = rollback_info.get("reason", "Unknown")
+            self.console.print(Panel(
+                f"[dim]Reason: {reason}[/]\n" + 
+                "\n".join(f"  ✓ Restored: {f}" for f in files),
+                title="[bold cyan]↩ Files Rolled Back[/]",
+                border_style="cyan",
+                box=self._get_box_style()
+            ))
         
         # 1. Display Tool Calls & Results first (Implementation Detail)
         if tool_calls:
@@ -571,12 +634,57 @@ class SuperCoderREPL:
         self.console.print("[dim]Use /continue to resume a session[/]")
         return False
 
+    def cmd_undo(self, _):
+        """Undo changes to a selected checkpoint."""
+        checkpoints = self.agent.checkpoint_manager.list_checkpoints()
+        
+        if not checkpoints:
+            self.console.print("[yellow]No checkpoints available[/]")
+            return False
+        
+        self.console.print("\n[bold]Available Checkpoints:[/]")
+        for i, cp in enumerate(checkpoints, 1):
+            ts = cp.timestamp[:16].replace("T", " ")
+            files_count = len(cp.files)
+            self.console.print(f"  [cyan]{i}[/]. {cp.description}")
+            self.console.print(f"      [dim]{ts} • {files_count} file(s)[/]")
+        
+        self.console.print("\n[dim]Enter checkpoint number (or 'cancel'):[/]")
+        
+        try:
+            choice = self.session.prompt("Undo> ").strip()
+            
+            if choice.lower() == "cancel" or not choice:
+                self.console.print("[dim]Cancelled[/]")
+                return False
+            
+            idx = int(choice) - 1
+            if 0 <= idx < len(checkpoints):
+                cp = checkpoints[idx]
+                restored = self.agent.checkpoint_manager.undo_by_id(cp.id)
+                if restored:
+                    self.agent.handle_undo(restored)
+                    self.console.print(f"[green]✓ Restored to: {cp.description}[/]")
+                    for f in restored:
+                        self.console.print(f"  [dim]Restored: {f}[/]")
+                else:
+                    self.console.print("[yellow]No files were restored[/]")
+            else:
+                self.console.print("[red]Invalid selection[/]")
+        except ValueError:
+            self.console.print("[red]Invalid selection[/]")
+        except (KeyboardInterrupt, EOFError):
+            self.console.print("\n[dim]Cancelled[/]")
+        
+        return False
+
     def cmd_help(self, _):
         self.console.print("\n[bold]Available Commands:[/]")
         self.console.print("  /ask      - Switch to ask mode (Q&A without edits)")
         self.console.print("  /code     - Switch to code mode (can edit files)")
         self.console.print("  /continue - Resume a previous session")
         self.console.print("  /sessions - List saved sessions")
+        self.console.print("  /undo     - Undo changes to a checkpoint")
         self.console.print("  /clear    - Clear conversation history")
         self.console.print("  /compact  - Summarize context and reduce tokens")
         self.console.print("  /stats    - Show context window stats")

@@ -1,6 +1,6 @@
 # 🤖 SuperCoder
 
-[![Version](https://img.shields.io/badge/version-0.2.3-blue.svg)](https://github.com/Mage212/supercoder)
+[![Version](https://img.shields.io/badge/version-0.2.4-blue.svg)](https://github.com/Mage212/supercoder)
 [![Python](https://img.shields.io/badge/python-3.11+-green.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -8,18 +8,18 @@
 
 ---
 
-## 🆕 What's New in v0.2.3
+## 🆕 What's New in v0.2.4
+
+- **Atomic File Writes**: Enhanced reliability by using temporary files for all write operations, preventing data loss on crashes.
+- **Checkpoint & Rollback**: Automatic backup before every file modification. Use `/undo` to revert changes instantly.
+- **Graceful Interruption**: Press **Double-ESC** during agent work to stop it safely without losing session state or leaving messy file edits.
+- **Improved Undo Integration**: The agent is now aware when you perform an undo and will re-evaluate file contents accordingly.
+
+### Previous: v0.2.3
 
 - **Ask Mode**: New `/ask` command for Q&A without file modifications
 - **Code Mode**: New `/code` command to switch back to full editing mode
 - **Mode-Aware Tools**: Ask mode restricts tools to read-only operations
-- **Enhanced Prompts**: Improved tool calling examples with correct parameter names
-
-### Previous: v0.2.2
-
-- **Improved UI**: Enhanced chat interface with styled user/assistant messages
-- **Interactive Command Execution**: EOF-based input handling to prevent command hangs
-- **Tool Calling Configuration**: Model-specific tool calling instructions
 
 ---
 
@@ -32,11 +32,11 @@ Performs complex code searches across your project to quickly locate specific pa
 Provides an organized, tree-based view of your project's folders and files, intelligently ignoring build artifacts and junk files (`.git`, `node_modules`, etc.).
 
 ### ✏️ Intelligent Code Editing
-Modifies your codebase seamlessly using diff-based operations. Supported operations include:
-- `search_replace`: Precise text replacement.
-- `insert_after`/`insert_before`: Contextual code insertion.
-- `replace_lines`: Range-based line modification.
-- `create`: New file generation.
+Modifies your codebase seamlessly using diff-based operations. Every edit is **atomic** and protected by a **checkpoint system**:
+- **Atomic Writes**: Changes are written to temporary files first, then moved to the original path.
+- **Auto-Backups**: Original file state is saved before any modification.
+- **Smart Undo**: Revert any number of changes with the `/undo` command.
+- **Operations**: `search_replace`, `insert_after`, `replace_lines`, and `create`.
 
 ### 📜 Supercoder Rules (Custom rules)
 Leverage project-specific rules to guide the agent. Place `.md` files in `.supercoder/rules/` and they will be automatically loaded into the agent's context.
@@ -165,6 +165,7 @@ supercoder --no-repo-map           # Disable RepoMap
 | `/ask` | Switch to Ask mode (Q&A without edits) |
 | `/ask <question>` | Ask one question without editing, then return |
 | `/code` | Switch to Code mode (full editing) |
+| `/undo` | Revert changes to a specific checkpoint |
 | `/help` | Show available commands |
 | `/continue` | Resume a previous session |
 | `/sessions` | List saved sessions |
@@ -177,6 +178,26 @@ supercoder --no-repo-map           # Disable RepoMap
 | `/model <name>` | Switch to a specific model profile |
 | `/debug` | Toggle verbose debug logging |
 | `/exit` | Exit the application |
+
+---
+
+## 🛡️ Safety & Integrity
+
+### Atomic File Writes
+SuperCoder uses an `AtomicFileWriter` to ensure that files are never left in a corrupted state if a write operation is interrupted. This uses the `tempfile` + `os.replace` pattern, which is standard for safe filesystem operations.
+
+### Checkpoint System
+Every user message that leads to a file modification creates a new **Checkpoint**. 
+- **Backups**: Stored in project-local `.supercoder/checkpoints/`.
+- **Created Files**: Tracked and automatically deleted on rollback.
+- **Rotation**: Automatically keeps only the last 10 checkpoints to save space.
+- **Self-Healing**: Incomplete or orphaned checkpoint directories are automatically cleaned on startup.
+
+### Interruption (ESC-ESC)
+If the agent is stuck or generating unwanted code, you can press **ESC twice** quickly.
+1. The background keyboard listener detects the interrupt.
+2. The current LLM stream is aborted immediately.
+3. Any partial file changes from the current turn are **rolled back** automatically to maintain project integrity.
 
 ---
 
