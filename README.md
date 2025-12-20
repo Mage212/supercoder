@@ -1,6 +1,6 @@
 # 🤖 SuperCoder
 
-[![Version](https://img.shields.io/badge/version-0.2.2-blue.svg)](https://github.com/Mage212/supercoder)
+[![Version](https://img.shields.io/badge/version-0.2.3-blue.svg)](https://github.com/Mage212/supercoder)
 [![Python](https://img.shields.io/badge/python-3.11+-green.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -8,12 +8,18 @@
 
 ---
 
-## 🆕 What's New in v0.2.2
+## 🆕 What's New in v0.2.3
 
-- **Improved UI**: Enhanced chat interface with styled user/assistant messages and better visual feedback
+- **Ask Mode**: New `/ask` command for Q&A without file modifications
+- **Code Mode**: New `/code` command to switch back to full editing mode
+- **Mode-Aware Tools**: Ask mode restricts tools to read-only operations
+- **Enhanced Prompts**: Improved tool calling examples with correct parameter names
+
+### Previous: v0.2.2
+
+- **Improved UI**: Enhanced chat interface with styled user/assistant messages
 - **Interactive Command Execution**: EOF-based input handling to prevent command hangs
-- **Custom Headers**: Tool name and repository link now passed in HTTP headers for better API compatibility
-- **Tool Calling Configuration**: New `tool_calling_type` parameter in config to specify model-specific tool calling instructions (supports `supercoder`, `qwen_like`, `json_block`, `xml_function`)
+- **Tool Calling Configuration**: Model-specific tool calling instructions
 
 ---
 
@@ -156,6 +162,9 @@ supercoder --no-repo-map           # Disable RepoMap
 
 | Command | Description |
 |---------|-------------|
+| `/ask` | Switch to Ask mode (Q&A without edits) |
+| `/ask <question>` | Ask one question without editing, then return |
+| `/code` | Switch to Code mode (full editing) |
 | `/help` | Show available commands |
 | `/continue` | Resume a previous session |
 | `/sessions` | List saved sessions |
