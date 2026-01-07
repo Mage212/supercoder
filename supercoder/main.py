@@ -30,7 +30,10 @@ def main(model: str, endpoint: str, debug: bool, temperature: float, max_context
     # Load config
     config = Config.load()
     if model:
-        config.model = model
+        # If the model name matches an existing profile, switch to it
+        if not config.switch_to_model(model):
+            # Otherwise just override the model name
+            config.model = model
     if endpoint:
         config.base_url = endpoint
     if temperature != 0.2:

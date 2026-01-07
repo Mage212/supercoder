@@ -223,7 +223,11 @@ class Config:
     def validate(self) -> list[str]:
         """Validate configuration, return list of errors."""
         errors = []
-        if not self.api_key:
+        
+        # Check if we're using a local/private endpoint which might not need an API key
+        is_local = any(x in self.base_url for x in ["localhost", "127.0.0.1", "192.168.", "10.", "172.16."])
+        
+        if not self.api_key and not is_local:
             errors.append(
                 f"API key not set. Edit {CONFIG_FILE} or set SUPERCODER_API_KEY env var"
             )

@@ -100,8 +100,8 @@ class QwenStyleParser(BaseToolParser):
     
     # Pattern 1: Simple format (what we instruct in prompt)
     pattern_simple = re.compile(
-        r'to=tool[:\.]([a-zA-Z0-9_-]+)\s+(\{.*?\})',
-        re.DOTALL
+        r'to=(?:tool[:\s.])?([a-zA-Z0-9_-]+)\s+(\{.*?\})',
+        re.DOTALL | re.IGNORECASE
     )
     
     # Pattern 2: Full Qwen format with markers (what model actually uses)
@@ -112,7 +112,7 @@ class QwenStyleParser(BaseToolParser):
     
     # Pattern 3: channel format without start (some models)
     pattern_channel = re.compile(
-        r'<\|channel\|>.*?to=([a-zA-Z0-9_-]+).*?<\|message\|>(\{.*?\})',
+        r'<\|channel\|>.*?to=(?:tool[:\s.])?([a-zA-Z0-9_-]+).*?<\|message\|>(\{.*?\})',
         re.DOTALL | re.IGNORECASE
     )
     
