@@ -77,8 +77,14 @@ class OpenAIClient(BaseLLM):
             )
             
             for chunk in stream:
-                if chunk.choices and chunk.choices[0].delta.content:
-                    yield StreamChunk(content=chunk.choices[0].delta.content)
+                if chunk.choices:
+                    delta = chunk.choices[0].delta
+                    content = delta.content or ""
+                    # Extract reasoning_content for GLM/DeepSeek models
+                    reasoning = getattr(delta, 'reasoning_content', None) or ""
+                    
+                    if content or reasoning:
+                        yield StreamChunk(content=content, reasoning=reasoning)
             
             yield StreamChunk(content="", is_done=True)
             

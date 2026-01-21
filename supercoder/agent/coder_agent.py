@@ -197,9 +197,13 @@ class CoderAgent:
                     raise AgentAbortedError("Agent execution aborted by user")
                 
                 if not chunk.is_done:
+                    # Yield reasoning for real-time display (GLM, DeepSeek, etc.)
+                    if chunk.reasoning:
+                        yield {"type": "reasoning", "content": chunk.reasoning}
                     # Yield token for real-time display
-                    yield {"type": "token", "content": chunk.content}
-                    response_text += chunk.content
+                    if chunk.content:
+                        yield {"type": "token", "content": chunk.content}
+                        response_text += chunk.content
             
             # Signal end of text generation
             yield {"type": "done", "content": ""}

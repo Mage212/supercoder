@@ -16,6 +16,7 @@ class Message:
 class StreamChunk:
     """Streaming response chunk."""
     content: str
+    reasoning: str = ""  # For reasoning_content (GLM, DeepSeek, etc.)
     is_done: bool = False
 
 

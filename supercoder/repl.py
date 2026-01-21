@@ -158,6 +158,7 @@ class SuperCoderREPL:
 
         # Collect full response first, then display
         response_text = ""
+        reasoning_text = ""  # NEW: collect reasoning separately
         tool_calls = []
         tool_results = []
         errors = []
@@ -167,7 +168,6 @@ class SuperCoderREPL:
         # Track active files (files touched by tools)
         touched_files = set()
         
-        # Show spinner while processing
         # Show spinner while processing
         with self.console.status("[bold blue]SuperCoder is thinking...[/]", spinner="dots") as status:
             # Start keyboard listener for abort
@@ -179,7 +179,9 @@ class SuperCoderREPL:
                     event_type = event.get("type")
                     content = event.get("content")
                     
-                    if event_type == "token":
+                    if event_type == "reasoning":
+                        reasoning_text += content  # NEW: accumulate reasoning
+                    elif event_type == "token":
                         response_text += content
                     elif event_type == "tool_call":
                         tool_calls.append(content)
@@ -204,6 +206,8 @@ class SuperCoderREPL:
                 if hasattr(self, 'keyboard_listener'):
                     self.keyboard_listener.stop()
         
+        # === ALL DISPLAY HAPPENS AFTER SPINNER ===
+        
         # 0. Display Abort notification
         if was_aborted:
             self.console.print(Panel(
@@ -225,20 +229,29 @@ class SuperCoderREPL:
                 box=self._get_box_style()
             ))
         
-        # 1. Display Tool Calls & Results first (Implementation Detail)
+        # 1. Display Reasoning FIRST (before tools) - NEW!
+        if reasoning_text.strip():
+            self.console.print(Panel(
+                reasoning_text.strip(),
+                title="[bold magenta]💭 Reasoning[/]",
+                border_style="magenta",
+                box=self._get_box_style()
+            ))
+        
+        # 2. Display Tool Calls & Results
         if tool_calls:
-            self.console.print() # Spacer
+            self.console.print()  # Spacer
             for i, tc in enumerate(tool_calls):
                 self._display_tool_call(tc)
                 if i < len(tool_results):
                     self._display_tool_result(tool_results[i])
-            self.console.print() # Spacer
+            self.console.print()  # Spacer
 
-        # 2. Display Errors
+        # 3. Display Errors
         for error in errors:
             self.console.print(Panel(f"[red]{error}[/]", title="[bold red]Error[/]", border_style="red"))
         
-        # 3. Display Assistant Response
+        # 4. Display Assistant Response
         clean_text = self._filter_special_tokens(response_text)
         if clean_text:
             self.console.print(Panel(
@@ -248,7 +261,7 @@ class SuperCoderREPL:
                 box=self._get_box_style()
             ))
         
-        # 4. Display Status Footer (Tokens & Files)
+        # 5. Display Status Footer (Tokens & Files)
         self._display_status_footer(touched_files)
         
         self.console.print()
