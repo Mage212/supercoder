@@ -189,6 +189,7 @@ class CoderAgent:
         
         # Stream response
         response_text = ""
+        reasoning_text = ""  # Track reasoning for logging
         
         try:
             for chunk in self.llm.chat_stream(messages):
@@ -199,14 +200,23 @@ class CoderAgent:
                 if not chunk.is_done:
                     # Yield reasoning for real-time display (GLM, DeepSeek, etc.)
                     if chunk.reasoning:
+                        reasoning_text += chunk.reasoning
                         yield {"type": "reasoning", "content": chunk.reasoning}
+                        # Log reasoning event
+                        get_logger().log_stream_event("reasoning", chunk.reasoning)
                     # Yield token for real-time display
                     if chunk.content:
                         yield {"type": "token", "content": chunk.content}
                         response_text += chunk.content
+                        # Log content event (only first 100 chars)
+                        if len(response_text) <= 100:
+                            get_logger().log_stream_event("token", chunk.content)
             
-            # Signal end of text generation
-            yield {"type": "done", "content": ""}
+            # Log accumulated reasoning if any
+            if reasoning_text:
+                get_logger().log_reasoning(reasoning_text, stage="pre_response")
+            
+            # NOTE: Don't yield "done" here - will be yielded at the end if no tool calls
             
         except AgentAbortedError:
             # Handle abort - rollback and notify
@@ -252,7 +262,10 @@ class CoderAgent:
                     has_file_edits = True
                 
                 if name not in self.tools:
-                    yield {"type": "error", "content": f"Unknown tool: {name}"}
+                    error_msg = f"Unknown tool: '{name}'. Available tools: {', '.join(self.tools.keys())}"
+                    yield {"type": "error", "content": error_msg}
+                    # Also add to results so model gets feedback
+                    all_results.append(f"[{name}]: ERROR - {error_msg}")
                     continue
                 
                 try:
@@ -329,9 +342,12 @@ class CoderAgent:
             # Let agent continue with tool results (recursive call handling)
             yield from self.chat_stream("")
         else:
-            # No tool calls - discard empty checkpoint
+            # No tool calls - discard empty checkpoint and signal completion
             if checkpoint_active:
                 self.checkpoint_manager.rollback()  # Just cleanup, no files to restore
+            
+            # Signal end of entire chat stream (no more events)
+            yield {"type": "done", "content": ""}
 
 
 

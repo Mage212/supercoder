@@ -63,6 +63,31 @@ class ConversationLogger:
             "timestamp": datetime.now().isoformat(),
         })
     
+    def log_reasoning(self, reasoning: str, stage: str = "") -> None:
+        """Log reasoning/thinking content from model."""
+        if not self.enabled:
+            return
+        self._write_entry({
+            "type": "reasoning",
+            "stage": stage,
+            "content": reasoning,
+            "timestamp": datetime.now().isoformat(),
+        })
+    
+    def log_stream_event(self, event_type: str, content: str, meta: dict = None) -> None:
+        """Log individual streaming event for debugging."""
+        if not self.enabled:
+            return
+        entry = {
+            "type": "stream_event",
+            "event_type": event_type,
+            "content": content[:500] if content else "",  # Truncate
+            "timestamp": datetime.now().isoformat(),
+        }
+        if meta:
+            entry["meta"] = meta
+        self._write_entry(entry)
+    
     def log_system_prompt(self, prompt: str) -> None:
         """Log the current system prompt."""
         if not self.enabled:

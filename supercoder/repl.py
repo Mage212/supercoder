@@ -153,24 +153,48 @@ class SuperCoderREPL:
         self.console.print("[green]Goodbye![/]")
 
     def _handle_chat(self, message):
-        """Handle chat interaction with clean output (no streaming)."""
+        """Handle chat interaction with incremental output for reasoning blocks."""
         # User message is already displayed by the main loop with styling
 
-        # Collect full response first, then display
+        # Buffers for current stage
         response_text = ""
-        reasoning_text = ""  # NEW: collect reasoning separately
-        tool_calls = []
-        tool_results = []
+        reasoning_text = ""
         errors = []
         was_aborted = False
         rollback_info = None
         
-        # Track active files (files touched by tools)
+        # Track active files
         touched_files = set()
         
-        # Show spinner while processing
+        def flush_reasoning():
+            """Output accumulated reasoning and clear buffer."""
+            nonlocal reasoning_text
+            # Filter out any tool_call tags that might have leaked into reasoning
+            clean_reasoning = self._filter_special_tokens(reasoning_text)
+            if clean_reasoning.strip():
+                self.console.print(Panel(
+                    clean_reasoning.strip(),
+                    title="[bold magenta]💭 Reasoning[/]",
+                    border_style="magenta",
+                    box=self._get_box_style()
+                ))
+            reasoning_text = ""
+        
+        def flush_response():
+            """Output accumulated response and clear buffer."""
+            nonlocal response_text
+            clean_text = self._filter_special_tokens(response_text)
+            if clean_text:
+                self.console.print(Panel(
+                    Markdown(clean_text),
+                    title="[bold blue]SuperCoder[/]",
+                    border_style="blue",
+                    box=self._get_box_style()
+                ))
+                response_text = ""
+        
+        # Process events with spinner
         with self.console.status("[bold blue]SuperCoder is thinking...[/]", spinner="dots") as status:
-            # Start keyboard listener for abort
             if hasattr(self, 'keyboard_listener'):
                 self.keyboard_listener.start()
             
@@ -180,35 +204,57 @@ class SuperCoderREPL:
                     content = event.get("content")
                     
                     if event_type == "reasoning":
-                        reasoning_text += content  # NEW: accumulate reasoning
+                        reasoning_text += content
+                        
                     elif event_type == "token":
                         response_text += content
+                        
                     elif event_type == "tool_call":
-                        tool_calls.append(content)
-                        # Track files from tool args
+                        # STOP spinner, output reasoning, then tool call
+                        status.stop()
+                        flush_reasoning()
+                        self._display_tool_call(content)
                         self._track_files(content, touched_files)
+                        status.start()
+                        
                     elif event_type == "tool_result":
-                        tool_results.append(content)
+                        status.stop()
+                        self._display_tool_result(content)
+                        status.start()
+                        
                     elif event_type == "error":
                         errors.append(content)
+                        
                     elif event_type == "aborted":
                         was_aborted = True
                         status.stop()
+                        
                     elif event_type == "rollback":
                         rollback_info = content
+                        
                     elif event_type == "command_waiting":
-                        # Process is waiting - need user interaction
-                        status.stop()  # Stop spinner to allow interaction
+                        status.stop()
+                        flush_reasoning()
                         self._handle_command_waiting(event)
-                        # Continue iteration - the process has been handled
+                        status.start()
+                        
+                    elif event_type == "done":
+                        # End of stream - flush remaining buffers
+                        status.stop()
+                        flush_reasoning()
+                        flush_response()
+                        
             finally:
-                # Stop keyboard listener
                 if hasattr(self, 'keyboard_listener'):
                     self.keyboard_listener.stop()
         
-        # === ALL DISPLAY HAPPENS AFTER SPINNER ===
+        # === Post-processing (outside spinner) ===
         
-        # 0. Display Abort notification
+        # Final flush in case done wasn't received
+        flush_reasoning()
+        flush_response()
+        
+        # Display Abort notification
         if was_aborted:
             self.console.print(Panel(
                 "[bold yellow]Agent execution was interrupted by user (ESC)[/]",
@@ -217,7 +263,7 @@ class SuperCoderREPL:
                 box=self._get_box_style()
             ))
         
-        # 0.5 Display Rollback info
+        # Display Rollback info
         if rollback_info:
             files = rollback_info.get("files", [])
             reason = rollback_info.get("reason", "Unknown")
@@ -228,40 +274,12 @@ class SuperCoderREPL:
                 border_style="cyan",
                 box=self._get_box_style()
             ))
-        
-        # 1. Display Reasoning FIRST (before tools) - NEW!
-        if reasoning_text.strip():
-            self.console.print(Panel(
-                reasoning_text.strip(),
-                title="[bold magenta]💭 Reasoning[/]",
-                border_style="magenta",
-                box=self._get_box_style()
-            ))
-        
-        # 2. Display Tool Calls & Results
-        if tool_calls:
-            self.console.print()  # Spacer
-            for i, tc in enumerate(tool_calls):
-                self._display_tool_call(tc)
-                if i < len(tool_results):
-                    self._display_tool_result(tool_results[i])
-            self.console.print()  # Spacer
 
-        # 3. Display Errors
+        # Display Errors
         for error in errors:
             self.console.print(Panel(f"[red]{error}[/]", title="[bold red]Error[/]", border_style="red"))
         
-        # 4. Display Assistant Response
-        clean_text = self._filter_special_tokens(response_text)
-        if clean_text:
-            self.console.print(Panel(
-                Markdown(clean_text),
-                title="[bold blue]SuperCoder[/]",
-                border_style="blue",
-                box=self._get_box_style()
-            ))
-        
-        # 5. Display Status Footer (Tokens & Files)
+        # Display Status Footer
         self._display_status_footer(touched_files)
         
         self.console.print()

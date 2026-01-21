@@ -1,6 +1,6 @@
 # 🤖 SuperCoder
 
-[![Version](https://img.shields.io/badge/version-0.2.7-blue.svg)](https://github.com/Mage212/supercoder)
+[![Version](https://img.shields.io/badge/version-0.2.8-blue.svg)](https://github.com/Mage212/supercoder)
 [![Python](https://img.shields.io/badge/python-3.11+-green.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -8,7 +8,14 @@
 
 ---
 
-## 🆕 What's New in v0.2.7
+## 🆕 What's New in v0.2.8
+
+- **Reasoning Block Display**: Added dedicated support for displaying model "thinking" or "reasoning" steps. Reasoning is displayed in a distinct `💭 Reasoning` block before the main response or tool calls.
+- **Incremental Multi-Stage Output**: Improved the REPL to display reasoning and tool calls incrementally. Long multi-turn interactions are now much easier to follow as each stage is rendered as it happens.
+- **Improved GLM-4 Integration**: Enhanced tool call parsing and filtering specifically for GLM-4 models, ensuring that raw tool tags are hidden from the final output even if they appear in the reasoning stream.
+- **Advanced Session Logging**: Added detailed logging of reasoning steps and streaming events to `.supercoder/logs/`, making it easier to analyze model behavior and debug complex interactions.
+
+### v0.2.7
 
 - **Model-Specific Context Limits**: Each model profile can now have its own `max_context_tokens` limit. This allows automatic switching between models with different context window sizes (e.g., 8k for local models vs 128k for cloud models) without manual reconfiguration.
 - **Improved Context Management**: Default context limits specified in `config.yaml` are now correctly respected unless overridden by the CLI flag.
