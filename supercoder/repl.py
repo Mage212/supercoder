@@ -11,7 +11,6 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.styles import Style as PromptStyle
 from prompt_toolkit.lexers import PygmentsLexer
-from prompt_toolkit.completion import WordCompleter
 from pygments.lexers.python import PythonLexer
 from pygments.lexers.markup import MarkdownLexer
 
@@ -25,7 +24,8 @@ class SuperCoderREPL:
     def __init__(self, agent):
         self.agent = agent
         self.console = Console()
-        self.session = self._setup_session()
+        
+        # Initialize commands BEFORE session setup (session uses commands for autocomplete)
         self.commands = {
             "/ask": self.cmd_ask,
             "/code": self.cmd_code,
@@ -46,6 +46,9 @@ class SuperCoderREPL:
             "quit": self.cmd_quit,
             "/quit": self.cmd_quit,
         }
+        
+        # Now setup session (uses self.commands)
+        self.session = self._setup_session()
         
         # Setup interrupt handler for double-ESC
         self.interrupt_handler = InterruptHandler(
@@ -70,14 +73,28 @@ class SuperCoderREPL:
         
     def _setup_session(self):
         """Configure prompt_toolkit session."""
+        from prompt_toolkit.completion import ThreadedCompleter
+        from prompt_toolkit.key_binding import KeyBindings
+        from .autocomplete import AutoCompleter
+        
         style = PromptStyle.from_dict({
             'prompt': '#00aa00 bold',
         })
         
-        command_completer = WordCompleter(
-            ['/ask', '/code', '/clear', '/compact', '/continue', '/sessions', '/undo', '/help', '/tools', '/stats', '/debug', '/models', '/model', '/config', '/exit', '/quit'],
-            ignore_case=True
+        # Enhanced autocomplete with file and command support
+        auto_completer = AutoCompleter(
+            repo_root=self.agent.repo_root,
+            commands=list(self.commands.keys()),
         )
+        completer = ThreadedCompleter(auto_completer)
+        
+        # Key bindings for multiline support
+        kb = KeyBindings()
+        
+        @kb.add('escape', 'enter')  # Alt+Enter or Escape then Enter
+        def _(event):
+            """Insert newline without submitting."""
+            event.current_buffer.insert_text('\n')
         
         # History file in project-specific directory
         history_path = self.agent.repo_root / ".supercoder" / "history"
@@ -87,7 +104,9 @@ class SuperCoderREPL:
             history=FileHistory(str(history_path)),
             lexer=PygmentsLexer(MarkdownLexer),
             style=style,
-            completer=command_completer,
+            completer=completer,
+            key_bindings=kb,
+            multiline=False,  # We handle multiline via { } or Alt+Enter
         )
 
 
@@ -95,13 +114,42 @@ class SuperCoderREPL:
         """Start the REPL loop."""
         self.console.print("[bold green]SuperCoder CLI[/] - Type /help for commands")
         self.console.print(f"[dim]Model: {self.agent.llm.model}[/]")
+        self.console.print("[dim]Tip: Use { ... } for multiline input, or Alt+Enter for newlines[/]")
         
         # Start a new session on fresh start
         self.agent.start_new_session()
         
+        # Multiline state
+        multiline_mode = False
+        multiline_buffer = []
+        
         while True:
             try:
-                user_input = self.session.prompt(self._get_prompt()).strip()
+                # Show different prompt in multiline mode
+                if multiline_mode:
+                    prompt = "...> "
+                else:
+                    prompt = self._get_prompt()
+                
+                user_input = self.session.prompt(prompt).strip()
+                
+                # Handle multiline mode
+                if multiline_mode:
+                    if user_input == '}':
+                        # End multiline - join and process
+                        multiline_mode = False
+                        user_input = '\n'.join(multiline_buffer)
+                        multiline_buffer = []
+                    else:
+                        # Continue collecting lines
+                        multiline_buffer.append(user_input)
+                        continue
+                elif user_input == '{':
+                    # Start multiline mode
+                    multiline_mode = True
+                    multiline_buffer = []
+                    self.console.print("[dim]Multiline mode: enter lines, end with } on its own line[/]")
+                    continue
                 
                 if not user_input:
                     continue
@@ -145,7 +193,12 @@ class SuperCoderREPL:
                 self._handle_chat(user_input)
                 
             except KeyboardInterrupt:
-                self.console.print("\n[dim]Use 'exit' to quit[/]")
+                if multiline_mode:
+                    multiline_mode = False
+                    multiline_buffer = []
+                    self.console.print("\n[dim]Multiline cancelled[/]")
+                else:
+                    self.console.print("\n[dim]Use 'exit' to quit[/]")
                 continue
             except EOFError:
                 break
@@ -154,6 +207,8 @@ class SuperCoderREPL:
 
     def _handle_chat(self, message):
         """Handle chat interaction with incremental output for reasoning blocks."""
+        from .mdstream import MarkdownStream
+        
         # User message is already displayed by the main loop with styling
 
         # Buffers for current stage
@@ -165,6 +220,9 @@ class SuperCoderREPL:
         
         # Track active files
         touched_files = set()
+        
+        # Streaming markdown renderer for response
+        md_stream = None
         
         def flush_reasoning():
             """Output accumulated reasoning and clear buffer."""
@@ -180,17 +238,14 @@ class SuperCoderREPL:
                 ))
             reasoning_text = ""
         
-        def flush_response():
-            """Output accumulated response and clear buffer."""
-            nonlocal response_text
+        def flush_response(final=False):
+            """Output accumulated response via streaming markdown."""
+            nonlocal response_text, md_stream
             clean_text = self._filter_special_tokens(response_text)
-            if clean_text:
-                self.console.print(Panel(
-                    Markdown(clean_text),
-                    title="[bold blue]SuperCoder[/]",
-                    border_style="blue",
-                    box=self._get_box_style()
-                ))
+            if clean_text and md_stream:
+                md_stream.update(clean_text, final=final)
+            if final:
+                md_stream = None
                 response_text = ""
         
         # Process events with spinner
@@ -207,10 +262,20 @@ class SuperCoderREPL:
                         reasoning_text += content
                         
                     elif event_type == "token":
+                        # Initialize streaming on first token
+                        if md_stream is None:
+                            status.stop()  # Stop spinner for live output
+                            flush_reasoning()  # Output any pending reasoning
+                            md_stream = MarkdownStream(style="blue")
                         response_text += content
+                        # Stream update
+                        clean_text = self._filter_special_tokens(response_text)
+                        if clean_text:
+                            md_stream.update(clean_text)
                         
                     elif event_type == "tool_call":
-                        # STOP spinner, output reasoning, then tool call
+                        # Finalize any streaming response before tool call
+                        flush_response(final=True)
                         status.stop()
                         flush_reasoning()
                         self._display_tool_call(content)
@@ -242,7 +307,7 @@ class SuperCoderREPL:
                         # End of stream - flush remaining buffers
                         status.stop()
                         flush_reasoning()
-                        flush_response()
+                        flush_response(final=True)
                         
             finally:
                 if hasattr(self, 'keyboard_listener'):
@@ -252,7 +317,7 @@ class SuperCoderREPL:
         
         # Final flush in case done wasn't received
         flush_reasoning()
-        flush_response()
+        flush_response(final=True)
         
         # Display Abort notification
         if was_aborted:

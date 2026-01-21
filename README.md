@@ -1,6 +1,6 @@
 # 🤖 SuperCoder
 
-[![Version](https://img.shields.io/badge/version-0.2.8-blue.svg)](https://github.com/Mage212/supercoder)
+[![Version](https://img.shields.io/badge/version-0.2.9-blue.svg)](https://github.com/Mage212/supercoder)
 [![Python](https://img.shields.io/badge/python-3.11+-green.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -8,7 +8,15 @@
 
 ---
 
-## 🆕 What's New in v0.2.8
+## 🆕 What's New in v0.2.9
+
+- **Enhanced Autocomplete**: Added intelligent autocompletion for slash commands and file paths using `prompt_toolkit`.
+- **Multiline Input Support**: 
+  - Use `{ ... }` blocks for pasting large snippets of code.
+  - Use `Alt+Enter` (or `Esc+Enter`) to insert newlines without submitting the message.
+- **Improved Streaming Output**: Integrated a custom markdown streaming renderer for smoother, live-updating responses that work better with terminal scrollback.
+
+### v0.2.8
 
 - **Reasoning Block Display**: Added dedicated support for displaying model "thinking" or "reasoning" steps. Reasoning is displayed in a distinct `💭 Reasoning` block before the main response or tool calls.
 - **Incremental Multi-Stage Output**: Improved the REPL to display reasoning and tool calls incrementally. Long multi-turn interactions are now much easier to follow as each stage is rendered as it happens.
