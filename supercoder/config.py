@@ -22,6 +22,7 @@ models:
     api_key: ""
     endpoint: "https://api.openai.com/v1"
     model: "gpt-4o-mini"
+    # max_context_tokens: 128000  # Optional: model-specific context limit
     
   # Example: OpenRouter with free models
   # openrouter-free:
@@ -29,6 +30,7 @@ models:
   #   endpoint: "https://openrouter.ai/api/v1"
   #   model: "openai/gpt-oss-20b:free"
   #   tool_calling_type: "qwen_like"  # Format for tool calls: supercoder, qwen_like, json_block, xml_function
+  #   max_context_tokens: 32000  # Model-specific context limit
   
   # Example: Local Ollama
   # ollama:
@@ -36,11 +38,12 @@ models:
   #   endpoint: "http://localhost:11434/v1"
   #   model: "llama3.2"
   #   tool_calling_type: "supercoder"  # default
+  #   max_context_tokens: 8000  # Smaller context for local models
 
-# Shared settings (applied to all models)
+# Shared settings (applied to all models unless overridden)
 temperature: 0.2
 top_p: 0.1
-max_context_tokens: 32000
+max_context_tokens: 32000  # Default context limit (used if model doesn't specify one)
 reserved_for_response: 4096
 request_timeout: 60.0
 debug: false
@@ -71,6 +74,7 @@ class ModelProfile:
     model: str = "gpt-4o-mini"
     request_timeout: float = 60.0
     tool_calling_type: str = "supercoder"  # supercoder, qwen_like, json_block, xml_function, glm_tool_call
+    max_context_tokens: int | None = None  # None = use global default
     
     @property
     def base_url(self) -> str:
@@ -151,6 +155,7 @@ class Config:
                     model=profile_data.get("model", "gpt-4o-mini"),
                     request_timeout=float(profile_data.get("request_timeout", config_data.get("request_timeout", 60.0))),
                     tool_calling_type=profile_data.get("tool_calling_type", "supercoder"),
+                    max_context_tokens=profile_data.get("max_context_tokens"),
                 )
         
         # Create instance with shared settings
@@ -170,6 +175,9 @@ class Config:
             config.model = profile.model
             config.request_timeout = profile.request_timeout
             config._current_profile = default_name
+            # Apply model-specific context limit if defined
+            if profile.max_context_tokens is not None:
+                config.max_context_tokens = profile.max_context_tokens
         
         # Override with environment variables (highest priority)
         env_api_key = os.getenv("SUPERCODER_API_KEY", os.getenv("OPENAI_API_KEY", ""))
@@ -213,6 +221,9 @@ class Config:
         self.model = profile.model
         self.request_timeout = profile.request_timeout
         self._current_profile = name
+        # Apply model-specific context limit if defined
+        if profile.max_context_tokens is not None:
+            self.max_context_tokens = profile.max_context_tokens
         return True
     
     @property

@@ -100,6 +100,10 @@ class ContextWindowManager:
         """Clear conversation history."""
         self.history = []
     
+    def set_max_tokens(self, max_tokens: int) -> None:
+        """Update the maximum context token limit at runtime."""
+        self.config.max_tokens = max_tokens
+    
     def set_initial_summary(self, summary: str) -> None:
         """Set a summary as the initial context after clearing history.
         

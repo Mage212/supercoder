@@ -21,7 +21,7 @@ console = Console()
 @click.option("--endpoint", "-e", default="", help="LLM API endpoint (base URL)")
 @click.option("--debug", "-d", is_flag=True, help="Enable debug mode")
 @click.option("--temperature", "-t", type=float, default=0.2, help="Temperature for LLM")
-@click.option("--max-context", "-c", type=int, default=32000, help="Max context tokens")
+@click.option("--max-context", "-c", type=int, default=None, help="Max context tokens (default: from config)")
 @click.option("--repo-map/--no-repo-map", default=True, help="Enable/disable RepoMap")
 @click.version_option(version=__version__)
 def main(model: str, endpoint: str, debug: bool, temperature: float, max_context: int, repo_map: bool):
@@ -39,7 +39,9 @@ def main(model: str, endpoint: str, debug: bool, temperature: float, max_context
     if temperature != 0.2:
         config.temperature = temperature
     config.debug = debug
-    config.max_context_tokens = max_context
+    # Only override context if explicitly provided via CLI
+    if max_context is not None:
+        config.max_context_tokens = max_context
     
     # Validate config
     errors = config.validate()
@@ -55,7 +57,7 @@ def main(model: str, endpoint: str, debug: bool, temperature: float, max_context
     console.print(f"[bold green]SuperCoder v{__version__}[/]")
     console.print(f"[dim]Model: {config.model}[/]")
     console.print(f"[dim]Endpoint: {config.base_url}[/]")
-    console.print(f"[dim]Context: {max_context:,} tokens[/]")
+    console.print(f"[dim]Context: {config.max_context_tokens:,} tokens[/]")
     console.print(f"[dim]RepoMap: {'Enabled' if repo_map else 'Disabled'}[/]")
     console.print(f"[dim]Tools: {len(ALL_TOOLS)} available[/]")
     console.print(f"[dim]Logs: {logger.log_path}[/]")

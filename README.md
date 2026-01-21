@@ -1,6 +1,6 @@
 # 🤖 SuperCoder
 
-[![Version](https://img.shields.io/badge/version-0.2.6-blue.svg)](https://github.com/Mage212/supercoder)
+[![Version](https://img.shields.io/badge/version-0.2.7-blue.svg)](https://github.com/Mage212/supercoder)
 [![Python](https://img.shields.io/badge/python-3.11+-green.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -8,7 +8,12 @@
 
 ---
 
-## 🆕 What's New in v0.2.6
+## 🆕 What's New in v0.2.7
+
+- **Model-Specific Context Limits**: Each model profile can now have its own `max_context_tokens` limit. This allows automatic switching between models with different context window sizes (e.g., 8k for local models vs 128k for cloud models) without manual reconfiguration.
+- **Improved Context Management**: Default context limits specified in `config.yaml` are now correctly respected unless overridden by the CLI flag.
+
+### v0.2.6
 
 - **GLM-4 Support**: Added a dedicated `glm_tool_call` format support specifically optimized for GLM-4.7-Flash and similar models.
 - **Multi-Tool Support for GLM**: The agent can now parse multiple tool calls in a single GLM model response.

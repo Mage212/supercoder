@@ -785,6 +785,12 @@ class SuperCoderREPL:
         # Update tool calling type in agent (rebuilds system prompt if needed)
         self.agent.set_tool_calling_type(profile.tool_calling_type)
         
+        # Update context window limit if model has specific setting
+        context_info = ""
+        if profile.max_context_tokens:
+            self.agent.context.set_max_tokens(profile.max_context_tokens)
+            context_info = f"{profile.max_context_tokens:,}"
+        
         # Reset prompt_toolkit buffer to prevent double input issue
         # This clears any stale state that might cause the next input to be processed twice
         try:
@@ -797,4 +803,6 @@ class SuperCoderREPL:
         self.console.print(f"[dim]Model: {profile.model}[/]")
         self.console.print(f"[dim]Endpoint: {profile.endpoint}[/]")
         self.console.print(f"[dim]Tool calling: {profile.tool_calling_type}[/]")
+        if context_info:
+            self.console.print(f"[dim]Context: {context_info} tokens[/]")
         return False
