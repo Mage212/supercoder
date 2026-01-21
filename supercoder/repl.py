@@ -371,6 +371,8 @@ class SuperCoderREPL:
         text = re.sub(r'```tool_code\s*\n?.*?\n?```', '', text, flags=re.DOTALL)
         # Remove our native tool call format: <@TOOL>...</@TOOL>
         text = re.sub(r'<@TOOL>.*?</@TOOL>', '', text, flags=re.DOTALL)
+        # Remove GLM-style tool calls: <tool_call>...</tool_call>
+        text = re.sub(r'<tool_call>.*?</tool_call>', '', text, flags=re.DOTALL)
         # Remove model-generated TOOL_RESULT blocks (model shouldn't generate these!)
         text = re.sub(r'<@TOOL_RESULT>.*?</@TOOL_RESULT>', '', text, flags=re.DOTALL)
         # Remove complete Qwen-style blocks: <|start|>...<|call|> 

@@ -1,6 +1,6 @@
 # 🤖 SuperCoder
 
-[![Version](https://img.shields.io/badge/version-0.2.4-blue.svg)](https://github.com/Mage212/supercoder)
+[![Version](https://img.shields.io/badge/version-0.2.6-blue.svg)](https://github.com/Mage212/supercoder)
 [![Python](https://img.shields.io/badge/python-3.11+-green.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -8,18 +8,22 @@
 
 ---
 
-## 🆕 What's New in v0.2.4
+## 🆕 What's New in v0.2.6
+
+- **GLM-4 Support**: Added a dedicated `glm_tool_call` format support specifically optimized for GLM-4.7-Flash and similar models.
+- **Multi-Tool Support for GLM**: The agent can now parse multiple tool calls in a single GLM model response.
+- **Improved Display Filtering**: Enhanced response filtering to hide raw GLM tool call tags from the assistant's output panel.
+
+### v0.2.5
+
+- **Multiple Tool Call Support**: Updated the parser framework to support models that send multiple tool calls in one turn across different formats.
+
+### v0.2.4
 
 - **Atomic File Writes**: Enhanced reliability by using temporary files for all write operations, preventing data loss on crashes.
 - **Checkpoint & Rollback**: Automatic backup before every file modification. Use `/undo` to revert changes instantly.
 - **Graceful Interruption**: Press **Double-ESC** during agent work to stop it safely without losing session state or leaving messy file edits.
 - **Improved Undo Integration**: The agent is now aware when you perform an undo and will re-evaluate file contents accordingly.
-
-### Previous: v0.2.3
-
-- **Ask Mode**: New `/ask` command for Q&A without file modifications
-- **Code Mode**: New `/code` command to switch back to full editing mode
-- **Mode-Aware Tools**: Ask mode restricts tools to read-only operations
 
 ---
 
@@ -138,6 +142,7 @@ Different models expect tools to be called in different formats. Use `tool_calli
 | `qwen_like` | `to=tool:name {"arg": "value"}` | Qwen, GPT-OSS, DeepResearch models |
 | `json_block` | ` ```json {"tool": "...", "arguments": {...}} ``` ` | Models trained on markdown |
 | `xml_function` | `<function_call name="...">...</function_call>` | XML-style models |
+| `glm_tool_call` | `<tool_call>name<arg_key>k</arg_key><arg_value>v</arg_value></tool_call>` | GLM-4 models |
 
 ---
 

@@ -222,6 +222,83 @@ class XmlFunctionParser(BaseToolParser):
         )
 
 
+class GlmToolCallParser(BaseToolParser):
+    """Parse GLM-style <tool_call> format.
+    
+    GLM-4.7-Flash uses a unique format:
+    <tool_call>tool-name<arg_key>param1</arg_key><arg_value>value1<arg_key>param2</arg_key><arg_value>value2</arg_value></tool_call>
+    
+    Note: The closing </arg_value> tag only appears at the end, not after each value.
+    """
+    
+    name = "glm_tool_call"
+    # Match <tool_call>...</tool_call> with tool name and args inside
+    pattern = re.compile(r'<tool_call>([^<]+)(.*?)</tool_call>', re.DOTALL)
+    # Match arg_key/arg_value pairs - value ends at next <arg_key> or </arg_value>
+    arg_pattern = re.compile(r'<arg_key>([^<]+)</arg_key><arg_value>([^<]*)', re.DOTALL)
+    
+    def try_parse(self, text: str) -> ToolCall | None:
+        match = self.pattern.search(text)
+        if not match:
+            return None
+        
+        tool_name = match.group(1).strip()
+        args_section = match.group(2)
+        
+        # Parse arg_key/arg_value pairs
+        args = {}
+        for arg_match in self.arg_pattern.finditer(args_section):
+            key = arg_match.group(1).strip()
+            value = arg_match.group(2).strip()
+            # Try to convert to appropriate type
+            if value.isdigit():
+                args[key] = int(value)
+            elif value.lower() in ('true', 'false'):
+                args[key] = value.lower() == 'true'
+            else:
+                args[key] = value
+        
+        return ToolCall(
+            name=tool_name,
+            arguments=args,
+            raw_match=match.group(0),
+            format_name=self.name
+        )
+    
+    def _parse_match(self, match) -> ToolCall:
+        """Parse a single regex match into a ToolCall."""
+        tool_name = match.group(1).strip()
+        args_section = match.group(2)
+        
+        args = {}
+        for arg_match in self.arg_pattern.finditer(args_section):
+            key = arg_match.group(1).strip()
+            value = arg_match.group(2).strip()
+            if value.isdigit():
+                args[key] = int(value)
+            elif value.lower() in ('true', 'false'):
+                args[key] = value.lower() == 'true'
+            else:
+                args[key] = value
+        
+        return ToolCall(
+            name=tool_name,
+            arguments=args,
+            raw_match=match.group(0),
+            format_name=self.name
+        )
+    
+    def try_parse_all(self, text: str) -> list[ToolCall]:
+        """Parse ALL tool calls from text, not just the first one."""
+        results = []
+        for match in self.pattern.finditer(text):
+            try:
+                results.append(self._parse_match(match))
+            except Exception:
+                continue
+        return results
+
+
 class ToolCallParser:
     """Waterfall parser that tries multiple formats in order.
     
@@ -240,6 +317,7 @@ class ToolCallParser:
             QwenStyleParser(),      # tool_calling_type: qwen_like
             JsonBlockParser(),      # tool_calling_type: json_block
             XmlFunctionParser(),    # tool_calling_type: xml_function
+            GlmToolCallParser(),    # tool_calling_type: glm_tool_call
         ]
     
     def parse(self, text: str) -> ToolCall | None:
@@ -258,18 +336,18 @@ class ToolCallParser:
         return None
     
     def parse_all(self, text: str) -> list[ToolCall]:
-        """Parse ALL tool calls from text using first matching parser.
+        """Parse ALL tool calls from text using first matching parser with multi-call support.
         
         Returns a list of all tool calls found (may be empty).
         """
-        # Try SupercoderTagParser first as it supports multiple calls
-        supercoder_parser = self.parsers[0]  # SupercoderTagParser
-        if hasattr(supercoder_parser, 'try_parse_all'):
-            results = supercoder_parser.try_parse_all(text)
-            if results:
-                if self.debug:
-                    print(f"[DEBUG] Found {len(results)} tool calls via {supercoder_parser.name}")
-                return results
+        # Try each parser that supports try_parse_all
+        for parser in self.parsers:
+            if hasattr(parser, 'try_parse_all'):
+                results = parser.try_parse_all(text)
+                if results:
+                    if self.debug:
+                        print(f"[DEBUG] Found {len(results)} tool calls via {parser.name}")
+                    return results
         
         # Fall back to single parse for other formats
         result = self.parse(text)

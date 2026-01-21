@@ -70,7 +70,7 @@ class ModelProfile:
     endpoint: str = "https://api.openai.com/v1"
     model: str = "gpt-4o-mini"
     request_timeout: float = 60.0
-    tool_calling_type: str = "supercoder"  # supercoder, qwen_like, json_block, xml_function
+    tool_calling_type: str = "supercoder"  # supercoder, qwen_like, json_block, xml_function, glm_tool_call
     
     @property
     def base_url(self) -> str:

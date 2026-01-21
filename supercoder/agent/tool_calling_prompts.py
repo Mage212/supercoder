@@ -77,6 +77,24 @@ Call tools using XML syntax:
 </function_call>
 """,
 
+    # GLM-4.7-Flash style format with <tool_call> tags and arg_key/arg_value pairs
+    "glm_tool_call": """# Tool Calling
+Call tools using XML-style tags with argument key-value pairs:
+
+<tool_call>tool-name<arg_key>arg1</arg_key><arg_value>value1<arg_key>arg2</arg_key><arg_value>value2</arg_value></tool_call>
+
+**Example - read a file:**
+<tool_call>file-read<arg_key>fileName</arg_key><arg_value>main.py</arg_value></tool_call>
+
+**Example - search code:**
+<tool_call>code-search<arg_key>query</arg_key><arg_value>def main<arg_key>maxResults</arg_key><arg_value>10</arg_value></tool_call>
+
+**Example - create file:**
+<tool_call>code-edit<arg_key>filepath</arg_key><arg_value>app.py<arg_key>operation</arg_key><arg_value>create<arg_key>content</arg_key><arg_value>print('hello')</arg_value></tool_call>
+
+**Important:** Use <arg_key> and <arg_value> tags for each argument.
+""",
+
     # OpenAI-compatible function calling (for reference, though most use native)
     "openai_native": """# Tool Calling
 You have access to tools. When you need to use a tool, respond with a function call.

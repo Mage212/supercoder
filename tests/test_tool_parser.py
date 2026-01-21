@@ -8,6 +8,7 @@ from supercoder.agent.tool_parser import (
     QwenStyleParser,
     JsonBlockParser,
     XmlFunctionParser,
+    GlmToolCallParser,
 )
 
 
@@ -154,7 +155,58 @@ class TestToolCallParser:
         assert "qwen_style" in formats
         assert "json_block" in formats
         assert "xml_function" in formats
-        assert len(formats) == 4  # Only 4 parsers now
+        assert "glm_tool_call" in formats
+        assert len(formats) == 5  # Now 5 parsers including GLM
+
+
+class TestGlmToolCallParser:
+    """Test GLM-style <tool_call> format."""
+    
+    def test_single_argument(self):
+        parser = GlmToolCallParser()
+        text = '<tool_call>file-read<arg_key>fileName</arg_key><arg_value>main.py</arg_value></tool_call>'
+        result = parser.try_parse(text)
+        
+        assert result is not None
+        assert result.name == "file-read"
+        assert result.arguments == {"fileName": "main.py"}
+        assert result.format_name == "glm_tool_call"
+    
+    def test_multiple_arguments(self):
+        parser = GlmToolCallParser()
+        text = '<tool_call>project-structure<arg_key>maxDepth</arg_key><arg_value>3<arg_key>maxFiles</arg_key><arg_value>50<arg_key>path</arg_key><arg_value>.</arg_value></tool_call>'
+        result = parser.try_parse(text)
+        
+        assert result is not None
+        assert result.name == "project-structure"
+        assert result.arguments["maxDepth"] == 3
+        assert result.arguments["maxFiles"] == 50
+        assert result.arguments["path"] == "."
+    
+    def test_with_surrounding_text(self):
+        parser = GlmToolCallParser()
+        text = 'Давайте посмотрим структуру проекта.<tool_call>project-structure<arg_key>path</arg_key><arg_value>.</arg_value></tool_call>'
+        result = parser.try_parse(text)
+        
+        assert result is not None
+        assert result.name == "project-structure"
+        assert result.arguments == {"path": "."}
+    
+    def test_no_match(self):
+        parser = GlmToolCallParser()
+        text = "Regular text without GLM markers"
+        assert parser.try_parse(text) is None
+    
+    def test_multiple_tool_calls(self):
+        """Test parsing multiple tool calls in one response - real scenario from GLM-4.7-Flash."""
+        parser = GlmToolCallParser()
+        text = '<tool_call>file-read<arg_key>fileName</arg_key><arg_value>main.py</arg_value></tool_call><tool_call>file-read<arg_key>fileName</arg_key><arg_value>hello.py</arg_value></tool_call><tool_call>file-read<arg_key>fileName</arg_key><arg_value>dungeon_crawler.py</arg_value></tool_call>'
+        results = parser.try_parse_all(text)
+        
+        assert len(results) == 3
+        assert results[0].arguments["fileName"] == "main.py"
+        assert results[1].arguments["fileName"] == "hello.py"
+        assert results[2].arguments["fileName"] == "dungeon_crawler.py"
     
     def test_parse_all_supercoder(self):
         parser = ToolCallParser()
