@@ -4,8 +4,10 @@ Adapted from Aider's mdstream.py - provides smooth live-updating markdown output
 using Rich's Live display with a sliding window approach.
 """
 
+import contextlib
 import io
 import time
+from typing import ClassVar
 
 from rich import box
 from rich.console import Console
@@ -18,10 +20,10 @@ from rich.text import Text
 
 def find_paragraph_boundary(text: str) -> int:
     """Find safe boundary for streaming output.
-    
-    Returns index AFTER the boundary (position to split at), 
+
+    Returns index AFTER the boundary (position to split at),
     or 0 if no safe boundary found.
-    
+
     Safe boundaries (in priority order):
     - "\\n\\n" paragraph break
     - "```\\n" code block end
@@ -31,18 +33,18 @@ def find_paragraph_boundary(text: str) -> int:
     idx = text.rfind("\n\n")
     if idx > 0:
         return idx + 2
-    
+
     # Look for code block end
     idx = text.rfind("```\n")
     if idx > 0:
         return idx + 4
-    
+
     # Look for sentence end with newline
     for ending in [".\n", "!\n", "?\n"]:
         idx = text.rfind(ending)
         if idx > 0:
             return idx + 2
-    
+
     return 0
 
 
@@ -52,12 +54,12 @@ class NoInsetCodeBlock(CodeBlock):
     def __rich_console__(self, console, options):
         code = str(self.text).rstrip()
         syntax = Syntax(
-            code, 
-            self.lexer_name, 
-            theme=self.theme, 
-            word_wrap=True, 
+            code,
+            self.lexer_name,
+            theme=self.theme,
+            word_wrap=True,
             padding=(1, 0),
-            background_color="default"
+            background_color="default",
         )
         yield syntax
 
@@ -83,7 +85,7 @@ class LeftHeading(Heading):
 class NoInsetMarkdown(Markdown):
     """Markdown with code blocks that have no padding and left-justified headings."""
 
-    elements = {
+    elements: ClassVar[dict] = {
         **Markdown.elements,
         "fence": NoInsetCodeBlock,
         "code_block": NoInsetCodeBlock,
@@ -93,11 +95,11 @@ class NoInsetMarkdown(Markdown):
 
 class MarkdownStream:
     """Streaming markdown renderer with live-updating window.
-    
+
     Uses Rich's Live display to show markdown content with smooth scrolling.
-    Splits output into "stable" older lines (printed to console) and 
+    Splits output into "stable" older lines (printed to console) and
     "live" recent lines (updated in a live window).
-    
+
     This approach works better with terminal scrollback buffers than
     keeping everything in the Live window.
     """
@@ -105,7 +107,7 @@ class MarkdownStream:
     live = None
     when = 0
     min_delay = 1.0 / 20  # 20fps max update rate
-    live_window = 6       # Lines to keep in live area
+    live_window = 6  # Lines to keep in live area
 
     def __init__(self, mdargs=None, style=None):
         """Initialize the markdown stream.
@@ -117,7 +119,7 @@ class MarkdownStream:
         self.printed = []
         self.mdargs = mdargs or {}
         if style:
-            self.mdargs['style'] = style
+            self.mdargs["style"] = style
         self.live = None
         self._live_started = False
 
@@ -140,10 +142,8 @@ class MarkdownStream:
     def __del__(self):
         """Ensure Live display is cleaned up."""
         if self.live:
-            try:
+            with contextlib.suppress(Exception):
                 self.live.stop()
-            except Exception:
-                pass
 
     def update(self, text, final=False):
         """Update the displayed markdown content.
@@ -154,7 +154,7 @@ class MarkdownStream:
         """
         if not text:
             return
-            
+
         # Start Live display on first update
         if not self._live_started:
             self.live = Live(Text(""), refresh_per_second=20)
@@ -179,6 +179,8 @@ class MarkdownStream:
         if not final:
             num_lines -= self.live_window
 
+        assert self.live is not None
+
         # Print stable lines above live window
         if final or num_lines > 0:
             num_printed = len(self.printed)
@@ -187,12 +189,12 @@ class MarkdownStream:
             if show <= 0 and not final:
                 return
 
-            if show > 0:
-                show_lines = lines[num_printed:num_lines]
-                show_text = "".join(show_lines)
-                show_text = Text.from_ansi(show_text)
-                self.live.console.print(show_text)
-                self.printed = lines[:num_lines]
+        if show > 0:
+            show_lines = lines[num_printed:num_lines]
+            show_text = "".join(show_lines)
+            show_text = Text.from_ansi(show_text)
+            self.live.console.print(show_text)
+            self.printed = lines[:num_lines]
 
         # Final cleanup
         if final:

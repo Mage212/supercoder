@@ -48,13 +48,10 @@ Create a summary in this format:
 
 
 def build_system_prompt(
-    tools: list, 
-    rules: str = "", 
-    tool_calling_type: str = "supercoder",
-    mode_suffix: str = ""
+    tools: list, rules: str = "", tool_calling_type: str = "supercoder", mode_suffix: str = ""
 ) -> str:
     """Build system prompt with available tools and project rules.
-    
+
     Args:
         tools: List of available tools.
         rules: Optional project-specific rules to include.
@@ -65,26 +62,21 @@ def build_system_prompt(
     if not tools:
         tool_list = "(no tools available yet)"
     else:
-        tool_list = "\n".join(
-            f"- {t.definition.name}: {t.definition.description}" 
-            for t in tools
-        )
-    
+        tool_list = "\n".join(f"- {t.definition.name}: {t.definition.description}" for t in tools)
+
     # Get tool calling instructions for this model type
     tool_calling_instructions = get_tool_calling_prompt(tool_calling_type)
-    
+
     prompt = SYSTEM_PROMPT.format(
-        tools=tool_list,
-        tool_calling_instructions=tool_calling_instructions
+        tools=tool_list, tool_calling_instructions=tool_calling_instructions
     )
-    
+
     # Add project rules if provided
     if rules:
         prompt += f"\n{rules}"
-    
+
     # Add mode-specific suffix (e.g., ask mode restrictions)
     if mode_suffix:
         prompt += f"\n{mode_suffix}"
-    
-    return prompt
 
+    return prompt

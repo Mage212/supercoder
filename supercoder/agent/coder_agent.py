@@ -1,99 +1,98 @@
 """Main coding agent with context management."""
 
-import re
-import json
-from datetime import datetime
 from pathlib import Path
+
 from rich.console import Console
 
+from ..abort_controller import AbortController, AgentAbortedError
+from ..checkpoint import CheckpointManager
+from ..context.session_manager import ChatSession, SessionManager
+from ..context.window_manager import ContextConfig, ContextStats, ContextWindowManager
 from ..llm.base import BaseLLM, Message
-from ..tools.base import BaseTool
-from ..context.window_manager import ContextWindowManager, ContextConfig
-from ..context.session_manager import SessionManager, ChatSession
+from ..logging import get_logger
 from ..repomap import RepoMap
 from ..rules_loader import SupercoderRulesLoader
-from ..logging import get_logger
-from ..checkpoint import CheckpointManager
-from ..abort_controller import AbortController, AgentAbortedError
-from .prompts import build_system_prompt, CONTEXT_SUMMARY_PROMPT
+from ..tools.base import BaseTool
+from ..tools.code_edit import CodeEditTool
+from .agent_modes import MODE_CONFIGS, AgentMode
+from .prompts import CONTEXT_SUMMARY_PROMPT, build_system_prompt
 from .tool_parser import ToolCallParser
-from .agent_modes import AgentMode, MODE_CONFIGS
 
 console = Console()
 
 
 class CoderAgent:
     """Main coding agent that orchestrates LLM and tools."""
-    
+
     def __init__(
-        self, 
-        llm: BaseLLM, 
+        self,
+        llm: BaseLLM,
         tools: list[BaseTool] | None = None,
         context_config: ContextConfig | None = None,
         use_repo_map: bool = False,
         repo_root: str = ".",
-        tool_calling_type: str = "supercoder"
+        tool_calling_type: str = "supercoder",
     ):
         self.llm = llm
         self.repo_root = Path(repo_root).resolve()
-        
+
         # Abort controller for graceful interruption
         self.abort_controller = AbortController()
-        
+
         # Checkpoint manager for safe file editing with rollback
         self.checkpoint_manager = CheckpointManager(self.repo_root)
-        
+
         # Initialize tools and inject checkpoint_manager where needed
         self.tools = {}
-        for t in (tools or []):
-            # Inject checkpoint_manager into code-edit tool
-            if t.definition.name == "code-edit" and hasattr(t, 'checkpoint'):
+        for t in tools or []:
+            # Inject checkpoint_manager and repo_root into code-edit tool
+            if isinstance(t, CodeEditTool):
                 t.checkpoint = self.checkpoint_manager
+                t.allowed_root = self.repo_root
             self.tools[t.definition.name] = t
-        
+
         # Agent mode (code or ask)
         self._mode = AgentMode.CODE
-        
+
         # RepoMap setup
         self.repo_map = RepoMap(self.repo_root) if use_repo_map else None
 
-        
         # Supercoder Rules setup
         self.rules_loader = SupercoderRulesLoader(repo_root)
         self.rules_loader.ensure_rules_dir()  # Create .supercoder/rules/ if missing
         project_rules = self.rules_loader.get_rules_for_prompt()
-        
+
         # Store tool calling type for prompt generation
         self.tool_calling_type = tool_calling_type
         self._tools_list = tools or []  # Keep reference for prompt rebuilding
         self._project_rules = project_rules
-        
+
         # Build system prompt template with tools and project rules
         self.base_system_prompt = build_system_prompt(
-            self._get_tools_for_mode(), 
-            rules=project_rules, 
+            self._get_tools_for_mode(),
+            rules=project_rules,
             tool_calling_type=self.tool_calling_type,
-            mode_suffix=MODE_CONFIGS[self._mode].prompt_suffix
+            mode_suffix=MODE_CONFIGS[self._mode].prompt_suffix,
         )
-        
+
         # Setup context management
         config = context_config or ContextConfig()
         self.context = ContextWindowManager(config)
         self._update_system_prompt()
-        
+
         # Multi-format tool call parser
         self.tool_parser = ToolCallParser(debug=False)
-        
+
         # Session management
         self.session_manager = SessionManager(self.repo_root)
         self.current_session: ChatSession | None = None
-        
+
         self.debug = False
 
     def _update_system_prompt(self):
         """Update system prompt with latest RepoMap if enabled."""
         prompt = self.base_system_prompt
-        
+
         if self.repo_map:
             try:
                 map_content = self.repo_map.get_repo_map(max_tokens=2000)
@@ -102,7 +101,7 @@ class CoderAgent:
             except Exception as e:
                 if self.debug:
                     console.print(f"[red]Error generating RepoMap: {e}[/]")
-        
+
         self.context.set_system_prompt(prompt)
         # Log the updated system prompt
         get_logger().log_system_prompt(prompt)
@@ -110,39 +109,38 @@ class CoderAgent:
     def _get_tools_for_mode(self) -> list:
         """Return tools available in current mode."""
         mode_config = MODE_CONFIGS[self._mode]
-        
+
         if mode_config.allowed_tools is None:
             # All tools allowed
             return self._tools_list
-        
+
         # Filter to only allowed tools
-        return [t for t in self._tools_list 
-                if t.definition.name in mode_config.allowed_tools]
+        return [t for t in self._tools_list if t.definition.name in mode_config.allowed_tools]
 
     @property
     def mode(self) -> AgentMode:
         """Get current agent mode."""
         return self._mode
-    
+
     def set_mode(self, mode: AgentMode) -> None:
         """Switch agent mode and update available tools and prompt."""
         if mode == self._mode:
             return
-            
+
         self._mode = mode
-        
+
         # Rebuild system prompt with new mode's tools and suffix
         self.base_system_prompt = build_system_prompt(
             self._get_tools_for_mode(),
             rules=self._project_rules,
             tool_calling_type=self.tool_calling_type,
-            mode_suffix=MODE_CONFIGS[self._mode].prompt_suffix
+            mode_suffix=MODE_CONFIGS[self._mode].prompt_suffix,
         )
         self._update_system_prompt()
 
     def set_tool_calling_type(self, tool_calling_type: str) -> None:
         """Update tool calling type and rebuild system prompt.
-        
+
         Call this when switching to a model with a different tool_calling_type.
         """
         if tool_calling_type != self.tool_calling_type:
@@ -151,7 +149,7 @@ class CoderAgent:
                 self._get_tools_for_mode(),
                 rules=self._project_rules,
                 tool_calling_type=self.tool_calling_type,
-                mode_suffix=MODE_CONFIGS[self._mode].prompt_suffix
+                mode_suffix=MODE_CONFIGS[self._mode].prompt_suffix,
             )
             self._update_system_prompt()
 
@@ -191,7 +189,7 @@ class CoderAgent:
                     self.checkpoint_manager.rollback()
                 yield {
                     "type": "error",
-                    "content": f"Tool call limit ({MAX_TOOL_ITERATIONS}) reached. Stopping to prevent infinite loop."
+                    "content": f"Tool call limit ({MAX_TOOL_ITERATIONS}) reached. Stopping to prevent infinite loop.",
                 }
                 return
 
@@ -227,7 +225,10 @@ class CoderAgent:
                 if checkpoint_active:
                     restored = self.checkpoint_manager.rollback()
                     if restored:
-                        yield {"type": "rollback", "content": {"files": restored, "reason": "Aborted by user"}}
+                        yield {
+                            "type": "rollback",
+                            "content": {"files": restored, "reason": "Aborted by user"},
+                        }
                 yield {"type": "aborted", "content": "Agent interrupted by user (ESC)"}
                 return
 
@@ -271,7 +272,7 @@ class CoderAgent:
                         tool = self.tools[name]
 
                         # Use streaming for command-exec to handle interactive commands
-                        if name == "command-exec" and hasattr(tool, 'execute_streaming'):
+                        if name == "command-exec" and hasattr(tool, "execute_streaming"):
                             result = ""
                             process_to_kill = None
 
@@ -282,10 +283,10 @@ class CoderAgent:
                                         "type": "command_waiting",
                                         "content": event["content"],
                                         "process": process_to_kill,
-                                        "tool_name": name
+                                        "tool_name": name,
                                     }
                                     if process_to_kill and process_to_kill.poll() is not None:
-                                        partial_output = ''.join(event.get('stdout', []))
+                                        partial_output = "".join(event.get("stdout", []))
                                         result = (
                                             f"⚠️ INTERACTIVE PROCESS KILLED BY USER\n"
                                             f"The command requires user input which cannot be provided in this environment.\n"
@@ -315,7 +316,10 @@ class CoderAgent:
                         if checkpoint_active:
                             restored = self.checkpoint_manager.rollback()
                             if restored:
-                                yield {"type": "rollback", "content": {"files": restored, "reason": str(e)}}
+                                yield {
+                                    "type": "rollback",
+                                    "content": {"files": restored, "reason": str(e)},
+                                }
                             checkpoint_active = False
 
                 # Commit checkpoint after successful file edits
@@ -338,8 +342,6 @@ class CoderAgent:
                 yield {"type": "done", "content": ""}
                 return
 
-
-
     def _extract_tool_call(self, text: str) -> dict | None:
         """Extract tool call from response text using multi-format parser."""
         result = self.tool_parser.parse(text)
@@ -348,7 +350,7 @@ class CoderAgent:
                 console.print(f"[dim]Parsed tool call via {result.format_name}: {result.name}[/]")
             return result.to_dict()
         return None
-    
+
     def _extract_all_tool_calls(self, text: str) -> list[dict]:
         """Extract ALL tool calls from response text using multi-format parser."""
         results = self.tool_parser.parse_all(text)
@@ -357,28 +359,28 @@ class CoderAgent:
                 console.print(f"[dim]Parsed {len(results)} tool calls[/]")
             return [r.to_dict() for r in results]
         return []
-    
+
     def clear_history(self) -> None:
         """Clear conversation history."""
         self.context.clear()
-    
+
     def get_context_stats(self) -> str:
         """Get current context statistics."""
         return str(self.context.get_stats())
-    
+
     def set_debug(self, enabled: bool) -> None:
         """Enable or disable debug mode."""
         self.debug = enabled
         self.tool_parser.debug = enabled
-    
+
     # Session management methods
     def start_new_session(self) -> None:
         """Create and activate a new session."""
         self.current_session = self.session_manager.create_new_session()
-    
+
     def load_session(self, session_id: str) -> bool:
         """Load an existing session and restore context.
-        
+
         Returns True if session was loaded successfully.
         """
         session = self.session_manager.load_session(session_id)
@@ -390,77 +392,70 @@ class CoderAgent:
                 self.context.add_message(msg)
             return True
         return False
-    
+
     def handle_undo(self, restored_files: list[str]) -> None:
         """Handle undo event by updating context."""
         if not restored_files:
             return
-            
+
         file_list = ", ".join(f"`{Path(f).name}`" for f in restored_files)
         message = f"[SYSTEM] Undo operation performed by user. The following files were reverted to their previous state: {file_list}. The content of these files in your context is now invalid. You must re-read them if needed."
-        
+
         # Add as user message (more reliably attended to than system role mid-chat)
         self.context.add_message(Message(role="user", content=message))
         get_logger().log_system_prompt(f"Undo event: {message}")
-        
+
     def _save_current_session(self) -> None:
         """Save current session state."""
         if self.current_session:
             self.current_session.messages = self.context.get_messages()
             self.session_manager.save_session(self.current_session)
-    
-    def compact_context(self) -> tuple[str, "ContextStats", "ContextStats"]:
+
+    def compact_context(self) -> tuple[str, ContextStats, ContextStats]:
         """Compact the current context by summarizing it.
-        
+
         This method:
         1. Gets all messages from history
         2. Asks the LLM to create a summary (emphasizing recent messages)
         3. Clears the history
         4. Injects the summary as the new starting context
-        
+
         Returns:
             tuple: (summary_text, stats_before, stats_after)
         """
-        from ..context.window_manager import ContextStats
-        
+
         # Get stats before compaction
         stats_before = self.context.get_stats()
-        
+
         # Get conversation history
         messages = self.context.get_messages()
         if not messages:
             return ("No context to compact.", stats_before, stats_before)
-        
+
         # Format conversation for summarization
-        conversation_text = "\n\n".join([
-            f"[{msg.role.upper()}]: {msg.content}" 
-            for msg in messages
-        ])
-        
-        # Build summarization prompt
-        summary_prompt = CONTEXT_SUMMARY_PROMPT.format(
-            conversation_history=conversation_text
+        conversation_text = "\n\n".join(
+            [f"[{msg.role.upper()}]: {msg.content}" for msg in messages]
         )
-        
+
+        # Build summarization prompt
+        summary_prompt = CONTEXT_SUMMARY_PROMPT.format(conversation_history=conversation_text)
+
         # Call LLM synchronously to get summary
-        from ..llm.base import Message
         summary_messages = [Message("user", summary_prompt)]
-        
+
         try:
             summary = self.llm.chat(summary_messages)
         except Exception as e:
             return (f"Error generating summary: {e}", stats_before, stats_before)
-        
+
         # Clear history and set summary as initial context
         self.context.set_initial_summary(summary)
-        
+
         # Update session with compacted state
         if self.current_session:
-            self.session_manager.update_session_after_compact(
-                self.current_session, summary
-            )
-        
+            self.session_manager.update_session_after_compact(self.current_session, summary)
+
         # Get stats after compaction
         stats_after = self.context.get_stats()
-        
+
         return (summary, stats_before, stats_after)

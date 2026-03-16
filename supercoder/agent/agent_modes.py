@@ -3,30 +3,30 @@
 Defines different operating modes that change agent behavior and available tools.
 """
 
-from enum import Enum
 from dataclasses import dataclass
+from enum import Enum
 
 
 class AgentMode(Enum):
     """Operating modes for the coding agent."""
-    
+
     CODE = "code"  # Default mode: can edit files, run commands
-    ASK = "ask"    # Q&A mode: can only read and analyze code
+    ASK = "ask"  # Q&A mode: can only read and analyze code
 
 
 @dataclass
 class ModeConfig:
     """Configuration for an agent mode."""
-    
+
     name: str
     prompt_suffix: str
     allowed_tools: list[str] | None  # None means all tools allowed
-    
-    
+
+
 # Read-only tools that are always safe in ask mode
 ASK_MODE_TOOLS = [
-    "file-read",          # Read file contents
-    "code-search",        # Search code patterns
+    "file-read",  # Read file contents
+    "code-search",  # Search code patterns
     "project-structure",  # Show directory structure
 ]
 
@@ -72,7 +72,7 @@ You CAN:
 
 You CANNOT:
 - Edit or modify any files
-- Create new files  
+- Create new files
 - Execute commands that modify the system
 
 If asked to make changes, explain what would be needed and suggest using /code command.
@@ -80,4 +80,3 @@ If asked to make changes, explain what would be needed and suggest using /code c
         allowed_tools=ASK_MODE_TOOLS,
     ),
 }
-

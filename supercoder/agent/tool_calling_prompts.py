@@ -19,7 +19,6 @@ You can call multiple tools in one response:
 <@TOOL>{"name": "file-read", "arguments": {"fileName": "file1.py"}}</@TOOL>
 <@TOOL>{"name": "file-read", "arguments": {"fileName": "file2.py"}}</@TOOL>
 """,
-
     # Qwen-style format used by gpt-oss, deepresearch, and similar models
     "qwen_like": """# Tool Calling
 Call tools using this format:
@@ -36,7 +35,6 @@ to=tool:project-structure {"path": "."}
 
 **Important:** Always use valid JSON for arguments. Use double quotes for strings.
 """,
-
     # JSON code block format - common with many instruction-tuned models
     "json_block": """# Tool Calling
 Call tools using JSON code blocks:
@@ -57,7 +55,6 @@ Call tools using JSON code blocks:
 
 **Important:** Use proper JSON formatting with double quotes.
 """,
-
     # XML function call format
     "xml_function": """# Tool Calling
 Call tools using XML syntax:
@@ -76,7 +73,6 @@ Call tools using XML syntax:
 {"filepath": "app.py", "operation": "create", "content": "print('hello')"}
 </function_call>
 """,
-
     # GLM-4.7-Flash style format with <tool_call> tags and arg_key/arg_value pairs
     "glm_tool_call": """# Tool Calling
 Call tools using XML-style tags with argument key-value pairs:
@@ -94,7 +90,6 @@ Call tools using XML-style tags with argument key-value pairs:
 
 **Important:** Use <arg_key> and <arg_value> tags for each argument.
 """,
-
     # OpenAI-compatible function calling (for reference, though most use native)
     "openai_native": """# Tool Calling
 You have access to tools. When you need to use a tool, respond with a function call.
@@ -110,11 +105,11 @@ VALID_TOOL_CALLING_TYPES = set(TOOL_CALLING_PROMPTS.keys())
 
 def get_tool_calling_prompt(tool_calling_type: str) -> str:
     """Get tool calling instructions for the specified type.
-    
+
     Args:
         tool_calling_type: The type of tool calling format to use.
                           Valid values: supercoder, qwen_like, json_block, xml_function
-    
+
     Returns:
         String containing tool calling instructions for the system prompt.
         Falls back to 'supercoder' format if type is unknown.

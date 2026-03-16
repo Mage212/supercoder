@@ -26,7 +26,10 @@ wheels/
 
 # Virtual Environment
 venv/
+.venv/
+.venv_new/
 ENV/
+
 
 # IDEs
 .idea/

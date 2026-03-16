@@ -2,9 +2,10 @@
 
 import difflib
 from pathlib import Path
-from typing import Optional, TYPE_CHECKING
-from .base import BaseTool, ToolDefinition
+from typing import TYPE_CHECKING, Optional
+
 from ..utils.atomic_writer import AtomicFileWriter
+from .base import BaseTool, ToolDefinition
 
 if TYPE_CHECKING:
     from ..checkpoint import CheckpointManager
@@ -12,18 +13,24 @@ if TYPE_CHECKING:
 
 class CodeEditTool(BaseTool):
     """Edit code using diff-based operations with atomic writes."""
-    
-    def __init__(self, checkpoint_manager: Optional["CheckpointManager"] = None):
-        """Initialize with optional checkpoint manager.
-        
+
+    def __init__(
+        self,
+        checkpoint_manager: Optional["CheckpointManager"] = None,
+        allowed_root: Path | None = None,
+    ):
+        """Initialize with optional checkpoint manager and allowed root directory.
+
         Args:
             checkpoint_manager: Optional CheckpointManager for backup/rollback support
+            allowed_root: If set, file paths must be within this directory (path traversal guard)
         """
         self.checkpoint = checkpoint_manager
-    
+        self.allowed_root = allowed_root
+
     def _safe_write(self, path: Path, content: str) -> None:
         """Write file with backup and atomic write.
-        
+
         Args:
             path: Target file path
             content: Content to write
@@ -31,81 +38,65 @@ class CodeEditTool(BaseTool):
         # Backup before modifying (if checkpoint is active)
         if self.checkpoint:
             self.checkpoint.backup_file(path)
-        
+
         # Atomic write
         AtomicFileWriter.write(path, content)
-    
+
     @property
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             name="code-edit",
-            description='''Edit code. Operations:
+            description="""Edit code. Operations:
 - search_replace: {"filepath": "...", "operation": "search_replace", "search": "old", "replace": "new"}
 - insert_after: {"filepath": "...", "operation": "insert_after", "after": "line", "content": "new"}
 - replace_lines: {"filepath": "...", "operation": "replace_lines", "startLine": N, "endLine": M, "content": "new"}
-- create: {"filepath": "...", "operation": "create", "content": "file content"}'''
+- create: {"filepath": "...", "operation": "create", "content": "file content"}""",
         )
-    
+
     def execute(self, arguments: str) -> str:
         args = self.parse_args(arguments)
         filepath = args.get("filepath", args.get("fileName", ""))
         operation = args.get("operation", "search_replace")
-        
+
         if not filepath:
             return "Error: filepath is required"
-        
+
         path = Path(filepath)
 
-        # Validate path stays within the current working directory
-        try:
-            resolved = path.resolve()
-            cwd = Path.cwd().resolve()
-            resolved.relative_to(cwd)
-        except ValueError:
-            return f"Error: Path '{filepath}' is outside the project directory"
+        # Validate path stays within the allowed root (when configured)
+        if self.allowed_root is not None:
+            try:
+                path.resolve().relative_to(self.allowed_root)
+            except ValueError:
+                return f"Error: Path '{filepath}' is outside the project directory"
 
         # Handle create operation separately
         if operation == "create":
             return self._create_file(path, args.get("content", ""))
-        
+
         # For other operations, file must exist
         if not path.exists():
             return f"Error: File '{filepath}' not found"
-        
+
         try:
             if operation == "search_replace":
-                return self._search_replace(
-                    path, 
-                    args.get("search", ""), 
-                    args.get("replace", "")
-                )
+                return self._search_replace(path, args.get("search", ""), args.get("replace", ""))
             elif operation == "insert_after":
-                return self._insert_after(
-                    path,
-                    args.get("after", ""),
-                    args.get("content", "")
-                )
+                return self._insert_after(path, args.get("after", ""), args.get("content", ""))
             elif operation == "insert_before":
-                return self._insert_before(
-                    path,
-                    args.get("before", ""),
-                    args.get("content", "")
-                )
+                return self._insert_before(path, args.get("before", ""), args.get("content", ""))
             elif operation == "replace_lines":
                 return self._replace_lines(
-                    path,
-                    args.get("startLine", 1),
-                    args.get("endLine", 1),
-                    args.get("content", "")
+                    path, args.get("startLine", 1), args.get("endLine", 1), args.get("content", "")
                 )
             elif operation == "append":
                 return self._append(path, args.get("content", ""))
             else:
                 return f"Error: Unknown operation '{operation}'"
-                
+
         except Exception as e:
             return f"Error: {e}"
-    
+
     def _generate_diff(self, before: str, after: str, filepath: Path) -> str:
         """Generate unified diff between before and after content."""
         diff_lines = difflib.unified_diff(
@@ -113,41 +104,41 @@ class CodeEditTool(BaseTool):
             after.splitlines(),
             fromfile=str(filepath),
             tofile=str(filepath),
-            lineterm=""
+            lineterm="",
         )
         # Join with newlines to create proper diff output
         return "\n".join(diff_lines)
-    
+
     def _create_file(self, path: Path, content: str) -> str:
         """Create a new file."""
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            
+
             # Track created file for rollback
             if self.checkpoint:
                 self.checkpoint.track_created_file(path)
-                
+
             AtomicFileWriter.write(path, content)
             # For new files, show the content as all additions
             diff = self._generate_diff("", content, path)
             return f"✅ Created file: {path}\n\n{diff}" if diff else f"✅ Created file: {path}"
         except Exception as e:
             return f"Error creating file: {e}"
-    
+
     def _search_replace(self, path: Path, search: str, replace: str) -> str:
         """Search and replace text in file."""
         if not search:
             return "Error: search string is required"
-        
+
         content_before = path.read_text()
-        
+
         if search not in content_before:
             # Try to find similar matches
             lines = content_before.splitlines()
-            similar = [l.strip()[:60] for l in lines if search[:20] in l][:3]
-            hint = f"\nSimilar lines found:\n" + "\n".join(similar) if similar else ""
+            similar = [line.strip()[:60] for line in lines if search[:20] in line][:3]
+            hint = "\nSimilar lines found:\n" + "\n".join(similar) if similar else ""
             return f"Error: Search string not found in {path}{hint}"
-        
+
         # Count occurrences
         count = content_before.count(search)
 
@@ -163,12 +154,12 @@ class CodeEditTool(BaseTool):
         # Generate diff
         diff = self._generate_diff(content_before, content_after, path)
         return f"✅ Replaced 1 occurrence in {path}\n\n{diff}"
-    
+
     def _insert_after(self, path: Path, after: str, content: str) -> str:
         """Insert content after a matching line."""
         if not after:
             return "Error: 'after' string is required"
-        
+
         content_before = path.read_text()
         had_trailing_newline = content_before.endswith("\n")
         lines = content_before.splitlines()
@@ -177,22 +168,24 @@ class CodeEditTool(BaseTool):
             if after in line:
                 # Insert new content after this line
                 new_lines = content.splitlines()
-                lines = lines[:i + 1] + new_lines + lines[i + 1:]
+                lines = lines[: i + 1] + new_lines + lines[i + 1 :]
                 content_after = "\n".join(lines)
                 if had_trailing_newline:
                     content_after += "\n"
                 self._safe_write(path, content_after)
-                
+
                 diff = self._generate_diff(content_before, content_after, path)
-                return f"✅ Inserted {len(new_lines)} line(s) after line {i + 1} in {path}\n\n{diff}"
-        
+                return (
+                    f"✅ Inserted {len(new_lines)} line(s) after line {i + 1} in {path}\n\n{diff}"
+                )
+
         return f"Error: Line containing '{after[:50]}' not found"
-    
+
     def _insert_before(self, path: Path, before: str, content: str) -> str:
         """Insert content before a matching line."""
         if not before:
             return "Error: 'before' string is required"
-        
+
         content_before = path.read_text()
         had_trailing_newline = content_before.endswith("\n")
         lines = content_before.splitlines()
@@ -205,12 +198,14 @@ class CodeEditTool(BaseTool):
                 if had_trailing_newline:
                     content_after += "\n"
                 self._safe_write(path, content_after)
-                
+
                 diff = self._generate_diff(content_before, content_after, path)
-                return f"✅ Inserted {len(new_lines)} line(s) before line {i + 1} in {path}\n\n{diff}"
-        
+                return (
+                    f"✅ Inserted {len(new_lines)} line(s) before line {i + 1} in {path}\n\n{diff}"
+                )
+
         return f"Error: Line containing '{before[:50]}' not found"
-    
+
     def _replace_lines(self, path: Path, start: int, end: int, content: str) -> str:
         """Replace a range of lines."""
         content_before = path.read_text()
@@ -224,15 +219,15 @@ class CodeEditTool(BaseTool):
             return f"Error: endLine {end} invalid (must be {start}-{total})"
 
         new_lines = content.splitlines() if content else []
-        lines = lines[:start - 1] + new_lines + lines[end:]
+        lines = lines[: start - 1] + new_lines + lines[end:]
         content_after = "\n".join(lines)
         if had_trailing_newline:
             content_after += "\n"
         self._safe_write(path, content_after)
-        
+
         diff = self._generate_diff(content_before, content_after, path)
         return f"✅ Replaced lines {start}-{end} with {len(new_lines)} line(s) in {path}\n\n{diff}"
-    
+
     def _append(self, path: Path, content: str) -> str:
         """Append content to end of file."""
         content_before = path.read_text()
@@ -242,7 +237,6 @@ class CodeEditTool(BaseTool):
             content_before_normalized = content_before
         content_after = content_before_normalized + content + "\n"
         self._safe_write(path, content_after)
-        
+
         diff = self._generate_diff(content_before, content_after, path)
         return f"✅ Appended to {path}\n\n{diff}"
-

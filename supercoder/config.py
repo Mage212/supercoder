@@ -3,7 +3,6 @@
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 # Global config directory
 CONFIG_DIR = Path.home() / ".supercoder"
@@ -23,7 +22,7 @@ models:
     endpoint: "https://api.openai.com/v1"
     model: "gpt-4o-mini"
     # max_context_tokens: 128000  # Optional: model-specific context limit
-    
+
   # Example: OpenRouter with free models
   # openrouter-free:
   #   api_key: "sk-or-v1-..."
@@ -31,7 +30,7 @@ models:
   #   model: "openai/gpt-oss-20b:free"
   #   tool_calling_type: "qwen_like"  # Format for tool calls: supercoder, qwen_like, json_block, xml_function
   #   max_context_tokens: 32000  # Model-specific context limit
-  
+
   # Example: Local Ollama
   # ollama:
   #   api_key: "ollama"
@@ -68,15 +67,18 @@ def ensure_config_file() -> Path:
 @dataclass
 class ModelProfile:
     """A named LLM configuration profile."""
+
     name: str
     api_key: str = ""
     endpoint: str = "https://api.openai.com/v1"
     model: str = "gpt-4o-mini"
     temperature: float = 0.2
     request_timeout: float = 60.0
-    tool_calling_type: str = "supercoder"  # supercoder, qwen_like, json_block, xml_function, glm_tool_call
+    tool_calling_type: str = (
+        "supercoder"  # supercoder, qwen_like, json_block, xml_function, glm_tool_call
+    )
     max_context_tokens: int | None = None  # None = use global default
-    
+
     @property
     def base_url(self) -> str:
         """Alias for endpoint to match OpenAI client."""
@@ -86,12 +88,12 @@ class ModelProfile:
 @dataclass
 class Config:
     """Application configuration with multi-model support."""
-    
+
     # Current active model profile
     api_key: str = ""
     base_url: str = "https://api.openai.com/v1"
     model: str = "gpt-4o-mini"
-    
+
     # Shared settings
     temperature: float = 0.2
     top_p: float = 0.1
@@ -99,16 +101,16 @@ class Config:
     max_context_tokens: int = 32000
     reserved_for_response: int = 4096
     request_timeout: float = 60.0
-    
+
     # Multi-model support
     default_model: str = "default"
     models: dict = field(default_factory=dict)
     _current_profile: str = ""
-    
+
     @classmethod
     def load(cls) -> "Config":
         """Load configuration from file and environment variables.
-        
+
         Config priority (later overrides earlier):
         1. ~/.supercoder/config.yaml (global)
         2. .supercoder.yaml (local project)
@@ -116,35 +118,36 @@ class Config:
         """
         config_data = {}
         models_data = {}
-        
+
         # Ensure global config exists (creates template on first run)
         ensure_config_file()
-        
+
         # Load from config files (global first, then local overrides)
         config_paths = [
             str(CONFIG_FILE),  # ~/.supercoder/config.yaml
-            os.path.join(os.getcwd(), ".supercoder.yaml")  # local override
+            os.path.join(os.getcwd(), ".supercoder.yaml"),  # local override
         ]
-        
+
         for path in config_paths:
             if os.path.exists(path):
                 try:
                     import yaml
-                    with open(path, "r") as f:
+
+                    with open(path) as f:
                         file_data = yaml.safe_load(f) or {}
-                        
+
                         # Extract models dict
                         if "models" in file_data:
                             models_data.update(file_data.pop("models"))
-                        
+
                         # Support both 'base_url' and 'endpoint'
                         if "endpoint" in file_data and "base_url" not in file_data:
                             file_data["base_url"] = file_data["endpoint"]
-                        
+
                         config_data.update(file_data)
                 except Exception:
                     pass  # Ignore config file errors
-        
+
         # Build ModelProfile objects
         models = {}
         for name, profile_data in models_data.items():
@@ -152,23 +155,28 @@ class Config:
                 models[name] = ModelProfile(
                     name=name,
                     api_key=profile_data.get("api_key", ""),
-                    endpoint=profile_data.get("endpoint", profile_data.get("base_url", "https://api.openai.com/v1")),
+                    endpoint=profile_data.get(
+                        "endpoint", profile_data.get("base_url", "https://api.openai.com/v1")
+                    ),
                     model=profile_data.get("model", "gpt-4o-mini"),
-                    request_timeout=float(profile_data.get("request_timeout", config_data.get("request_timeout", 60.0))),
+                    request_timeout=float(
+                        profile_data.get(
+                            "request_timeout", config_data.get("request_timeout", 60.0)
+                        )
+                    ),
                     tool_calling_type=profile_data.get("tool_calling_type", "supercoder"),
                     max_context_tokens=profile_data.get("max_context_tokens"),
                 )
-        
+
         # Create instance with shared settings
-        valid_fields = {k: v for k, v in config_data.items() 
-                       if hasattr(cls, k) and k != "models"}
+        valid_fields = {k: v for k, v in config_data.items() if hasattr(cls, k) and k != "models"}
         config = cls(**valid_fields)
         config.models = models
-        
+
         # Set default model profile as active
         default_name = config_data.get("default_model", "default")
         config.default_model = default_name
-        
+
         if default_name in models:
             profile = models[default_name]
             config.api_key = profile.api_key
@@ -179,43 +187,46 @@ class Config:
             # Apply model-specific context limit if defined
             if profile.max_context_tokens is not None:
                 config.max_context_tokens = profile.max_context_tokens
-        
+
         # Override with environment variables (highest priority)
         env_api_key = os.getenv("SUPERCODER_API_KEY", os.getenv("OPENAI_API_KEY", ""))
         if env_api_key:
             config.api_key = env_api_key
-            
-        env_base_url = os.getenv("SUPERCODER_ENDPOINT", os.getenv("SUPERCODER_BASE_URL", os.getenv("OPENAI_BASE_URL", "")))
+
+        env_base_url = os.getenv(
+            "SUPERCODER_ENDPOINT",
+            os.getenv("SUPERCODER_BASE_URL", os.getenv("OPENAI_BASE_URL", "")),
+        )
         if env_base_url:
             config.base_url = env_base_url
-            
+
         env_model = os.getenv("SUPERCODER_MODEL", os.getenv("OPENAI_MODEL", ""))
         if env_model:
             config.model = env_model
-            
+
         if os.getenv("SUPERCODER_DEBUG"):
             config.debug = os.getenv("SUPERCODER_DEBUG", "").lower() == "true"
-            
+
         return config
-    
+
     @classmethod
     def from_env(cls) -> "Config":
         """Deprecated: Use load() instead."""
         return cls.load()
-    
-    def get_model_profile(self, name: str) -> Optional[ModelProfile]:
+
+    def get_model_profile(self, name: str) -> ModelProfile | None:
         """Get a model profile by name."""
         return self.models.get(name)
-    
+
     def get_available_models(self) -> list[str]:
         """Get list of available model profile names."""
         return list(self.models.keys())
-    
+
     def switch_to_model(self, name: str) -> bool:
         """Switch to a different model profile. Returns True if successful."""
         if name not in self.models:
             return False
-        
+
         profile = self.models[name]
         self.api_key = profile.api_key
         self.base_url = profile.endpoint
@@ -226,25 +237,25 @@ class Config:
         if profile.max_context_tokens is not None:
             self.max_context_tokens = profile.max_context_tokens
         return True
-    
+
     @property
     def current_profile_name(self) -> str:
         """Get the name of the current active profile."""
         return self._current_profile or self.default_model
-    
+
     def validate(self) -> list[str]:
         """Validate configuration, return list of errors."""
         errors = []
-        
+
         # Check if we're using a local/private endpoint which might not need an API key
-        is_local = any(x in self.base_url for x in ["localhost", "127.0.0.1", "192.168.", "10.", "172.16."])
-        
+        is_local = any(
+            x in self.base_url for x in ["localhost", "127.0.0.1", "192.168.", "10.", "172.16."]
+        )
+
         if not self.api_key and not is_local:
-            errors.append(
-                f"API key not set. Edit {CONFIG_FILE} or set SUPERCODER_API_KEY env var"
-            )
+            errors.append(f"API key not set. Edit {CONFIG_FILE} or set SUPERCODER_API_KEY env var")
         return errors
-    
+
     @staticmethod
     def get_config_path() -> Path:
         """Return path to global config file."""

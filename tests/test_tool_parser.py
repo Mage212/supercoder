@@ -2,39 +2,40 @@
 """Tests for multi-format tool call parser."""
 
 import pytest
+
 from supercoder.agent.tool_parser import (
-    ToolCallParser,
-    SupercoderTagParser,
-    QwenStyleParser,
-    JsonBlockParser,
-    XmlFunctionParser,
     GlmToolCallParser,
+    JsonBlockParser,
+    QwenStyleParser,
+    SupercoderTagParser,
+    ToolCallParser,
+    XmlFunctionParser,
 )
 
 
 class TestSupercoderTagParser:
     """Test our native format."""
-    
+
     def test_basic_tool_call(self):
         parser = SupercoderTagParser()
         text = 'Some text <@TOOL>{"name": "file-read", "arguments": {"path": "main.py"}}</@TOOL> more text'
         result = parser.try_parse(text)
-        
+
         assert result is not None
         assert result.name == "file-read"
         assert result.format_name == "supercoder_tag"
-    
+
     def test_no_match(self):
         parser = SupercoderTagParser()
         text = "No tool call here"
         assert parser.try_parse(text) is None
-    
+
     def test_multiple_tool_calls(self):
         parser = SupercoderTagParser()
-        text = '''
+        text = """
 <@TOOL>{"name": "file-read", "arguments": {"path": "a.py"}}</@TOOL>
 <@TOOL>{"name": "file-read", "arguments": {"path": "b.py"}}</@TOOL>
-'''
+"""
         results = parser.try_parse_all(text)
         assert len(results) == 2
         assert results[0].arguments["path"] == "a.py"
@@ -43,26 +44,26 @@ class TestSupercoderTagParser:
 
 class TestQwenStyleParser:
     """Test Qwen-style format: to=tool:name {...}"""
-    
+
     def test_simple_format(self):
         parser = QwenStyleParser()
         text = 'I will read the file. to=tool:file-read {"path": "main.py"}'
         result = parser.try_parse(text)
-        
+
         assert result is not None
         assert result.name == "file-read"
         assert result.arguments == {"path": "main.py"}
         assert result.format_name == "qwen_style"
-    
+
     def test_dot_separator(self):
         parser = QwenStyleParser()
         text = 'to=tool.code-edit {"file": "test.py", "operation": "create", "content": "print(1)"}'
         result = parser.try_parse(text)
-        
+
         assert result is not None
         assert result.name == "code-edit"
         assert result.arguments["file"] == "test.py"
-    
+
     def test_no_match(self):
         parser = QwenStyleParser()
         text = "Regular text without Qwen markers"
@@ -71,28 +72,28 @@ class TestQwenStyleParser:
 
 class TestJsonBlockParser:
     """Test JSON code block format."""
-    
+
     def test_json_block_with_tool_key(self):
         parser = JsonBlockParser()
-        text = '''Here's the command:
+        text = """Here's the command:
 ```json
 {"tool": "file-read", "arguments": {"path": "main.py"}}
 ```
-'''
+"""
         result = parser.try_parse(text)
-        
+
         assert result is not None
         assert result.name == "file-read"
         assert result.arguments == {"path": "main.py"}
-    
+
     def test_json_block_with_name_key(self):
         parser = JsonBlockParser()
         text = '```json\n{"name": "code-edit", "arguments": {"file": "test.py"}}\n```'
         result = parser.try_parse(text)
-        
+
         assert result is not None
         assert result.name == "code-edit"
-    
+
     def test_no_tool_key(self):
         parser = JsonBlockParser()
         text = '```json\n{"key": "value"}\n```'
@@ -101,56 +102,56 @@ class TestJsonBlockParser:
 
 class TestXmlFunctionParser:
     """Test XML-style function calls."""
-    
+
     def test_function_call_tag(self):
         parser = XmlFunctionParser()
         text = '<function_call name="file-read">{"path": "main.py"}</function_call>'
         result = parser.try_parse(text)
-        
+
         assert result is not None
         assert result.name == "file-read"
         assert result.arguments == {"path": "main.py"}
-    
+
     def test_with_newlines(self):
         parser = XmlFunctionParser()
-        text = '''<function_call name="code-edit">
+        text = """<function_call name="code-edit">
 {"file": "app.py", "content": "print('hello')"}
-</function_call>'''
+</function_call>"""
         result = parser.try_parse(text)
-        
+
         assert result is not None
         assert result.name == "code-edit"
 
 
 class TestToolCallParser:
     """Test waterfall parser integration."""
-    
+
     def test_supercoder_format_priority(self):
         parser = ToolCallParser()
         # Both formats present - supercoder should win
         text = '<@TOOL>{"name": "file-read", "arguments": {}}</@TOOL> also to=tool:file-read {"path": "other.py"}'
         result = parser.parse(text)
-        
+
         assert result is not None
         assert result.format_name == "supercoder_tag"
-    
+
     def test_fallback_to_qwen(self):
         parser = ToolCallParser()
         text = 'Let me search. to=tool:code-search {"query": "test"}'
         result = parser.parse(text)
-        
+
         assert result is not None
         assert result.format_name == "qwen_style"
-    
+
     def test_no_tool_call(self):
         parser = ToolCallParser()
         text = "Just regular text, no tool calls here."
         assert parser.parse(text) is None
-    
+
     def test_supported_formats(self):
         parser = ToolCallParser()
         formats = parser.supported_formats
-        
+
         assert "supercoder_tag" in formats
         assert "qwen_style" in formats
         assert "json_block" in formats
@@ -161,59 +162,59 @@ class TestToolCallParser:
 
 class TestGlmToolCallParser:
     """Test GLM-style <tool_call> format."""
-    
+
     def test_single_argument(self):
         parser = GlmToolCallParser()
-        text = '<tool_call>file-read<arg_key>fileName</arg_key><arg_value>main.py</arg_value></tool_call>'
+        text = "<tool_call>file-read<arg_key>fileName</arg_key><arg_value>main.py</arg_value></tool_call>"
         result = parser.try_parse(text)
-        
+
         assert result is not None
         assert result.name == "file-read"
         assert result.arguments == {"fileName": "main.py"}
         assert result.format_name == "glm_tool_call"
-    
+
     def test_multiple_arguments(self):
         parser = GlmToolCallParser()
-        text = '<tool_call>project-structure<arg_key>maxDepth</arg_key><arg_value>3<arg_key>maxFiles</arg_key><arg_value>50<arg_key>path</arg_key><arg_value>.</arg_value></tool_call>'
+        text = "<tool_call>project-structure<arg_key>maxDepth</arg_key><arg_value>3<arg_key>maxFiles</arg_key><arg_value>50<arg_key>path</arg_key><arg_value>.</arg_value></tool_call>"
         result = parser.try_parse(text)
-        
+
         assert result is not None
         assert result.name == "project-structure"
         assert result.arguments["maxDepth"] == 3
         assert result.arguments["maxFiles"] == 50
         assert result.arguments["path"] == "."
-    
+
     def test_with_surrounding_text(self):
         parser = GlmToolCallParser()
-        text = 'Давайте посмотрим структуру проекта.<tool_call>project-structure<arg_key>path</arg_key><arg_value>.</arg_value></tool_call>'
+        text = "Давайте посмотрим структуру проекта.<tool_call>project-structure<arg_key>path</arg_key><arg_value>.</arg_value></tool_call>"
         result = parser.try_parse(text)
-        
+
         assert result is not None
         assert result.name == "project-structure"
         assert result.arguments == {"path": "."}
-    
+
     def test_no_match(self):
         parser = GlmToolCallParser()
         text = "Regular text without GLM markers"
         assert parser.try_parse(text) is None
-    
+
     def test_multiple_tool_calls(self):
         """Test parsing multiple tool calls in one response - real scenario from GLM-4.7-Flash."""
         parser = GlmToolCallParser()
-        text = '<tool_call>file-read<arg_key>fileName</arg_key><arg_value>main.py</arg_value></tool_call><tool_call>file-read<arg_key>fileName</arg_key><arg_value>hello.py</arg_value></tool_call><tool_call>file-read<arg_key>fileName</arg_key><arg_value>dungeon_crawler.py</arg_value></tool_call>'
+        text = "<tool_call>file-read<arg_key>fileName</arg_key><arg_value>main.py</arg_value></tool_call><tool_call>file-read<arg_key>fileName</arg_key><arg_value>hello.py</arg_value></tool_call><tool_call>file-read<arg_key>fileName</arg_key><arg_value>dungeon_crawler.py</arg_value></tool_call>"
         results = parser.try_parse_all(text)
-        
+
         assert len(results) == 3
         assert results[0].arguments["fileName"] == "main.py"
         assert results[1].arguments["fileName"] == "hello.py"
         assert results[2].arguments["fileName"] == "dungeon_crawler.py"
-    
+
     def test_parse_all_supercoder(self):
         parser = ToolCallParser()
-        text = '''
+        text = """
 <@TOOL>{"name": "file-read", "arguments": {"path": "a.py"}}</@TOOL>
 <@TOOL>{"name": "file-read", "arguments": {"path": "b.py"}}</@TOOL>
-'''
+"""
         results = parser.parse_all(text)
         assert len(results) == 2
 

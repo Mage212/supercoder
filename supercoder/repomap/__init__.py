@@ -1,6 +1,6 @@
 """RepoMap module."""
 
-from .tag_extractor import TagExtractor
 from .map import RepoMap
+from .tag_extractor import TagExtractor
 
-__all__ = ["TagExtractor", "RepoMap"]
+__all__ = ["RepoMap", "TagExtractor"]
