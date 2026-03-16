@@ -7,6 +7,10 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.syntax import Syntax
+from rich.text import Text
+from rich import box
+
+from . import __version__
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.styles import Style as PromptStyle
@@ -112,9 +116,19 @@ class SuperCoderREPL:
 
     def run(self):
         """Start the REPL loop."""
-        self.console.print("[bold green]SuperCoder CLI[/] - Type /help for commands")
-        self.console.print(f"[dim]Model: {self.agent.llm.model}[/]")
-        self.console.print("[dim]Tip: Use { ... } for multiline input, or Alt+Enter for newlines[/]")
+        # Beautiful startup header
+        header = Text()
+        header.append("🚀 SuperCoder CLI", style="bold green")
+        header.append(f" v{__version__}\n", style="dim")
+        header.append("Model: ", style="dim")
+        header.append(f"{self.agent.llm.model}\n", style="cyan bold")
+        header.append("/help", style="cyan")
+        header.append(" for commands • ", style="dim")
+        header.append("ESC×2", style="yellow")
+        header.append(" to interrupt • ", style="dim")
+        header.append("{ }", style="cyan")
+        header.append(" for multiline", style="dim")
+        self.console.print(Panel(header, border_style="green", box=box.ROUNDED))
         
         # Start a new session on fresh start
         self.agent.start_new_session()
@@ -206,9 +220,7 @@ class SuperCoderREPL:
         self.console.print("[green]Goodbye![/]")
 
     def _handle_chat(self, message):
-        """Handle chat interaction with incremental output for reasoning blocks."""
-        from .mdstream import MarkdownStream
-        
+        """Handle chat interaction with incremental output."""
         # User message is already displayed by the main loop with styling
 
         # Buffers for current stage
@@ -221,32 +233,21 @@ class SuperCoderREPL:
         # Track active files
         touched_files = set()
         
-        # Streaming markdown renderer for response
-        md_stream = None
-        
         def flush_reasoning():
             """Output accumulated reasoning and clear buffer."""
             nonlocal reasoning_text
-            # Filter out any tool_call tags that might have leaked into reasoning
             clean_reasoning = self._filter_special_tokens(reasoning_text)
             if clean_reasoning.strip():
-                self.console.print(Panel(
-                    clean_reasoning.strip(),
-                    title="[bold magenta]💭 Reasoning[/]",
-                    border_style="magenta",
-                    box=self._get_box_style()
-                ))
+                self._print_block(clean_reasoning.strip(), "Reasoning", "magenta", "💭")
             reasoning_text = ""
         
-        def flush_response(final=False):
-            """Output accumulated response via streaming markdown."""
-            nonlocal response_text, md_stream
+        def flush_response():
+            """Output accumulated response and clear buffer."""
+            nonlocal response_text
             clean_text = self._filter_special_tokens(response_text)
-            if clean_text and md_stream:
-                md_stream.update(clean_text, final=final)
-            if final:
-                md_stream = None
-                response_text = ""
+            if clean_text.strip():
+                self._print_block(Markdown(clean_text), "SuperCoder", "blue", "🤖")
+            response_text = ""
         
         # Process events with spinner
         with self.console.status("[bold blue]SuperCoder is thinking...[/]", spinner="dots") as status:
@@ -262,22 +263,13 @@ class SuperCoderREPL:
                         reasoning_text += content
                         
                     elif event_type == "token":
-                        # Initialize streaming on first token
-                        if md_stream is None:
-                            status.stop()  # Stop spinner for live output
-                            flush_reasoning()  # Output any pending reasoning
-                            md_stream = MarkdownStream(style="blue")
                         response_text += content
-                        # Stream update
-                        clean_text = self._filter_special_tokens(response_text)
-                        if clean_text:
-                            md_stream.update(clean_text)
                         
                     elif event_type == "tool_call":
-                        # Finalize any streaming response before tool call
-                        flush_response(final=True)
+                        # Flush pending content before tool call
                         status.stop()
                         flush_reasoning()
+                        flush_response()
                         self._display_tool_call(content)
                         self._track_files(content, touched_files)
                         status.start()
@@ -293,6 +285,9 @@ class SuperCoderREPL:
                     elif event_type == "aborted":
                         was_aborted = True
                         status.stop()
+                        # Discard buffers on abort - they may contain corrupted partial data
+                        reasoning_text = ""
+                        response_text = ""
                         
                     elif event_type == "rollback":
                         rollback_info = content
@@ -300,14 +295,15 @@ class SuperCoderREPL:
                     elif event_type == "command_waiting":
                         status.stop()
                         flush_reasoning()
+                        flush_response()
                         self._handle_command_waiting(event)
                         status.start()
                         
                     elif event_type == "done":
-                        # End of stream - flush remaining buffers
+                        # End of stream - flush everything
                         status.stop()
                         flush_reasoning()
-                        flush_response(final=True)
+                        flush_response()
                         
             finally:
                 if hasattr(self, 'keyboard_listener'):
@@ -317,32 +313,24 @@ class SuperCoderREPL:
         
         # Final flush in case done wasn't received
         flush_reasoning()
-        flush_response(final=True)
+        flush_response()
         
         # Display Abort notification
         if was_aborted:
-            self.console.print(Panel(
+            self._print_block(
                 "[bold yellow]Agent execution was interrupted by user (ESC)[/]",
-                title="[bold yellow]⚠ Interrupted[/]",
-                border_style="yellow",
-                box=self._get_box_style()
-            ))
+                "Interrupted", "yellow", "⚠")
         
         # Display Rollback info
         if rollback_info:
             files = rollback_info.get("files", [])
             reason = rollback_info.get("reason", "Unknown")
-            self.console.print(Panel(
-                f"[dim]Reason: {reason}[/]\n" + 
-                "\n".join(f"  ✓ Restored: {f}" for f in files),
-                title="[bold cyan]↩ Files Rolled Back[/]",
-                border_style="cyan",
-                box=self._get_box_style()
-            ))
+            rollback_content = f"[dim]Reason: {reason}[/]\n" + "\n".join(f"  ✓ Restored: {f}" for f in files)
+            self._print_block(rollback_content, "Files Rolled Back", "cyan", "↩")
 
         # Display Errors
         for error in errors:
-            self.console.print(Panel(f"[red]{error}[/]", title="[bold red]Error[/]", border_style="red"))
+            self._print_block(f"[red]{error}[/]", "Error", "red", "❌")
         
         # Display Status Footer
         self._display_status_footer(touched_files)
@@ -399,11 +387,23 @@ class SuperCoderREPL:
         # parts.append(f"[dim]Est. Cost: ${cost:.4f}[/]")
 
         self.console.print(" | ".join(parts), justify="right")
-
-    def _get_box_style(self):
-        """Return a box style for panels."""
-        from rich import box
-        return box.ROUNDED
+    
+    def _print_block(self, content, title: str, color: str, icon: str = ""):
+        """Print content in a panel with horizontal lines only (no vertical borders).
+        
+        Args:
+            content: Rich renderable (Text, Markdown, Syntax, str)
+            title: Block title (e.g. "Reasoning", "Tool Call")
+            color: Color for the lines (e.g. "magenta", "yellow") 
+            icon: Optional emoji icon
+        """
+        full_title = f"[bold {color}]{icon} {title}[/]" if icon else f"[bold {color}]{title}[/]"
+        self.console.print(Panel(
+            content,
+            title=full_title,
+            border_style=color,
+            box=box.HORIZONTALS
+        ))
 
     def _handle_command_waiting(self, event):
         """Handle a command that appears to be waiting for input."""
@@ -412,13 +412,7 @@ class SuperCoderREPL:
         tool_name = event.get("tool_name", "command-exec")
         
         # Display warning
-        self.console.print(Panel(
-            f"[yellow]{content}[/]",
-            title="[bold yellow]⚠️ Process Stalled[/]",
-            border_style="yellow",
-            box=self._get_box_style()
-
-        ))
+        self._print_block(f"[yellow]{content}[/]", "Process Stalled", "yellow", "⚠️")
         
         # Simple stdin-based menu (most reliable across terminals)
         self.console.print("\n[bold]Options:[/]")
@@ -479,8 +473,8 @@ class SuperCoderREPL:
         text = re.sub(r'to=(?:tool[:\.]|TOOL\s+)[\w-]+\s+\{[^}]*\}', '', text, flags=re.IGNORECASE)
         # Remove any remaining special markers
         text = re.sub(r'<\|[^|]+\|>', '', text)
-        # Clean up extra whitespace
-        text = re.sub(r'\n{3,}', '\n\n', text)
+        # Clean up extra whitespace - collapse multiple newlines to single
+        text = re.sub(r'\n{2,}', '\n', text)
         text = re.sub(r'  +', ' ', text)
         return text.strip()
 
@@ -502,12 +496,9 @@ class SuperCoderREPL:
             import json
             args_str = json.dumps(args, indent=2)
 
-        self.console.print(Panel(
-            Syntax(args_str, "json", theme="monokai", word_wrap=True),
-            title=f"[bold yellow]🔧 Tool Call: {name}[/]",
-            border_style="yellow",
-            box=self._get_box_style()
-        ))
+        self._print_block(
+            Syntax(args_str, "json", theme="monokai", word_wrap=True, background_color="default"),
+            f"Tool Call: {name}", "yellow", "🔧")
 
     def _display_tool_result(self, result_data):
         """Display tool result in a panel."""
@@ -522,12 +513,7 @@ class SuperCoderREPL:
         # Truncate long results for display
         display_result = result[:500] + "..." if len(result) > 500 else result
         
-        self.console.print(Panel(
-            f"[dim]{display_result}[/]",
-            title=f"[bold green]✔ Result: {name}[/]",
-            border_style="green",
-            box=self._get_box_style()
-        ))
+        self._print_block(f"[dim]{display_result}[/]", f"Result: {name}", "green", "✔")
     
     def _is_diff_result(self, result: str) -> bool:
         """Check if result contains unified diff format."""
@@ -567,13 +553,8 @@ class SuperCoderREPL:
         # Display diff with syntax highlighting
         if diff_lines:
             diff_text = "\n".join(diff_lines)
-            syntax = Syntax(diff_text, "diff", theme="monokai", line_numbers=False)
-            self.console.print(Panel(
-                syntax, 
-                title="[bold cyan]Changes[/]", 
-                border_style="cyan",
-                box=self._get_box_style()
-            ))
+            syntax = Syntax(diff_text, "diff", theme="monokai", line_numbers=False, background_color="default")
+            self._print_block(syntax, "Changes", "cyan", "📝")
 
 
     # Commands

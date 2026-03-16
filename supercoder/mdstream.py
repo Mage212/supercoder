@@ -16,6 +16,36 @@ from rich.syntax import Syntax
 from rich.text import Text
 
 
+def find_paragraph_boundary(text: str) -> int:
+    """Find safe boundary for streaming output.
+    
+    Returns index AFTER the boundary (position to split at), 
+    or 0 if no safe boundary found.
+    
+    Safe boundaries (in priority order):
+    - "\\n\\n" paragraph break
+    - "```\\n" code block end
+    - Sentence end with newline (. or ! or ? followed by \\n)
+    """
+    # Look for paragraph breaks (most reliable)
+    idx = text.rfind("\n\n")
+    if idx > 0:
+        return idx + 2
+    
+    # Look for code block end
+    idx = text.rfind("```\n")
+    if idx > 0:
+        return idx + 4
+    
+    # Look for sentence end with newline
+    for ending in [".\n", "!\n", "?\n"]:
+        idx = text.rfind(ending)
+        if idx > 0:
+            return idx + 2
+    
+    return 0
+
+
 class NoInsetCodeBlock(CodeBlock):
     """A code block with syntax highlighting and no padding."""
 
@@ -26,7 +56,8 @@ class NoInsetCodeBlock(CodeBlock):
             self.lexer_name, 
             theme=self.theme, 
             word_wrap=True, 
-            padding=(1, 0)
+            padding=(1, 0),
+            background_color="default"
         )
         yield syntax
 
