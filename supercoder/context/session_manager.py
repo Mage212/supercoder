@@ -169,7 +169,7 @@ class SessionManager:
         Replaces all messages with the summary and marks as compacted.
         """
         session.is_compacted = True
-        session.messages = [Message("user", f"[Previous Context Summary]\\n\\n{summary}")]
+        session.messages = [Message("user", f"[Previous Context Summary]\n\n{summary}")]
         session.last_modified = datetime.now().isoformat()
         
         # Save updated session

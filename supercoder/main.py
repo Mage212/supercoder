@@ -20,11 +20,11 @@ console = Console()
 @click.option("--model", "-m", default="", help="Model to use for the agent")
 @click.option("--endpoint", "-e", default="", help="LLM API endpoint (base URL)")
 @click.option("--debug", "-d", is_flag=True, help="Enable debug mode")
-@click.option("--temperature", "-t", type=float, default=0.2, help="Temperature for LLM")
+@click.option("--temperature", "-t", type=float, default=None, help="Temperature for LLM")
 @click.option("--max-context", "-c", type=int, default=None, help="Max context tokens (default: from config)")
 @click.option("--repo-map/--no-repo-map", default=True, help="Enable/disable RepoMap")
 @click.version_option(version=__version__)
-def main(model: str, endpoint: str, debug: bool, temperature: float, max_context: int, repo_map: bool):
+def main(model: str, endpoint: str, debug: bool, temperature: float | None, max_context: int, repo_map: bool):
     """SuperCoder - AI Coding Assistant for the Terminal."""
     
     # Load config
@@ -36,7 +36,7 @@ def main(model: str, endpoint: str, debug: bool, temperature: float, max_context
             config.model = model
     if endpoint:
         config.base_url = endpoint
-    if temperature != 0.2:
+    if temperature is not None:
         config.temperature = temperature
     config.debug = debug
     # Only override context if explicitly provided via CLI

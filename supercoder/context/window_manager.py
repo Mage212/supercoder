@@ -198,13 +198,25 @@ class ContextWindowManager:
                 kept_indices.add(idx)
                 current_tokens += msg_tokens
         
-        # Always keep min messages
+        # Always keep the most recent min_messages_to_keep messages
         for i in range(min(self.config.min_messages_to_keep, len(self.history))):
             kept_indices.add(len(self.history) - 1 - i)
-        
+
+        # Preserve message pairs so the conversation stays coherent:
+        # - if we keep an assistant message, also keep the preceding user message
+        # - if we keep a user message, also keep the following assistant message
+        history_len = len(self.history)
+        paired: set[int] = set()
+        for idx in kept_indices:
+            if idx > 0 and self.history[idx].role == "assistant":
+                paired.add(idx - 1)
+            if idx + 1 < history_len and self.history[idx].role == "user":
+                paired.add(idx + 1)
+        kept_indices.update(paired)
+
         # Rebuild history in order
         self.history = [
-            msg for i, msg in enumerate(self.history) 
+            msg for i, msg in enumerate(self.history)
             if i in kept_indices
         ]
     

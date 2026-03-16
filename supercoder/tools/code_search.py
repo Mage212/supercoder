@@ -43,10 +43,11 @@ class CodeSearchTool(BaseTool):
         cmd.extend(["-C", "2"])
         
         cmd.append(query)
-        cmd.append(".")
-        
+
         if file_pattern:
             cmd.extend(["--", file_pattern])
+        else:
+            cmd.append(".")
         
         result = subprocess.run(
             cmd,

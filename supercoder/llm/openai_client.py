@@ -56,7 +56,8 @@ class OpenAIClient(BaseLLM):
             timeout=profile.request_timeout,
         )
         self.model = profile.model
-    
+        self.temperature = profile.temperature
+
     def chat(self, messages: list[Message]) -> str:
         """Send messages and get complete response."""
         response = self.client.chat.completions.create(
@@ -68,26 +69,22 @@ class OpenAIClient(BaseLLM):
     
     def chat_stream(self, messages: list[Message]) -> Iterator[StreamChunk]:
         """Send messages and stream response chunks."""
-        try:
-            stream = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": m.role, "content": m.content} for m in messages],
-                temperature=self.temperature,
-                stream=True,
-            )
-            
-            for chunk in stream:
-                if chunk.choices:
-                    delta = chunk.choices[0].delta
-                    content = delta.content or ""
-                    # Extract reasoning_content for GLM/DeepSeek models
-                    reasoning = getattr(delta, 'reasoning_content', None) or ""
-                    
-                    if content or reasoning:
-                        yield StreamChunk(content=content, reasoning=reasoning)
-            
-            yield StreamChunk(content="", is_done=True)
-            
-        except Exception as e:
-            yield StreamChunk(content=f"\n[Error: {e}]", is_done=True)
+        stream = self.client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": m.role, "content": m.content} for m in messages],
+            temperature=self.temperature,
+            stream=True,
+        )
+
+        for chunk in stream:
+            if chunk.choices:
+                delta = chunk.choices[0].delta
+                content = delta.content or ""
+                # Extract reasoning_content for GLM/DeepSeek models
+                reasoning = getattr(delta, 'reasoning_content', None) or ""
+
+                if content or reasoning:
+                    yield StreamChunk(content=content, reasoning=reasoning)
+
+        yield StreamChunk(content="", is_done=True)
 

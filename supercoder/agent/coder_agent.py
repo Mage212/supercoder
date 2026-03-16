@@ -157,197 +157,186 @@ class CoderAgent:
 
     def chat_stream(self, user_message: str):
         """Process user message and yield response chunks.
-        
+
         Yields:
             dict: Event dictionary with 'type' and 'content' keys.
                   Types: 'token', 'tool_call', 'tool_result', 'error', 'done', 'rollback', 'aborted'
         """
+        MAX_TOOL_ITERATIONS = 50
+
         # Reset abort controller for new interaction
         self.abort_controller.reset()
-        
+
         # Update RepoMap occasionally
         if self.repo_map:
             self._update_system_prompt()
-        
+
         # Create checkpoint for this interaction (will be committed after successful tool execution)
         checkpoint_active = False
         if user_message:
             self.checkpoint_manager.create(description=user_message[:100])
             checkpoint_active = True
-            
-        # Add user message to context
+
+        # Add user message to context (only once, before the loop)
         if user_message:
             self.context.add_message(Message("user", user_message))
-            # Log user input
             get_logger().log_user_input(user_message)
-        
-        # Get messages for API
-        messages = self.context.get_messages_for_api()
-        
-        # Log the full request payload
-        get_logger().log_messages(messages)
-        
-        # Stream response
-        response_text = ""
-        reasoning_text = ""  # Track reasoning for logging
-        
-        try:
-            for chunk in self.llm.chat_stream(messages):
-                # Check for abort between chunks
-                if self.abort_controller.is_aborted:
-                    raise AgentAbortedError("Agent execution aborted by user")
-                
-                if not chunk.is_done:
-                    # Yield reasoning for real-time display (GLM, DeepSeek, etc.)
-                    if chunk.reasoning:
-                        reasoning_text += chunk.reasoning
-                        yield {"type": "reasoning", "content": chunk.reasoning}
-                        # Log reasoning event
-                        get_logger().log_stream_event("reasoning", chunk.reasoning)
-                    # Yield token for real-time display
-                    if chunk.content:
-                        yield {"type": "token", "content": chunk.content}
-                        response_text += chunk.content
-                        # Log content event (only first 100 chars)
-                        if len(response_text) <= 100:
-                            get_logger().log_stream_event("token", chunk.content)
-            
-            # Log accumulated reasoning if any
-            if reasoning_text:
-                get_logger().log_reasoning(reasoning_text, stage="pre_response")
-            
-            # NOTE: Don't yield "done" here - will be yielded at the end if no tool calls
-            
-        except AgentAbortedError:
-            # Handle abort - rollback and notify
-            if checkpoint_active:
-                restored = self.checkpoint_manager.rollback()
-                if restored:
-                    yield {"type": "rollback", "content": {"files": restored, "reason": "Aborted by user"}}
-            yield {"type": "aborted", "content": "Agent interrupted by user (ESC)"}
-            return
-            
-        except Exception as e:
-            # Rollback on LLM error
-            if checkpoint_active:
-                restored = self.checkpoint_manager.rollback()
-                if restored:
-                    yield {"type": "rollback", "content": {"files": restored, "reason": str(e)}}
-            yield {"type": "error", "content": str(e)}
-            return
-        
-        # Add assistant response to context
-        if response_text:
-            self.context.add_message(Message("assistant", response_text))
-            # Log model response
-            get_logger().log_model_response(response_text, self.llm.model)
-            # Auto-save session
-            self._save_current_session()
-        
-        # Check for tool calls (may be multiple)
-        tool_calls = self._extract_all_tool_calls(response_text)
-        if tool_calls:
-            all_results = []
-            has_file_edits = False
-            
-            for tool_call_data in tool_calls:
-                yield {"type": "tool_call", "content": tool_call_data}
-                
-                # Execute tool
-                name = tool_call_data.get("name", "")
-                args = tool_call_data.get("arguments", "")
-                
-                # Track if we have file editing tools
-                if name == "code-edit":
-                    has_file_edits = True
-                
-                if name not in self.tools:
-                    error_msg = f"Unknown tool: '{name}'. Available tools: {', '.join(self.tools.keys())}"
-                    yield {"type": "error", "content": error_msg}
-                    # Also add to results so model gets feedback
-                    all_results.append(f"[{name}]: ERROR - {error_msg}")
-                    continue
-                
-                try:
-                    tool = self.tools[name]
-                    
-                    # Use streaming for command-exec to handle interactive commands
-                    if name == "command-exec" and hasattr(tool, 'execute_streaming'):
-                        result = ""
-                        process_to_kill = None
-                        
-                        for event in tool.execute_streaming(args):
-                            if event["type"] == "waiting_input":
-                                # Yield to REPL for user decision - REPL will kill the process if needed
-                                process_to_kill = event.get("process")
-                                yield {
-                                    "type": "command_waiting",
-                                    "content": event["content"],
-                                    "process": process_to_kill,
-                                    "tool_name": name
-                                }
-                                # After REPL handles it, the process is either killed or we continue
-                                # Check if process was killed
-                                if process_to_kill and process_to_kill.poll() is not None:
-                                    # Process was killed by REPL - tell model NOT to retry
-                                    partial_output = ''.join(event.get('stdout', []))
-                                    result = (
-                                        f"⚠️ INTERACTIVE PROCESS KILLED BY USER\n"
-                                        f"The command requires user input which cannot be provided in this environment.\n"
-                                        f"DO NOT attempt to run this command again.\n\n"
-                                        f"Partial output before kill:\n{partial_output}"
-                                    )
-                                    break
-                                # Otherwise continue waiting until timeout
-                            elif event["type"] == "output":
-                                # Incremental output - could stream to console
-                                pass
-                            elif event["type"] == "done":
-                                result = event["content"]
-                            elif event["type"] == "stalled":
-                                result = f"{event['content']}\n\n(waiting for command to complete...)"
-                            elif event["type"] == "error":
-                                result = event["content"]
-                    else:
-                        result = tool.execute(args)
 
-                    
-                    yield {"type": "tool_result", "content": {"name": name, "result": result}}
-                    # Log tool call and result
-                    get_logger().log_tool_call(name, args)
-                    get_logger().log_tool_result(name, result)
-                    all_results.append(f"[{name}]: {result}")
-                except Exception as e:
-                    result = f"Error executing tool: {e}"
-                    yield {"type": "error", "content": result}
-                    all_results.append(f"[{name}]: {result}")
-                    # Rollback on tool error
-                    if checkpoint_active:
-                        restored = self.checkpoint_manager.rollback()
-                        if restored:
-                            yield {"type": "rollback", "content": {"files": restored, "reason": str(e)}}
-                        checkpoint_active = False
-            
-            # Commit checkpoint after successful file edits
-            if checkpoint_active and has_file_edits:
-                self.checkpoint_manager.commit()
-                checkpoint_active = False
-            
-            # Add combined tool results to context
-            combined_results = "\n\n".join(all_results)
-            self.context.add_message(
-                Message("user", f"<@TOOL_RESULT>{combined_results}</@TOOL_RESULT>")
-            )
-            
-            # Let agent continue with tool results (recursive call handling)
-            yield from self.chat_stream("")
-        else:
-            # No tool calls - discard empty checkpoint and signal completion
-            if checkpoint_active:
-                self.checkpoint_manager.rollback()  # Just cleanup, no files to restore
-            
-            # Signal end of entire chat stream (no more events)
-            yield {"type": "done", "content": ""}
+        tool_iterations = 0
+
+        while True:
+            # Guard against infinite tool-call loops
+            if tool_iterations >= MAX_TOOL_ITERATIONS:
+                if checkpoint_active:
+                    self.checkpoint_manager.rollback()
+                yield {
+                    "type": "error",
+                    "content": f"Tool call limit ({MAX_TOOL_ITERATIONS}) reached. Stopping to prevent infinite loop."
+                }
+                return
+
+            # Get messages for API
+            messages = self.context.get_messages_for_api()
+            get_logger().log_messages(messages)
+
+            # Stream response
+            response_text = ""
+            reasoning_text = ""
+
+            try:
+                for chunk in self.llm.chat_stream(messages):
+                    # Check for abort between chunks
+                    if self.abort_controller.is_aborted:
+                        raise AgentAbortedError("Agent execution aborted by user")
+
+                    if not chunk.is_done:
+                        if chunk.reasoning:
+                            reasoning_text += chunk.reasoning
+                            yield {"type": "reasoning", "content": chunk.reasoning}
+                            get_logger().log_stream_event("reasoning", chunk.reasoning)
+                        if chunk.content:
+                            yield {"type": "token", "content": chunk.content}
+                            response_text += chunk.content
+                            if len(response_text) <= 100:
+                                get_logger().log_stream_event("token", chunk.content)
+
+                if reasoning_text:
+                    get_logger().log_reasoning(reasoning_text, stage="pre_response")
+
+            except AgentAbortedError:
+                if checkpoint_active:
+                    restored = self.checkpoint_manager.rollback()
+                    if restored:
+                        yield {"type": "rollback", "content": {"files": restored, "reason": "Aborted by user"}}
+                yield {"type": "aborted", "content": "Agent interrupted by user (ESC)"}
+                return
+
+            except Exception as e:
+                if checkpoint_active:
+                    restored = self.checkpoint_manager.rollback()
+                    if restored:
+                        yield {"type": "rollback", "content": {"files": restored, "reason": str(e)}}
+                yield {"type": "error", "content": str(e)}
+                return
+
+            # Add assistant response to context
+            if response_text:
+                self.context.add_message(Message("assistant", response_text))
+                get_logger().log_model_response(response_text, self.llm.model)
+                self._save_current_session()
+
+            # Check for tool calls (may be multiple)
+            tool_calls = self._extract_all_tool_calls(response_text)
+            if tool_calls:
+                tool_iterations += 1
+                all_results = []
+                has_file_edits = False
+
+                for tool_call_data in tool_calls:
+                    yield {"type": "tool_call", "content": tool_call_data}
+
+                    name = tool_call_data.get("name", "")
+                    args = tool_call_data.get("arguments", "")
+
+                    if name == "code-edit":
+                        has_file_edits = True
+
+                    if name not in self.tools:
+                        error_msg = f"Unknown tool: '{name}'. Available tools: {', '.join(self.tools.keys())}"
+                        yield {"type": "error", "content": error_msg}
+                        all_results.append(f"[{name}]: ERROR - {error_msg}")
+                        continue
+
+                    try:
+                        tool = self.tools[name]
+
+                        # Use streaming for command-exec to handle interactive commands
+                        if name == "command-exec" and hasattr(tool, 'execute_streaming'):
+                            result = ""
+                            process_to_kill = None
+
+                            for event in tool.execute_streaming(args):
+                                if event["type"] == "waiting_input":
+                                    process_to_kill = event.get("process")
+                                    yield {
+                                        "type": "command_waiting",
+                                        "content": event["content"],
+                                        "process": process_to_kill,
+                                        "tool_name": name
+                                    }
+                                    if process_to_kill and process_to_kill.poll() is not None:
+                                        partial_output = ''.join(event.get('stdout', []))
+                                        result = (
+                                            f"⚠️ INTERACTIVE PROCESS KILLED BY USER\n"
+                                            f"The command requires user input which cannot be provided in this environment.\n"
+                                            f"DO NOT attempt to run this command again.\n\n"
+                                            f"Partial output before kill:\n{partial_output}"
+                                        )
+                                        break
+                                elif event["type"] == "output":
+                                    pass
+                                elif event["type"] == "done":
+                                    result = event["content"]
+                                elif event["type"] == "stalled":
+                                    result = f"{event['content']}\n\n(waiting for command to complete...)"
+                                elif event["type"] == "error":
+                                    result = event["content"]
+                        else:
+                            result = tool.execute(args)
+
+                        yield {"type": "tool_result", "content": {"name": name, "result": result}}
+                        get_logger().log_tool_call(name, args)
+                        get_logger().log_tool_result(name, result)
+                        all_results.append(f"[{name}]: {result}")
+                    except Exception as e:
+                        result = f"Error executing tool: {e}"
+                        yield {"type": "error", "content": result}
+                        all_results.append(f"[{name}]: {result}")
+                        if checkpoint_active:
+                            restored = self.checkpoint_manager.rollback()
+                            if restored:
+                                yield {"type": "rollback", "content": {"files": restored, "reason": str(e)}}
+                            checkpoint_active = False
+
+                # Commit checkpoint after successful file edits
+                if checkpoint_active and has_file_edits:
+                    self.checkpoint_manager.commit()
+                    checkpoint_active = False
+
+                # Add combined tool results to context and loop back for next LLM turn
+                combined_results = "\n\n".join(all_results)
+                self.context.add_message(
+                    Message("user", f"<@TOOL_RESULT>{combined_results}</@TOOL_RESULT>")
+                )
+                continue  # next iteration of the while loop (replaces recursive call)
+
+            else:
+                # No tool calls — discard empty checkpoint and signal completion
+                if checkpoint_active:
+                    self.checkpoint_manager.rollback()  # cleanup only, no files to restore
+
+                yield {"type": "done", "content": ""}
+                return
 
 
 

@@ -55,7 +55,15 @@ class CodeEditTool(BaseTool):
             return "Error: filepath is required"
         
         path = Path(filepath)
-        
+
+        # Validate path stays within the current working directory
+        try:
+            resolved = path.resolve()
+            cwd = Path.cwd().resolve()
+            resolved.relative_to(cwd)
+        except ValueError:
+            return f"Error: Path '{filepath}' is outside the project directory"
+
         # Handle create operation separately
         if operation == "create":
             return self._create_file(path, args.get("content", ""))
@@ -142,13 +150,19 @@ class CodeEditTool(BaseTool):
         
         # Count occurrences
         count = content_before.count(search)
-        
+
+        if count > 1:
+            return (
+                f"Error: Search string found {count} times in {path}. "
+                f"Provide a more specific search string with additional context lines to uniquely identify the target."
+            )
+
         content_after = content_before.replace(search, replace)
         self._safe_write(path, content_after)
-        
+
         # Generate diff
         diff = self._generate_diff(content_before, content_after, path)
-        return f"✅ Replaced {count} occurrence(s) in {path}\n\n{diff}"
+        return f"✅ Replaced 1 occurrence in {path}\n\n{diff}"
     
     def _insert_after(self, path: Path, after: str, content: str) -> str:
         """Insert content after a matching line."""
@@ -156,14 +170,17 @@ class CodeEditTool(BaseTool):
             return "Error: 'after' string is required"
         
         content_before = path.read_text()
+        had_trailing_newline = content_before.endswith("\n")
         lines = content_before.splitlines()
-        
+
         for i, line in enumerate(lines):
             if after in line:
                 # Insert new content after this line
                 new_lines = content.splitlines()
                 lines = lines[:i + 1] + new_lines + lines[i + 1:]
-                content_after = "\n".join(lines) + "\n"
+                content_after = "\n".join(lines)
+                if had_trailing_newline:
+                    content_after += "\n"
                 self._safe_write(path, content_after)
                 
                 diff = self._generate_diff(content_before, content_after, path)
@@ -177,13 +194,16 @@ class CodeEditTool(BaseTool):
             return "Error: 'before' string is required"
         
         content_before = path.read_text()
+        had_trailing_newline = content_before.endswith("\n")
         lines = content_before.splitlines()
-        
+
         for i, line in enumerate(lines):
             if before in line:
                 new_lines = content.splitlines()
                 lines = lines[:i] + new_lines + lines[i:]
-                content_after = "\n".join(lines) + "\n"
+                content_after = "\n".join(lines)
+                if had_trailing_newline:
+                    content_after += "\n"
                 self._safe_write(path, content_after)
                 
                 diff = self._generate_diff(content_before, content_after, path)
@@ -194,17 +214,20 @@ class CodeEditTool(BaseTool):
     def _replace_lines(self, path: Path, start: int, end: int, content: str) -> str:
         """Replace a range of lines."""
         content_before = path.read_text()
+        had_trailing_newline = content_before.endswith("\n")
         lines = content_before.splitlines()
         total = len(lines)
-        
+
         if start < 1 or start > total:
             return f"Error: startLine {start} out of range (1-{total})"
         if end < start or end > total:
             return f"Error: endLine {end} invalid (must be {start}-{total})"
-        
+
         new_lines = content.splitlines() if content else []
         lines = lines[:start - 1] + new_lines + lines[end:]
-        content_after = "\n".join(lines) + "\n"
+        content_after = "\n".join(lines)
+        if had_trailing_newline:
+            content_after += "\n"
         self._safe_write(path, content_after)
         
         diff = self._generate_diff(content_before, content_after, path)

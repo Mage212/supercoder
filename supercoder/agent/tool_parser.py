@@ -14,6 +14,23 @@ from dataclasses import dataclass
 from typing import Any
 
 
+def _extract_balanced_json(text: str, start: int) -> str | None:
+    """Extract a complete JSON object starting at position `start` (must be '{').
+
+    Handles nested braces correctly, unlike a simple non-greedy regex.
+    Returns the matched JSON string, or None if braces are unbalanced.
+    """
+    depth = 0
+    for i, ch in enumerate(text[start:], start):
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None
+
+
 @dataclass
 class ToolCall:
     """Parsed tool call result."""
@@ -97,53 +114,44 @@ class QwenStyleParser(BaseToolParser):
     """
     
     name = "qwen_style"
-    
-    # Pattern 1: Simple format (what we instruct in prompt)
-    pattern_simple = re.compile(
-        r'to=(?:tool[:\s.])?([a-zA-Z0-9_-]+)\s+(\{.*?\})',
+
+    # Pattern to find tool name followed by the start of a JSON object.
+    # We capture only the name; the JSON object is extracted via balanced-brace parsing.
+    _name_pattern_simple = re.compile(
+        r'to=(?:tool[:\s.])?([a-zA-Z0-9_-]+)\s*(\{)',
+        re.IGNORECASE
+    )
+    _name_pattern_full = re.compile(
+        r'<\|start\|>.*?to=(?:tool[:\s.])?([a-zA-Z0-9_-]+).*?<\|message\|>(\{)',
         re.DOTALL | re.IGNORECASE
     )
-    
-    # Pattern 2: Full Qwen format with markers (what model actually uses)
-    pattern_full = re.compile(
-        r'<\|start\|>.*?to=(?:tool[:\s.])?([a-zA-Z0-9_-]+).*?<\|message\|>(\{.*?\})<\|call\|>',
+    _name_pattern_channel = re.compile(
+        r'<\|channel\|>.*?to=(?:tool[:\s.])?([a-zA-Z0-9_-]+).*?<\|message\|>(\{)',
         re.DOTALL | re.IGNORECASE
     )
-    
-    # Pattern 3: channel format without start (some models)
-    pattern_channel = re.compile(
-        r'<\|channel\|>.*?to=(?:tool[:\s.])?([a-zA-Z0-9_-]+).*?<\|message\|>(\{.*?\})',
-        re.DOTALL | re.IGNORECASE
-    )
-    
+
     def try_parse(self, text: str) -> ToolCall | None:
-        # Try simple format first (what we instructed)
-        match = self.pattern_simple.search(text)
-        if match:
-            return self._parse_match(match)
-        
-        # Try full Qwen format (what model may use)
-        match = self.pattern_full.search(text)
-        if match:
-            return self._parse_match(match)
-        
-        # Try channel format
-        match = self.pattern_channel.search(text)
-        if match:
-            return self._parse_match(match)
-        
+        for pattern in (self._name_pattern_simple, self._name_pattern_full, self._name_pattern_channel):
+            match = pattern.search(text)
+            if match:
+                result = self._parse_with_balanced_braces(text, match)
+                if result:
+                    return result
         return None
-    
-    def _parse_match(self, match) -> ToolCall | None:
-        tool_name = match.group(1).strip()
-        json_text = match.group(2)
-        
+
+    def _parse_with_balanced_braces(self, text: str, name_match) -> ToolCall | None:
+        tool_name = name_match.group(1).strip()
+        json_start = name_match.start(2)  # position of the opening '{'
+        json_text = _extract_balanced_json(text, json_start)
+        if json_text is None:
+            return None
         try:
             args = json.loads(json_text)
+            raw = text[name_match.start():json_start + len(json_text)]
             return ToolCall(
                 name=tool_name,
                 arguments=args,
-                raw_match=match.group(0),
+                raw_match=raw,
                 format_name=self.name
             )
         except json.JSONDecodeError:
@@ -160,23 +168,27 @@ class JsonBlockParser(BaseToolParser):
     """
     
     name = "json_block"
-    pattern = re.compile(r'```(?:json)?\s*\n?(.*?)\n?```', re.DOTALL)
-    
+    # Require explicit 'json' marker to avoid matching arbitrary code examples
+    pattern = re.compile(r'```json\s*\n(.*?)\n?```', re.DOTALL)
+
     def try_parse(self, text: str) -> ToolCall | None:
         match = self.pattern.search(text)
         if not match:
             return None
-        
+
         try:
             content = match.group(1).strip()
             data = json.loads(content)
-            
+
             # Support key names as instructed: "tool" and "arguments"
             name = data.get("tool") or data.get("name")
             if not name:
                 return None
-            
-            args = data.get("arguments") or data.get("args") or {}
+
+            args = data.get("arguments") or data.get("args")
+            # Only treat as tool call if 'arguments'/'args' key is explicitly present
+            if args is None:
+                return None
             
             return ToolCall(
                 name=name,

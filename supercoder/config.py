@@ -72,6 +72,7 @@ class ModelProfile:
     api_key: str = ""
     endpoint: str = "https://api.openai.com/v1"
     model: str = "gpt-4o-mini"
+    temperature: float = 0.2
     request_timeout: float = 60.0
     tool_calling_type: str = "supercoder"  # supercoder, qwen_like, json_block, xml_function, glm_tool_call
     max_context_tokens: int | None = None  # None = use global default
