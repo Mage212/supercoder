@@ -8,6 +8,9 @@ from .base import BaseTool, ToolDefinition
 class FileReadTool(BaseTool):
     """Read files with optional line range limits."""
 
+    def __init__(self, allowed_root: Path | None = None):
+        self.allowed_root = allowed_root
+
     @property
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
@@ -17,6 +20,8 @@ class FileReadTool(BaseTool):
 
     def execute(self, arguments: str) -> str:
         args = self.parse_args(arguments)
+        if args.get("_parse_error"):
+            return f"Error: Invalid JSON arguments: {args.get('raw', '')}"
         file_name = args.get("fileName", args.get("filename", ""))
         start_line = args.get("startLine", 1)
         end_line = args.get("endLine")
@@ -26,6 +31,13 @@ class FileReadTool(BaseTool):
             return "Error: fileName is required"
 
         path = Path(file_name)
+
+        if self.allowed_root is not None:
+            try:
+                path.resolve().relative_to(self.allowed_root)
+            except ValueError:
+                return f"Error: Path '{file_name}' is outside the project directory"
+
         if not path.exists():
             return f"Error: File '{file_name}' not found"
 

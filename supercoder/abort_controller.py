@@ -208,8 +208,7 @@ class KeyboardListener:
                         # ESC detected - handle it
                         self.interrupt_handler.handle_esc()
 
-        except Exception as e:
-            print(f"DEBUG: KeyboardListener error: {e}")
+        except Exception:
             pass  # Silently ignore errors in background thread
 
         finally:

@@ -55,6 +55,8 @@ class CodeEditTool(BaseTool):
 
     def execute(self, arguments: str) -> str:
         args = self.parse_args(arguments)
+        if args.get("_parse_error"):
+            return f"Error: Invalid JSON arguments: {args.get('raw', '')}"
         filepath = args.get("filepath", args.get("fileName", ""))
         operation = args.get("operation", "search_replace")
 
@@ -164,22 +166,25 @@ class CodeEditTool(BaseTool):
         had_trailing_newline = content_before.endswith("\n")
         lines = content_before.splitlines()
 
-        for i, line in enumerate(lines):
-            if after in line:
-                # Insert new content after this line
-                new_lines = content.splitlines()
-                lines = lines[: i + 1] + new_lines + lines[i + 1 :]
-                content_after = "\n".join(lines)
-                if had_trailing_newline:
-                    content_after += "\n"
-                self._safe_write(path, content_after)
+        matching = [i for i, line in enumerate(lines) if after in line]
+        if not matching:
+            return f"Error: Line containing '{after[:50]}' not found"
+        if len(matching) > 1:
+            return (
+                f"Error: '{after[:50]}' found on {len(matching)} lines. "
+                f"Provide a more specific string to uniquely identify the target line."
+            )
 
-                diff = self._generate_diff(content_before, content_after, path)
-                return (
-                    f"✅ Inserted {len(new_lines)} line(s) after line {i + 1} in {path}\n\n{diff}"
-                )
+        i = matching[0]
+        new_lines = content.splitlines()
+        lines = lines[: i + 1] + new_lines + lines[i + 1 :]
+        content_after = "\n".join(lines)
+        if had_trailing_newline:
+            content_after += "\n"
+        self._safe_write(path, content_after)
 
-        return f"Error: Line containing '{after[:50]}' not found"
+        diff = self._generate_diff(content_before, content_after, path)
+        return f"✅ Inserted {len(new_lines)} line(s) after line {i + 1} in {path}\n\n{diff}"
 
     def _insert_before(self, path: Path, before: str, content: str) -> str:
         """Insert content before a matching line."""
@@ -190,21 +195,25 @@ class CodeEditTool(BaseTool):
         had_trailing_newline = content_before.endswith("\n")
         lines = content_before.splitlines()
 
-        for i, line in enumerate(lines):
-            if before in line:
-                new_lines = content.splitlines()
-                lines = lines[:i] + new_lines + lines[i:]
-                content_after = "\n".join(lines)
-                if had_trailing_newline:
-                    content_after += "\n"
-                self._safe_write(path, content_after)
+        matching = [i for i, line in enumerate(lines) if before in line]
+        if not matching:
+            return f"Error: Line containing '{before[:50]}' not found"
+        if len(matching) > 1:
+            return (
+                f"Error: '{before[:50]}' found on {len(matching)} lines. "
+                f"Provide a more specific string to uniquely identify the target line."
+            )
 
-                diff = self._generate_diff(content_before, content_after, path)
-                return (
-                    f"✅ Inserted {len(new_lines)} line(s) before line {i + 1} in {path}\n\n{diff}"
-                )
+        i = matching[0]
+        new_lines = content.splitlines()
+        lines = lines[:i] + new_lines + lines[i:]
+        content_after = "\n".join(lines)
+        if had_trailing_newline:
+            content_after += "\n"
+        self._safe_write(path, content_after)
 
-        return f"Error: Line containing '{before[:50]}' not found"
+        diff = self._generate_diff(content_before, content_after, path)
+        return f"✅ Inserted {len(new_lines)} line(s) before line {i + 1} in {path}\n\n{diff}"
 
     def _replace_lines(self, path: Path, start: int, end: int, content: str) -> str:
         """Replace a range of lines."""

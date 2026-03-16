@@ -182,8 +182,9 @@ class MarkdownStream:
         assert self.live is not None
 
         # Print stable lines above live window
+        num_printed = len(self.printed)
+        show = 0
         if final or num_lines > 0:
-            num_printed = len(self.printed)
             show = num_lines - num_printed
 
             if show <= 0 and not final:

@@ -30,6 +30,9 @@ IGNORE_PATTERNS = {".pyc", ".pyo", ".so", ".dylib", ".class", ".DS_Store"}
 class ProjectStructureTool(BaseTool):
     """Show project directory structure."""
 
+    def __init__(self, allowed_root: Path | None = None):
+        self.allowed_root = allowed_root
+
     @property
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
@@ -39,11 +42,20 @@ class ProjectStructureTool(BaseTool):
 
     def execute(self, arguments: str) -> str:
         args = self.parse_args(arguments)
+        if args.get("_parse_error"):
+            return f"Error: Invalid JSON arguments: {args.get('raw', '')}"
         max_depth = args.get("maxDepth", 3)
         max_files = args.get("maxFiles", 50)
         root_path = args.get("path", ".")
 
         root = Path(root_path)
+
+        if self.allowed_root is not None:
+            try:
+                root.resolve().relative_to(self.allowed_root)
+            except ValueError:
+                return f"Error: Path '{root_path}' is outside the project directory"
+
         if not root.exists():
             return f"Error: Path '{root_path}' not found"
 

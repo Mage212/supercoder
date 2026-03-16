@@ -64,6 +64,22 @@ class SessionManager:
     def _ensure_sessions_dir(self) -> None:
         """Create sessions directory if it doesn't exist."""
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
+        self._ensure_gitignore()
+
+    def _ensure_gitignore(self) -> None:
+        """Ensure .supercoder/ is listed in the project's .gitignore."""
+        gitignore = self.project_root / ".gitignore"
+        entry = ".supercoder/\n"
+        try:
+            if gitignore.exists():
+                content = gitignore.read_text()
+                if ".supercoder/" not in content and ".supercoder" not in content:
+                    with gitignore.open("a") as f:
+                        f.write(entry)
+            else:
+                gitignore.write_text(entry)
+        except Exception:
+            pass  # Non-critical; don't fail session management over gitignore
 
     def _get_session_path(self, session_id: str) -> Path:
         """Get path to session file."""

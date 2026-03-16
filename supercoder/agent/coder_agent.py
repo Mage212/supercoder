@@ -14,6 +14,8 @@ from ..repomap import RepoMap
 from ..rules_loader import SupercoderRulesLoader
 from ..tools.base import BaseTool
 from ..tools.code_edit import CodeEditTool
+from ..tools.file_read import FileReadTool
+from ..tools.project_structure import ProjectStructureTool
 from .agent_modes import MODE_CONFIGS, AgentMode
 from .prompts import CONTEXT_SUMMARY_PROMPT, build_system_prompt
 from .tool_parser import ToolCallParser
@@ -48,6 +50,9 @@ class CoderAgent:
             # Inject checkpoint_manager and repo_root into code-edit tool
             if isinstance(t, CodeEditTool):
                 t.checkpoint = self.checkpoint_manager
+                t.allowed_root = self.repo_root
+            # Inject allowed_root into file-read and project-structure tools
+            elif isinstance(t, (FileReadTool, ProjectStructureTool)):
                 t.allowed_root = self.repo_root
             self.tools[t.definition.name] = t
 
@@ -270,6 +275,30 @@ class CoderAgent:
 
                     try:
                         tool = self.tools[name]
+
+                        # Ask user to confirm before running any shell command
+                        if name == "command-exec":
+                            try:
+                                import json as _json
+
+                                _cmd_args = _json.loads(args) if isinstance(args, str) else args
+                                _cmd_str = _cmd_args.get("command", str(args))
+                            except Exception:
+                                _cmd_str = str(args)
+                            confirm_result: dict = {}
+                            yield {
+                                "type": "command_confirm",
+                                "content": {"command": _cmd_str},
+                                "result": confirm_result,
+                            }
+                            if not confirm_result.get("approved", False):
+                                result = "Command execution cancelled by user."
+                                yield {
+                                    "type": "tool_result",
+                                    "content": {"name": name, "result": result},
+                                }
+                                all_results.append(f"[{name}]: {result}")
+                                continue
 
                         # Use streaming for command-exec to handle interactive commands
                         if name == "command-exec" and hasattr(tool, "execute_streaming"):

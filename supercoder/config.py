@@ -1,6 +1,7 @@
 """Configuration and environment variables."""
 
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -145,8 +146,10 @@ class Config:
                             file_data["base_url"] = file_data["endpoint"]
 
                         config_data.update(file_data)
-                except Exception:
-                    pass  # Ignore config file errors
+                except FileNotFoundError:
+                    pass  # Optional local override, expected when absent
+                except Exception as e:
+                    print(f"Warning: Failed to parse config '{path}': {e}", file=sys.stderr)
 
         # Build ModelProfile objects
         models = {}

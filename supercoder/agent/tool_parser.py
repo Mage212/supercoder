@@ -17,11 +17,26 @@ from typing import Any
 def _extract_balanced_json(text: str, start: int) -> str | None:
     """Extract a complete JSON object starting at position `start` (must be '{').
 
-    Handles nested braces correctly, unlike a simple non-greedy regex.
+    Handles nested braces and string literals — braces inside quoted strings
+    are not counted toward the nesting depth, so values like
+    ``{"content": "f() { return {} }"}`` are handled correctly.
     Returns the matched JSON string, or None if braces are unbalanced.
     """
     depth = 0
+    in_string = False
+    escape_next = False
     for i, ch in enumerate(text[start:], start):
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\" and in_string:
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
         if ch == "{":
             depth += 1
         elif ch == "}":

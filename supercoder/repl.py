@@ -287,6 +287,14 @@ class SuperCoderREPL:
                     elif event_type == "rollback":
                         rollback_info = content
 
+                    elif event_type == "command_confirm":
+                        status.stop()
+                        flush_reasoning()
+                        flush_response()
+                        approved = self._handle_command_confirm(content.get("command", ""))
+                        content["result"]["approved"] = approved
+                        status.start()
+
                     elif event_type == "command_waiting":
                         status.stop()
                         flush_reasoning()
@@ -355,7 +363,15 @@ class SuperCoderREPL:
             return
 
         # Look for common file arguments
-        for key in ["file", "path", "filename", "target_file", "source_file"]:
+        for key in [
+            "file",
+            "filepath",
+            "fileName",
+            "path",
+            "filename",
+            "target_file",
+            "source_file",
+        ]:
             if key in args and isinstance(args[key], str):
                 from pathlib import Path
 
@@ -404,6 +420,31 @@ class SuperCoderREPL:
             Panel(content, title=full_title, border_style=color, box=box.HORIZONTALS)
         )
 
+    def _handle_command_confirm(self, command: str) -> bool:
+        """Ask user to approve or deny a shell command before it runs.
+
+        Returns True if user approved, False otherwise.
+        """
+        import sys
+
+        self._print_block(
+            f"[bold]Command:[/]\n[yellow]{command}[/]",
+            "Run Command?",
+            "yellow",
+            "⚡",
+        )
+        self.console.print("\n[bold]Allow? [[green]y[/]/[red]N[/]]>[/] ", end="")
+        try:
+            choice = sys.stdin.readline().strip().lower()
+            if choice in ("y", "yes"):
+                self.console.print("[green]✓ Approved[/]")
+                return True
+            self.console.print("[red]✗ Cancelled[/]")
+            return False
+        except (KeyboardInterrupt, EOFError):
+            self.console.print("\n[red]✗ Cancelled[/]")
+            return False
+
     def _handle_command_waiting(self, event):
         """Handle a command that appears to be waiting for input."""
         content = event.get("content", "")
@@ -450,6 +491,57 @@ class SuperCoderREPL:
                     pass
             return "killed"
 
+    @staticmethod
+    def _strip_nested_json(prefix_pattern: str, text: str, flags: int = 0) -> str:
+        """Remove occurrences of prefix_pattern followed by a balanced {...} block.
+
+        Unlike `{[^}]*}` regex, this handles nested braces and string literals
+        correctly, so tool calls with code snippets in their arguments are fully
+        stripped rather than leaving orphaned fragment text.
+        """
+        import re
+
+        result = []
+        last = 0
+        for m in re.finditer(prefix_pattern, text, flags=flags):
+            brace_start = m.end()
+            # Skip whitespace between prefix and opening brace
+            while brace_start < len(text) and text[brace_start] in " \t\n":
+                brace_start += 1
+            if brace_start >= len(text) or text[brace_start] != "{":
+                # No JSON object follows — keep as-is
+                result.append(text[last : m.end()])
+                last = m.end()
+                continue
+            # Walk the string to find the matching closing brace
+            depth = 0
+            in_str = False
+            esc = False
+            end = brace_start
+            for j, ch in enumerate(text[brace_start:], brace_start):
+                if esc:
+                    esc = False
+                    continue
+                if ch == "\\" and in_str:
+                    esc = True
+                    continue
+                if ch == '"':
+                    in_str = not in_str
+                    continue
+                if in_str:
+                    continue
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        end = j + 1
+                        break
+            result.append(text[last : m.start()])
+            last = end
+        result.append(text[last:])
+        return "".join(result)
+
     def _filter_special_tokens(self, text: str) -> str:
         """Remove special tokens from display text while preserving normal content."""
         import re
@@ -464,10 +556,12 @@ class SuperCoderREPL:
         text = re.sub(r"<@TOOL_RESULT>.*?</@TOOL_RESULT>", "", text, flags=re.DOTALL)
         # Remove complete Qwen-style blocks: <|start|>...<|call|>
         text = re.sub(r"<\|start\|>.*?<\|call\|>", "", text, flags=re.DOTALL)
-        # Remove gpt-oss format: <|channel|>...to=...<|message|>{...}
-        text = re.sub(r"<\|channel\|>.*?<\|message\|>\{[^}]*\}", "", text, flags=re.DOTALL)
-        # Remove simple tool call format: to=tool.name {...} or to=tool:name {...} or to=TOOL name {...}
-        text = re.sub(r"to=(?:tool[:\.]|TOOL\s+)[\w-]+\s+\{[^}]*\}", "", text, flags=re.IGNORECASE)
+        # Remove gpt-oss format: <|channel|>...to=...<|message|>{...} (nested-brace-aware)
+        text = self._strip_nested_json(r"<\|channel\|>.*?<\|message\|>", text, flags=re.DOTALL)
+        # Remove simple tool call format: to=tool.name {...} (nested-brace-aware)
+        text = self._strip_nested_json(
+            r"to=(?:tool[:\.]|TOOL\s+)[\w-]+\s*", text, flags=re.IGNORECASE
+        )
         # Remove any remaining special markers
         text = re.sub(r"<\|[^|]+\|>", "", text)
         # Clean up extra whitespace - collapse multiple newlines to single

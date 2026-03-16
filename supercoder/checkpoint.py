@@ -3,6 +3,7 @@
 import contextlib
 import json
 import shutil
+import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -59,9 +60,9 @@ class CheckpointManager:
         Returns:
             The newly created Checkpoint object
         """
-        checkpoint_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        checkpoint_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{uuid.uuid4().hex[:6]}"
         checkpoint_path = self.checkpoint_dir / checkpoint_id
-        checkpoint_path.mkdir(exist_ok=True)
+        checkpoint_path.mkdir(exist_ok=False)
 
         self.current = Checkpoint(
             id=checkpoint_id,

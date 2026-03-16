@@ -101,6 +101,12 @@ class CommandExecutionTool(BaseTool):
         - {"type": "waiting_input", "process": proc}  # Needs user decision
         """
         args = self.parse_args(arguments)
+        if args.get("_parse_error"):
+            yield {
+                "type": "error",
+                "content": f"Error: Invalid JSON arguments: {args.get('raw', '')}",
+            }
+            return
         command = args.get("command", "")
         timeout = min(args.get("timeout", 60), 120)  # Max 2 minutes
 

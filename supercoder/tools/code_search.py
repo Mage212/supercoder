@@ -17,8 +17,10 @@ class CodeSearchTool(BaseTool):
 
     def execute(self, arguments: str) -> str:
         args = self.parse_args(arguments)
+        if args.get("_parse_error"):
+            return f"Error: Invalid JSON arguments: {args.get('raw', '')}"
         query = args.get("query", "")
-        max_results = args.get("maxResults", 10)
+        max_results = min(max(int(args.get("maxResults", 10)), 1), 100)
         file_pattern = args.get("filePattern", "")
 
         if not query:
