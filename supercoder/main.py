@@ -60,15 +60,7 @@ def main(
     # Initialize logger
     logger = init_logger(config.model)
 
-    # Print banner
-    console.print(f"[bold green]SuperCoder v{__version__}[/]")
-    console.print(f"[dim]Model: {config.model}[/]")
-    console.print(f"[dim]Endpoint: {config.base_url}[/]")
-    console.print(f"[dim]Context: {config.max_context_tokens:,} tokens[/]")
-    console.print(f"[dim]RepoMap: {'Enabled' if repo_map else 'Disabled'}[/]")
-    console.print(f"[dim]Tools: {len(ALL_TOOLS)} available[/]")
-    console.print(f"[dim]Logs: {logger.log_path}[/]")
-    console.print()
+    # Banner is displayed by the REPL (see repl.py run() method)
 
     # Context configuration
     context_config = ContextConfig(

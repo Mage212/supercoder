@@ -11,6 +11,7 @@ from rich import box
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.rule import Rule
 from rich.syntax import Syntax
 from rich.text import Text
 
@@ -118,7 +119,9 @@ class SuperCoderREPL:
         header.append("🚀 SuperCoder CLI", style="bold green")
         header.append(f" v{__version__}\n", style="dim")
         header.append("Model: ", style="dim")
-        header.append(f"{self.agent.llm.model}\n", style="cyan bold")
+        header.append(f"{self.agent.llm.model}", style="cyan bold")
+        header.append(f" • Context: {self.agent.context.max_tokens:,}", style="dim")
+        header.append(f" • Tools: {len(self.agent.tools)}\n", style="dim")
         header.append("/help", style="cyan")
         header.append(" for commands • ", style="dim")
         header.append("ESC×2", style="yellow")  # noqa: RUF001
@@ -213,110 +216,163 @@ class SuperCoderREPL:
         self.console.print("[green]Goodbye![/]")
 
     def _handle_chat(self, message):
-        """Handle chat interaction with incremental output."""
-        # User message is already displayed by the main loop with styling
+        """Handle chat interaction with live streaming output.
 
-        # Buffers for current stage
-        response_text = ""
+        Uses a state machine to transition between:
+        - SPINNER: waiting for LLM response (console.status)
+        - STREAMING: live markdown rendering (MarkdownStream + StreamingDisplayBuffer)
+        """
+        from .mdstream import MarkdownStream
+        from .streaming_buffer import StreamingDisplayBuffer
+
+        # Buffers
         reasoning_text = ""
         errors = []
         was_aborted = False
         rollback_info = None
-
-        # Track active files
         touched_files = set()
 
+        # --- Streaming state ---
+        is_streaming = False
+        md_stream = None
+        display_buffer = None
+        accumulated_display = ""  # All safe text sent to md_stream so far
+
+        # --- Spinner (manual start/stop — avoids context manager conflict with Live) ---
+        spinner = self.console.status(
+            "[bold blue]SuperCoder is thinking...[/]", spinner="dots"
+        )
+        spinner.start()
+
         def flush_reasoning():
-            """Output accumulated reasoning and clear buffer."""
+            """Output accumulated reasoning as a block."""
             nonlocal reasoning_text
-            clean_reasoning = self._filter_special_tokens(reasoning_text)
-            if clean_reasoning.strip():
-                self._print_block(clean_reasoning.strip(), "Reasoning", "magenta", "💭")
+            clean = self._filter_special_tokens(reasoning_text)
+            if clean.strip():
+                self._print_block(clean.strip(), "Reasoning", "magenta", "💭")
             reasoning_text = ""
 
-        def flush_response():
-            """Output accumulated response and clear buffer."""
-            nonlocal response_text
-            clean_text = self._filter_special_tokens(response_text)
-            if clean_text.strip():
-                self._print_block(Markdown(clean_text), "SuperCoder", "blue", "🤖")
-            response_text = ""
+        def start_streaming():
+            """Switch from spinner to live markdown streaming."""
+            nonlocal is_streaming, md_stream, display_buffer, accumulated_display
+            flush_reasoning()
+            spinner.stop()
+            md_stream = MarkdownStream()
+            display_buffer = StreamingDisplayBuffer(self.agent.tool_calling_type)
+            accumulated_display = ""
+            is_streaming = True
 
-        # Process events with spinner
-        with self.console.status(
-            "[bold blue]SuperCoder is thinking...[/]", spinner="dots"
-        ) as status:
+        def stop_streaming():
+            """Finalize streaming display, clean up."""
+            nonlocal is_streaming, md_stream, display_buffer, accumulated_display
+            if not is_streaming:
+                spinner.stop()
+                flush_reasoning()
+                return
+
+            # Flush remaining buffer content
+            remaining = display_buffer.flush()
+            accumulated_display += remaining
+
+            # Clean any residual tool call tags (safety net)
+            clean = self._filter_special_tokens(accumulated_display)
+            if clean.strip():
+                md_stream.update(clean, final=True)
+            else:
+                # Nothing to show — still need to stop the Live display
+                md_stream.update("", final=True)
+
+            md_stream = None
+            display_buffer = None
+            accumulated_display = ""
+            is_streaming = False
+
+        # --- Event processing ---
+        if hasattr(self, "keyboard_listener"):
+            self.keyboard_listener.start()
+
+        try:
+            for event in self.agent.chat_stream(message):
+                event_type = event.get("type")
+                content = event.get("content")
+
+                if event_type == "reasoning":
+                    reasoning_text += content
+
+                elif event_type == "token":
+                    if not is_streaming:
+                        start_streaming()
+
+                    chunk = display_buffer.add(content)
+                    if chunk:
+                        accumulated_display += chunk
+                        md_stream.update(accumulated_display)
+
+                elif event_type == "tool_call":
+                    stop_streaming()
+                    self._display_tool_call(content)
+                    self._track_files(content, touched_files)
+                    # Dynamic spinner text
+                    name = content.get("name", "tool")
+                    spinner.update(f"[bold blue]Executing {name}...[/]")
+                    spinner.start()
+
+                elif event_type == "tool_result":
+                    spinner.stop()
+                    self._display_tool_result(content)
+                    # Back to waiting spinner for next LLM turn
+                    spinner.update("[bold blue]SuperCoder is thinking...[/]")
+                    spinner.start()
+
+                elif event_type == "error":
+                    errors.append(content)
+
+                elif event_type == "aborted":
+                    was_aborted = True
+                    if is_streaming:
+                        # Discard — data may be corrupted
+                        md_stream.update("", final=True)
+                        md_stream = None
+                        display_buffer = None
+                        accumulated_display = ""
+                        is_streaming = False
+                    spinner.stop()
+                    reasoning_text = ""
+
+                elif event_type == "rollback":
+                    rollback_info = content
+
+                elif event_type == "command_confirm":
+                    stop_streaming()
+                    approved = self._handle_command_confirm(content.get("command", ""))
+                    content["result"]["approved"] = approved
+                    spinner.update("[bold blue]Running command...[/]")
+                    spinner.start()
+
+                elif event_type == "command_waiting":
+                    spinner.stop()
+                    flush_reasoning()
+                    self._handle_command_waiting(event)
+                    spinner.start()
+
+                elif event_type == "done":
+                    stop_streaming()
+
+        except Exception:
+            # Ensure Live display is cleaned up on unexpected errors
+            if is_streaming and md_stream:
+                try:
+                    md_stream.update("", final=True)
+                except Exception:
+                    pass
+            raise
+
+        finally:
+            spinner.stop()
             if hasattr(self, "keyboard_listener"):
-                self.keyboard_listener.start()
+                self.keyboard_listener.stop()
 
-            try:
-                for event in self.agent.chat_stream(message):
-                    event_type = event.get("type")
-                    content = event.get("content")
-
-                    if event_type == "reasoning":
-                        reasoning_text += content
-
-                    elif event_type == "token":
-                        response_text += content
-
-                    elif event_type == "tool_call":
-                        # Flush pending content before tool call
-                        status.stop()
-                        flush_reasoning()
-                        flush_response()
-                        self._display_tool_call(content)
-                        self._track_files(content, touched_files)
-                        status.start()
-
-                    elif event_type == "tool_result":
-                        status.stop()
-                        self._display_tool_result(content)
-                        status.start()
-
-                    elif event_type == "error":
-                        errors.append(content)
-
-                    elif event_type == "aborted":
-                        was_aborted = True
-                        status.stop()
-                        # Discard buffers on abort - they may contain corrupted partial data
-                        reasoning_text = ""
-                        response_text = ""
-
-                    elif event_type == "rollback":
-                        rollback_info = content
-
-                    elif event_type == "command_confirm":
-                        status.stop()
-                        flush_reasoning()
-                        flush_response()
-                        approved = self._handle_command_confirm(content.get("command", ""))
-                        content["result"]["approved"] = approved
-                        status.start()
-
-                    elif event_type == "command_waiting":
-                        status.stop()
-                        flush_reasoning()
-                        flush_response()
-                        self._handle_command_waiting(event)
-                        status.start()
-
-                    elif event_type == "done":
-                        # End of stream - flush everything
-                        status.stop()
-                        flush_reasoning()
-                        flush_response()
-
-            finally:
-                if hasattr(self, "keyboard_listener"):
-                    self.keyboard_listener.stop()
-
-        # === Post-processing (outside spinner) ===
-
-        # Final flush in case done wasn't received
-        flush_reasoning()
-        flush_response()
+        # === Post-processing ===
 
         # Display Abort notification
         if was_aborted:
@@ -343,7 +399,7 @@ class SuperCoderREPL:
         # Display Status Footer
         self._display_status_footer(touched_files)
 
-        self.console.print()
+        self.console.print(Rule(style="dim grey50"))
 
     def _track_files(self, tool_call, touched_files):
         """Extract file paths from tool arguments to track active files."""
