@@ -120,7 +120,7 @@ class SuperCoderREPL:
         header.append(f" v{__version__}\n", style="dim")
         header.append("Model: ", style="dim")
         header.append(f"{self.agent.llm.model}", style="cyan bold")
-        header.append(f" • Context: {self.agent.context.max_tokens:,}", style="dim")
+        header.append(f" • Context: {self.agent.context.config.max_tokens:,}", style="dim")
         header.append(f" • Tools: {len(self.agent.tools)}\n", style="dim")
         header.append("/help", style="cyan")
         header.append(" for commands • ", style="dim")

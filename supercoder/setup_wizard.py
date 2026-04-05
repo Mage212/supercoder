@@ -132,6 +132,21 @@ def _pick_model(provider: dict) -> str:
     return Prompt.ask("[bold green]Model name[/]", default=default or "gpt-4o-mini")
 
 
+def _sanitize_key(raw: str) -> str:
+    """Strip any non-printable / ANSI escape characters from a string.
+
+    Some terminals inject escape sequences when capturing input with Rich's
+    password prompt on macOS. Using getpass avoids the issue, but we also
+    sanitize as a defence-in-depth measure.
+    """
+    import re
+    # Remove ANSI escape sequences (ESC + anything up to a letter)
+    cleaned = re.sub(r"\x1b[\[\]()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><~]", "", raw)
+    # Remove other non-printable characters (keep normal ASCII/Unicode)
+    cleaned = "".join(ch for ch in cleaned if ch.isprintable())
+    return cleaned.strip()
+
+
 def _get_api_key(provider: dict) -> str:
     """Prompt user for the API key."""
     is_local = "localhost" in provider.get("endpoint", "") or "127.0.0.1" in provider.get(
@@ -151,13 +166,42 @@ def _get_api_key(provider: dict) -> str:
 
     hint = provider.get("key_hint", "...")
     while True:
-        key = Prompt.ask(
-            f"[bold green]API Key[/] [dim]({hint})[/]",
-            password=True,
-        )
-        if key.strip():
-            return key.strip()
+        import getpass
+        console.print(f"\n[bold green]API Key[/] [dim]({hint})[/]: ", end="")
+        try:
+            raw = getpass.getpass(prompt="")
+        except (KeyboardInterrupt, EOFError):
+            raise
+        key = _sanitize_key(raw)
+        if key:
+            return key
         console.print("[red]API key cannot be empty[/]")
+
+
+def _get_context_tokens() -> int:
+    """Ask user for max context window size."""
+    console.print("\n[dim]Context window size (tokens). Check your model's specs.[/]")
+    common = [
+        ("32 000  — safe default for most models", 32000),
+        ("128 000 — GPT-4o, Claude 3.x, Gemini", 128000),
+        ("200 000 — Claude 3.5+", 200000),
+        ("8 000   — smaller local models", 8000),
+        ("Custom", 0),
+    ]
+    for i, (label, _) in enumerate(common, 1):
+        console.print(f"  [cyan]{i}[/]. {label}")
+    while True:
+        raw = Prompt.ask("[bold green]Context window[/]", default="1")
+        try:
+            idx = int(raw) - 1
+            if 0 <= idx < len(common) - 1:
+                return common[idx][1]
+            if idx == len(common) - 1:
+                custom = Prompt.ask("[bold green]Enter token count[/]", default="32000")
+                return max(1000, int(custom))
+        except ValueError:
+            pass
+        console.print("[red]Invalid choice[/]")
 
 
 def _get_endpoint(provider: dict) -> str:
@@ -173,6 +217,7 @@ def _write_config(
     endpoint: str,
     model: str,
     tool_calling_type: str,
+    max_context_tokens: int = 32000,
     profile_name: str = "default",
 ) -> Path:
     """Write the config file with the given profile."""
@@ -196,13 +241,13 @@ models:
   {profile_name}:
     api_key: "{api_key}"
     endpoint: "{endpoint}"
-    model: "{model}"{tct_comment}
-    # max_context_tokens: 128000  # Uncomment and adjust for your model
+    model: "{model}"
+    max_context_tokens: {max_context_tokens}{tct_comment}
 
 # Shared settings
 temperature: 0.2
 top_p: 0.1
-max_context_tokens: 32000
+max_context_tokens: {max_context_tokens}
 reserved_for_response: 4096
 request_timeout: 60.0
 debug: false
@@ -229,15 +274,17 @@ def run_setup_wizard() -> bool:
         endpoint = _get_endpoint(provider)
         model = _pick_model(provider)
         api_key = _get_api_key(provider)
+        max_context_tokens = _get_context_tokens()
 
         tool_calling_type = provider.get("tool_calling_type", "supercoder")
 
         # Summary
         console.print("\n[bold]Configuration summary:[/]")
-        console.print(f"  Provider : [cyan]{provider['name']}[/]")
-        console.print(f"  Endpoint : [dim]{endpoint}[/]")
-        console.print(f"  Model    : [cyan]{model}[/]")
-        console.print(f"  API Key  : [dim]{'*' * min(len(api_key), 8)}...[/]")
+        console.print(f"  Provider   : [cyan]{provider['name']}[/]")
+        console.print(f"  Endpoint   : [dim]{endpoint}[/]")
+        console.print(f"  Model      : [cyan]{model}[/]")
+        console.print(f"  Context    : [cyan]{max_context_tokens:,} tokens[/]")
+        console.print(f"  API Key    : [dim]{'*' * min(len(api_key), 8)}...[/]")
 
         if not Confirm.ask("\n[bold]Save this configuration?[/]", default=True):
             console.print("[yellow]Setup cancelled.[/]")
@@ -248,6 +295,7 @@ def run_setup_wizard() -> bool:
             endpoint=endpoint,
             model=model,
             tool_calling_type=tool_calling_type,
+            max_context_tokens=max_context_tokens,
         )
 
         console.print(
