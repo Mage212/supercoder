@@ -204,6 +204,34 @@ def _get_context_tokens() -> int:
         console.print("[red]Invalid choice[/]")
 
 
+def _pick_tool_calling_type(suggested: str = "supercoder") -> str:
+    """Ask user to select the tool calling format for the model."""
+    formats = [
+        ("supercoder", "Native format — best for most instruction-following models (default)"),
+        ("qwen_like",  "Qwen / GPT-OSS style:  to=tool:name {...}"),
+        ("json_block", "JSON code block:  ```json {\"tool\": \"...\", ...} ```"),
+        ("xml_function", "XML function:  <function_call name=\"...\">...</function_call>"),
+        ("glm_tool_call", "GLM-4 style:  <tool_call>name<arg_key>k</arg_key>...</tool_call>"),
+    ]
+    console.print("\n[bold]Tool calling format[/] [dim](how the model sends tool calls)[/]\n")
+    for i, (key, desc) in enumerate(formats, 1):
+        marker = " [green](suggested)[/]" if key == suggested else ""
+        console.print(f"  [cyan]{i}[/]. [bold]{key}[/] — {desc}{marker}")
+
+    # Find the default index
+    default_idx = next((i for i, (k, _) in enumerate(formats, 1) if k == suggested), 1)
+
+    while True:
+        raw = Prompt.ask("[bold green]Format[/]", default=str(default_idx))
+        try:
+            idx = int(raw) - 1
+            if 0 <= idx < len(formats):
+                return formats[idx][0]
+        except ValueError:
+            pass
+        console.print("[red]Invalid choice[/]")
+
+
 def _get_endpoint(provider: dict) -> str:
     """Prompt for endpoint, pre-filled from provider preset."""
     default = provider.get("endpoint", "https://api.openai.com/v1")
@@ -225,10 +253,8 @@ def _write_config(
 
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Build the tool_calling_type comment only when non-default
-    tct_comment = ""
-    if tool_calling_type != "supercoder":
-        tct_comment = f"\n    tool_calling_type: \"{tool_calling_type}\""
+    # Always write tool_calling_type (makes config self-documenting)
+    tct_line = f"\n    tool_calling_type: \"{tool_calling_type}\""
 
     content = f"""# SuperCoder Configuration
 # Documentation: https://github.com/your-repo/supercoder
@@ -242,7 +268,7 @@ models:
     api_key: "{api_key}"
     endpoint: "{endpoint}"
     model: "{model}"
-    max_context_tokens: {max_context_tokens}{tct_comment}
+    max_context_tokens: {max_context_tokens}{tct_line}
 
 # Shared settings
 temperature: 0.2
@@ -276,7 +302,9 @@ def run_setup_wizard() -> bool:
         api_key = _get_api_key(provider)
         max_context_tokens = _get_context_tokens()
 
-        tool_calling_type = provider.get("tool_calling_type", "supercoder")
+        # Ask for tool calling format; pre-select provider suggestion, always confirmable
+        suggested_tct = provider.get("tool_calling_type", "supercoder")
+        tool_calling_type = _pick_tool_calling_type(suggested_tct)
 
         # Summary
         console.print("\n[bold]Configuration summary:[/]")
@@ -284,6 +312,7 @@ def run_setup_wizard() -> bool:
         console.print(f"  Endpoint   : [dim]{endpoint}[/]")
         console.print(f"  Model      : [cyan]{model}[/]")
         console.print(f"  Context    : [cyan]{max_context_tokens:,} tokens[/]")
+        console.print(f"  Format     : [cyan]{tool_calling_type}[/]")
         console.print(f"  API Key    : [dim]{'*' * min(len(api_key), 8)}...[/]")
 
         if not Confirm.ask("\n[bold]Save this configuration?[/]", default=True):
