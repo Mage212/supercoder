@@ -216,17 +216,12 @@ class SuperCoderREPL:
         self.console.print("[green]Goodbye![/]")
 
     def _handle_chat(self, message):
-        """Handle chat interaction with live streaming output.
+        """Handle chat interaction with streaming output.
 
         Uses a state machine to transition between:
         - SPINNER: waiting for LLM response (console.status)
-        - STREAMING: live markdown rendering (Live + StreamingDisplayBuffer)
+        - STREAMING: printing completed paragraphs as Markdown
         """
-        import time
-
-        from rich.live import Live
-        from rich.padding import Padding
-
         from .streaming_buffer import StreamingDisplayBuffer
 
         # Buffers
@@ -238,13 +233,11 @@ class SuperCoderREPL:
 
         # --- Streaming state ---
         is_streaming = False
-        live_display = None
         display_buffer = None
-        accumulated_display = ""  # All safe text sent to Live so far
-        _last_update = 0.0  # Throttle timestamp
-        _MIN_UPDATE_INTERVAL = 0.05  # 20fps max
+        accumulated_display = ""  # All safe text received so far
+        _printed_len = 0  # How much of accumulated_display we've already printed
 
-        # --- Spinner (manual start/stop — avoids context manager conflict with Live) ---
+        # --- Spinner (manual start/stop) ---
         spinner = self.console.status(
             "[bold blue]SuperCoder is thinking...[/]", spinner="dots"
         )
@@ -259,40 +252,43 @@ class SuperCoderREPL:
             reasoning_text = ""
 
         def start_streaming():
-            """Switch from spinner to live markdown streaming."""
-            nonlocal is_streaming, live_display, display_buffer, accumulated_display
+            """Switch from spinner to paragraph streaming."""
+            nonlocal is_streaming, display_buffer, accumulated_display, _printed_len
             flush_reasoning()
             spinner.stop()
-            live_display = Live(
-                Text(""),
-                console=self.console,
-                refresh_per_second=15,
-                vertical_overflow="visible",
-            )
-            live_display.start()
             display_buffer = StreamingDisplayBuffer(self.agent.tool_calling_type)
             accumulated_display = ""
+            _printed_len = 0
             is_streaming = True
 
-        def update_live(text: str, final: bool = False):
-            """Update the Live display with rendered markdown."""
-            nonlocal _last_update
-            if not text.strip() and not final:
+        def print_new_paragraphs():
+            """Print any newly completed paragraphs as Markdown."""
+            nonlocal _printed_len
+            unprinted = accumulated_display[_printed_len:]
+            if not unprinted:
                 return
 
-            now = time.time()
-            # Throttle non-final updates
-            if not final and (now - _last_update) < _MIN_UPDATE_INTERVAL:
-                return
-            _last_update = now
-
-            md = Markdown(text)
-            # Add slight left padding for visual alignment
-            live_display.update(Padding(md, (0, 0, 0, 1)))
+            # Find the last paragraph boundary (\n\n) in the unprinted portion
+            boundary = unprinted.rfind("\n\n")
+            if boundary > 0:
+                # Print everything up to and including the boundary
+                to_print = unprinted[:boundary]
+                if to_print.strip():
+                    self.console.print(Markdown(to_print))
+                _printed_len += boundary + 2  # skip past the \n\n
+            elif len(unprinted) >= 300:
+                # Very long paragraph without boundary — force print
+                # Find last line break as a lesser boundary
+                last_nl = unprinted.rfind("\n")
+                if last_nl > 0:
+                    to_print = unprinted[:last_nl]
+                    if to_print.strip():
+                        self.console.print(Markdown(to_print))
+                    _printed_len += last_nl + 1
 
         def stop_streaming():
-            """Finalize streaming display, clean up."""
-            nonlocal is_streaming, live_display, display_buffer, accumulated_display
+            """Finalize streaming, print any remaining text."""
+            nonlocal is_streaming, display_buffer, accumulated_display, _printed_len
             if not is_streaming:
                 spinner.stop()
                 flush_reasoning()
@@ -304,13 +300,15 @@ class SuperCoderREPL:
 
             # Clean any residual tool call tags (safety net)
             clean = self._filter_special_tokens(accumulated_display)
-            if clean.strip():
-                update_live(clean, final=True)
 
-            live_display.stop()
-            live_display = None
+            # Print everything that hasn't been printed yet
+            unprinted = clean[_printed_len:]
+            if unprinted.strip():
+                self.console.print(Markdown(unprinted))
+
             display_buffer = None
             accumulated_display = ""
+            _printed_len = 0
             is_streaming = False
 
         # --- Event processing ---
@@ -332,7 +330,7 @@ class SuperCoderREPL:
                     chunk = display_buffer.add(content)
                     if chunk:
                         accumulated_display += chunk
-                        update_live(accumulated_display)
+                        print_new_paragraphs()
 
                 elif event_type == "tool_call":
                     stop_streaming()
@@ -355,11 +353,10 @@ class SuperCoderREPL:
 
                 elif event_type == "aborted":
                     was_aborted = True
-                    if is_streaming and live_display:
-                        live_display.stop()
-                        live_display = None
+                    if is_streaming:
                         display_buffer = None
                         accumulated_display = ""
+                        _printed_len = 0
                         is_streaming = False
                     spinner.stop()
                     reasoning_text = ""
@@ -384,12 +381,6 @@ class SuperCoderREPL:
                     stop_streaming()
 
         except Exception:
-            # Ensure Live display is cleaned up on unexpected errors
-            if is_streaming and live_display:
-                try:
-                    live_display.stop()
-                except Exception:
-                    pass
             raise
 
         finally:
