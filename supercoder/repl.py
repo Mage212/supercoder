@@ -254,8 +254,10 @@ class SuperCoderREPL:
         def start_streaming():
             """Switch from spinner to paragraph streaming."""
             nonlocal is_streaming, display_buffer, accumulated_display, _printed_up_to
-            flush_reasoning()
+            # Stop spinner FIRST — printing while Rich's Live/Status is active
+            # corrupts cursor tracking and produces rendering artifacts.
             spinner.stop()
+            flush_reasoning()
             display_buffer = StreamingDisplayBuffer(self.agent.tool_calling_type)
             accumulated_display = ""
             _printed_up_to = 0
@@ -274,16 +276,16 @@ class SuperCoderREPL:
             # Find the last paragraph boundary in unprinted text
             boundary = unprinted.rfind("\n\n")
             if boundary > 0:
-                to_print = unprinted[:boundary]
-                if to_print.strip():
+                to_print = unprinted[:boundary].strip()
+                if to_print:
                     self.console.print(Markdown(to_print))
                 _printed_up_to += boundary + 2  # advance past the \n\n
             elif len(unprinted) >= 300:
                 # Very long paragraph — force-print at last line break
                 last_nl = unprinted.rfind("\n")
                 if last_nl > 0:
-                    to_print = unprinted[:last_nl]
-                    if to_print.strip():
+                    to_print = unprinted[:last_nl].strip()
+                    if to_print:
                         self.console.print(Markdown(to_print))
                     _printed_up_to += last_nl + 1
 
@@ -302,8 +304,8 @@ class SuperCoderREPL:
             # Print everything after the last printed offset.
             # StreamingDisplayBuffer already stripped tool-call tags, so we do NOT
             # call _filter_special_tokens here — that would destroy \n\n boundaries.
-            unprinted = accumulated_display[_printed_up_to:]
-            if unprinted.strip():
+            unprinted = accumulated_display[_printed_up_to:].strip()
+            if unprinted:
                 self.console.print(Markdown(unprinted))
 
             display_buffer = None

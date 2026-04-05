@@ -196,8 +196,10 @@ class KeyboardListener:
             # Save current terminal settings
             self._old_settings = termios.tcgetattr(fd)
 
-            # Set terminal to raw mode (no buffering, no echo)
-            tty.setraw(fd)
+            # Set terminal to cbreak mode (no buffering, no echo, but KEEP output processing).
+            # raw mode (tty.setraw) disables OPOST which stops \n → \r\n translation,
+            # causing every Rich console.print to start mid-line instead of column 0.
+            tty.setcbreak(fd)
 
             while not self._stop_event.is_set():
                 # Use select for non-blocking read with timeout
