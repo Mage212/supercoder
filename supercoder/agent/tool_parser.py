@@ -14,6 +14,69 @@ from dataclasses import dataclass
 from typing import Any
 
 
+def _repair_json(text: str) -> str:
+    """Best-effort repair of malformed JSON produced by small/local LLMs.
+
+    Fixes two common issues:
+    1. Raw control characters (newline, tab, CR) inside JSON string values.
+       Models like qwen3.5 emit literal 0x0A instead of the two-char \\n.
+    2. Unescaped double-quotes inside string values.
+       E.g. ``"value": "say "hello""`` → ``"value": "say \\"hello\\""``
+
+    The approach: walk char-by-char tracking whether we're inside a JSON string,
+    and fixup chars that are invalid in that context.
+    """
+    out: list[str] = []
+    in_string = False
+    escape_next = False
+
+    for ch in text:
+        if escape_next:
+            out.append(ch)
+            escape_next = False
+            continue
+
+        if ch == '\\' and in_string:
+            out.append(ch)
+            escape_next = True
+            continue
+
+        if ch == '"':
+            in_string = not in_string
+            out.append(ch)
+            continue
+
+        if in_string:
+            # Replace raw control characters with JSON escape sequences
+            if ch == '\n':
+                out.append('\\n')
+            elif ch == '\r':
+                out.append('\\r')
+            elif ch == '\t':
+                out.append('\\t')
+            else:
+                out.append(ch)
+        else:
+            out.append(ch)
+
+    return ''.join(out)
+
+
+def _safe_json_loads(text: str) -> Any:
+    """Parse JSON with fallback repair for LLM-generated content."""
+    # Fast path: valid JSON
+    try:
+        return json.loads(text, strict=False)
+    except json.JSONDecodeError:
+        pass
+
+    # Slow path: repair and retry
+    try:
+        return json.loads(_repair_json(text))
+    except json.JSONDecodeError:
+        raise
+
+
 def _extract_balanced_json(text: str, start: int) -> str | None:
     """Extract a complete JSON object starting at position `start` (must be '{').
 
@@ -98,7 +161,7 @@ class SupercoderTagParser(BaseToolParser):
 
         try:
             content = match.group(1).strip()
-            data = json.loads(content)
+            data = _safe_json_loads(content)
             return ToolCall(
                 name=data.get("name", ""),
                 arguments=data.get("arguments", ""),
@@ -115,7 +178,7 @@ class SupercoderTagParser(BaseToolParser):
         for match in self.pattern.finditer(text):
             try:
                 content = match.group(1).strip()
-                data = json.loads(content)
+                data = _safe_json_loads(content)
                 results.append(
                     ToolCall(
                         name=data.get("name", ""),
@@ -172,7 +235,7 @@ class QwenStyleParser(BaseToolParser):
         if json_text is None:
             return None
         try:
-            args = json.loads(json_text)
+            args = _safe_json_loads(json_text)
             raw = text[name_match.start() : json_start + len(json_text)]
             return ToolCall(name=tool_name, arguments=args, raw_match=raw, format_name=self.name)
         except json.JSONDecodeError:
@@ -199,7 +262,7 @@ class JsonBlockParser(BaseToolParser):
 
         try:
             content = match.group(1).strip()
-            data = json.loads(content)
+            data = _safe_json_loads(content)
 
             # Support key names as instructed: "tool" and "arguments"
             name = data.get("tool") or data.get("name")
@@ -239,7 +302,7 @@ class XmlFunctionParser(BaseToolParser):
         args_str = match.group(2).strip()
 
         try:
-            args = json.loads(args_str) if args_str else {}
+            args = _safe_json_loads(args_str) if args_str else {}
         except json.JSONDecodeError:
             args = args_str
 

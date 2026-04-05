@@ -367,7 +367,27 @@ class CoderAgent:
                 continue  # next iteration of the while loop (replaces recursive call)
 
             else:
-                # No tool calls — discard empty checkpoint and signal completion
+                # No tool calls parsed — but maybe the response TRIED to call a tool
+                # and the JSON was malformed? Detect and retry.
+                _tag_markers = ["<@TOOL>", "to=tool:", "<function_call", "<tool_call>", "```json"]
+                has_tool_attempt = any(marker in response_text for marker in _tag_markers)
+
+                if has_tool_attempt and tool_iterations < MAX_TOOL_ITERATIONS:
+                    # The model tried to make a tool call but the JSON was broken.
+                    # Tell the model about it and let it retry.
+                    tool_iterations += 1
+                    error_msg = (
+                        "ERROR: Your tool call could not be parsed — the JSON was malformed. "
+                        "Common issues: unescaped quotes inside strings, raw newlines instead of \\n. "
+                        "Please retry the SAME tool call with properly escaped JSON."
+                    )
+                    yield {"type": "error", "content": error_msg}
+                    self.context.add_message(
+                        Message("user", f"<@TOOL_RESULT>{error_msg}</@TOOL_RESULT>")
+                    )
+                    continue  # retry
+
+                # Truly no tool calls — signal completion
                 if checkpoint_active:
                     self.checkpoint_manager.rollback()  # cleanup only, no files to restore
 

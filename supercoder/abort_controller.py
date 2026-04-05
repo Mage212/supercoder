@@ -196,10 +196,19 @@ class KeyboardListener:
             # Save current terminal settings
             self._old_settings = termios.tcgetattr(fd)
 
-            # Set terminal to cbreak mode (no buffering, no echo, but KEEP output processing).
-            # raw mode (tty.setraw) disables OPOST which stops \n → \r\n translation,
-            # causing every Rich console.print to start mid-line instead of column 0.
-            tty.setcbreak(fd)
+            # Configure terminal: unbuffered input, no echo, no signals, but keep output processing.
+            # - tty.setraw() disables OPOST → \n stops being \r\n → breaks Rich output
+            # - tty.setcbreak() keeps ISIG → Ctrl-C sends SIGINT → kills process silently
+            # Manual config gives us exactly what we need for the ESC listener.
+            new = list(self._old_settings)
+            # c_lflag: disable ICANON (line buffering), ECHO, ISIG (Ctrl-C/Z signals)
+            new[3] = new[3] & ~(termios.ICANON | termios.ECHO | termios.ISIG)
+            # c_oflag: KEEP OPOST so \n is translated to \r\n
+            # (don't touch new[1])
+            # c_cc: read 1 char at a time, no timeout
+            new[6][termios.VMIN] = 1
+            new[6][termios.VTIME] = 0
+            termios.tcsetattr(fd, termios.TCSAFLUSH, new)
 
             while not self._stop_event.is_set():
                 # Use select for non-blocking read with timeout
