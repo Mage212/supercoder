@@ -13,6 +13,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.rule import Rule
 from rich.syntax import Syntax
+from rich.table import Table
 from rich.text import Text
 
 from . import __version__
@@ -181,7 +182,7 @@ class SuperCoderREPL:
                 import shutil
 
                 terminal_width = shutil.get_terminal_size().columns
-                prompt_prefix_len = 5  # "You> "
+                prompt_prefix_len = len(self._get_prompt())
 
                 # Calculate total visual lines by accounting for terminal wrapping
                 visual_lines = 0
@@ -473,24 +474,27 @@ class SuperCoderREPL:
                     pass
 
     def _display_status_footer(self, touched_files):
-        """Display a status footer with token usage and active files."""
+        """Display a status footer with mini progress bar, token usage, and active files."""
         stats = self.agent.context.get_stats()
 
-        parts = []
-        # Token usage
-        parts.append(f"[dim]Context: {stats.used_tokens:,}/{stats.total_tokens:,} tokens[/]")
+        # Mini progress bar (8 chars)
+        bar_w = 8
+        filled = int(bar_w * stats.utilization_percent / 100)
+        empty = bar_w - filled
+        color = (
+            "green" if stats.utilization_percent < 50
+            else "yellow" if stats.utilization_percent < 80
+            else "red"
+        )
+        bar = f"[{color}]{'━' * filled}[/][dim]{'━' * empty}[/]"
 
-        # Active files
+        parts = [f"{bar} [dim]{stats.used_tokens:,}/{stats.total_tokens:,} tokens[/]"]
+
         if touched_files:
             files_str = ", ".join(sorted(touched_files))
-            parts.append(f"[dim]Active Files: {files_str}[/]")
+            parts.append(f"[dim]Active: {files_str}[/]")
 
-        # Cost estimate (rough approximation)
-        # Assuming generic pricing, just to show we can
-        # cost = (stats.used_tokens / 1000) * 0.002 # Example
-        # parts.append(f"[dim]Est. Cost: ${cost:.4f}[/]")
-
-        self.console.print(" | ".join(parts), justify="right")
+        self.console.print(" │ ".join(parts), justify="right")
 
     def _print_block(self, content, title: str, color: str, icon: str = ""):
         """Print content in a panel with horizontal lines only (no vertical borders).
@@ -683,18 +687,37 @@ class SuperCoderREPL:
         )
 
     def _display_tool_result(self, result_data):
-        """Display tool result in a panel."""
+        """Display tool result in a panel with format-aware rendering."""
         name = result_data.get("name")
         result = result_data.get("result", "")
 
-        # Check if result contains a diff (unified diff format)
+        # Diff results (code-edit) — syntax-highlighted diff
         if self._is_diff_result(result):
             self._display_diff_result(name, result)
             return
 
-        # Truncate long results for display
-        display_result = result[:500] + "..." if len(result) > 500 else result
+        # File read — show with line numbers
+        if name == "file-read" and result:
+            display = result[:800] + "\n..." if len(result) > 800 else result
+            syntax = Syntax(
+                display, "text", theme="monokai",
+                line_numbers=True, background_color="default",
+            )
+            self._print_block(syntax, f"Result: {name}", "green", "✔")
+            return
 
+        # Command exec — show with shell highlighting
+        if name == "command-exec" and result:
+            display = result[:800] + "\n..." if len(result) > 800 else result
+            syntax = Syntax(
+                display, "bash", theme="monokai",
+                line_numbers=False, background_color="default",
+            )
+            self._print_block(syntax, f"Result: {name}", "green", "✔")
+            return
+
+        # Default: truncated dim text
+        display_result = result[:500] + "..." if len(result) > 500 else result
         self._print_block(f"[dim]{display_result}[/]", f"Result: {name}", "green", "✔")
 
     def _is_diff_result(self, result: str) -> bool:
@@ -743,10 +766,10 @@ class SuperCoderREPL:
     # Commands
 
     def _get_prompt(self) -> str:
-        """Get prompt string based on current mode."""
-        if self.agent.mode == AgentMode.ASK:
-            return "ask> "
-        return "You> "
+        """Get prompt string with model tag and current mode."""
+        model_tag = self.agent.llm.config.model.split("/")[-1][:15]
+        mode = "ask> " if self.agent.mode == AgentMode.ASK else "You> "
+        return f"[{model_tag}] {mode}"
 
     def cmd_ask(self, user_input: str):
         """Switch to ask mode or ask a question without editing.
@@ -953,51 +976,110 @@ class SuperCoderREPL:
         return False
 
     def cmd_help(self, _):
-        self.console.print("\n[bold]Available Commands:[/]")
-        self.console.print("  /ask      - Switch to ask mode (Q&A without edits)")
-        self.console.print("  /code     - Switch to code mode (can edit files)")
-        self.console.print("  /continue - Resume a previous session")
-        self.console.print("  /sessions - List saved sessions")
-        self.console.print("  /undo     - Undo changes to a checkpoint")
-        self.console.print("  /clear    - Clear conversation history")
-        self.console.print("  /compact  - Summarize context and reduce tokens")
-        self.console.print("  /stats    - Show context window stats")
-        self.console.print("  /tools    - List available tools")
-        self.console.print("  /models   - List available model profiles")
-        self.console.print("  /model    - Switch model: /model <name>")
-        self.console.print("  /config   - Show current configuration")
-        self.console.print("  /debug    - Toggle debug mode")
-        self.console.print("  /exit     - Quit SuperCoder")
-        self.console.print()
+        table = Table(
+            title="SuperCoder Commands", box=box.SIMPLE_HEAVY,
+            title_style="bold", show_header=True, header_style="bold cyan",
+        )
+        table.add_column("Command", style="green", min_width=14)
+        table.add_column("Description")
+
+        # Mode
+        table.add_section()
+        table.add_row("[bold dim]Mode[/]", "")
+        table.add_row("/ask", "Q&A mode (read-only, no edits)")
+        table.add_row("/code", "Code mode (can edit files)")
+
+        # Context
+        table.add_section()
+        table.add_row("[bold dim]Context[/]", "")
+        table.add_row("/compact", "Summarize and compress context")
+        table.add_row("/stats", "Show context window stats")
+        table.add_row("/clear", "Clear conversation history")
+
+        # Session
+        table.add_section()
+        table.add_row("[bold dim]Session[/]", "")
+        table.add_row("/continue", "Resume a previous session")
+        table.add_row("/sessions", "List saved sessions")
+        table.add_row("/undo", "Undo changes to a checkpoint")
+
+        # Config
+        table.add_section()
+        table.add_row("[bold dim]Config[/]", "")
+        table.add_row("/tools", "List available tools")
+        table.add_row("/models", "List available model profiles")
+        table.add_row("/model <name>", "Switch to a model profile")
+        table.add_row("/config", "Show current configuration")
+        table.add_row("/debug", "Toggle debug mode")
+
+        table.add_section()
+        table.add_row("/exit", "Quit SuperCoder")
+
+        self.console.print(table)
         return False
 
     def cmd_tools(self, _):
-        self.console.print("\n[bold]Available Tools:[/]")
+        table = Table(box=box.SIMPLE, show_header=True, header_style="bold")
+        table.add_column("Tool", style="cyan", min_width=18)
+        table.add_column("Description")
+
         for name, tool in self.agent.tools.items():
-            self.console.print(f"  [cyan]{name}[/]: {tool.definition.description[:60]}...")
-        self.console.print()
+            table.add_row(name, tool.definition.description[:70])
+
+        self._print_block(table, "Available Tools", "cyan", "🔧")
         return False
 
     def cmd_config(self, _):
-        """Show current configuration."""
-        self.console.print("\n[bold]Current Configuration:[/]")
-        config = self.agent.llm.config  # Access config from valid location
-
-        self.console.print(f"  [cyan]Model[/]: {config.model}")
-        self.console.print(f"  [cyan]Base URL[/]: {config.base_url}")
-        self.console.print(f"  [cyan]Temperature[/]: {config.temperature}")
-        self.console.print(f"  [cyan]Debug Mode[/]: {config.debug}")
-        self.console.print(f"  [cyan]Context Size[/]: {config.max_context_tokens}")
-        # Hide API key
+        """Show current configuration in a table."""
+        config = self.agent.llm.config
         masked_key = (
             f"{config.api_key[:4]}...{config.api_key[-4:]}" if config.api_key else "Not Set"
         )
-        self.console.print(f"  [cyan]API Key[/]: {masked_key}")
-        self.console.print()
+
+        table = Table(box=box.SIMPLE, show_header=False, padding=(0, 1))
+        table.add_column("Key", style="cyan", min_width=14)
+        table.add_column("Value")
+
+        table.add_row("Model", config.model)
+        table.add_row("Base URL", config.base_url)
+        table.add_row("Temperature", str(config.temperature))
+        table.add_row("Context Size", f"{config.max_context_tokens:,}")
+        table.add_row("Debug Mode", str(config.debug))
+        table.add_row("API Key", masked_key)
+
+        self._print_block(table, "Configuration", "cyan", "⚙")
         return False
 
     def cmd_stats(self, _):
-        self.console.print(f"[cyan]{self.agent.get_context_stats()}[/]")
+        """Show context stats with a visual progress bar."""
+        stats = self.agent.context.get_stats()
+        config = self.agent.llm.config
+
+        table = Table(box=box.SIMPLE, show_header=False, padding=(0, 1))
+        table.add_column("Label", style="cyan", min_width=10)
+        table.add_column("Value")
+
+        # Progress bar
+        bar_width = 20
+        filled = int(bar_width * stats.utilization_percent / 100)
+        empty = bar_width - filled
+        color = (
+            "green" if stats.utilization_percent < 50
+            else "yellow" if stats.utilization_percent < 80
+            else "red"
+        )
+        bar = f"[{color}]{'━' * filled}[/][dim]{'━' * empty}[/]"
+
+        table.add_row(
+            "Context",
+            f"{bar}  {stats.utilization_percent:.1f}%   {stats.used_tokens:,} / {stats.total_tokens:,}",
+        )
+        table.add_row("Messages", str(stats.message_count))
+        table.add_row("Available", f"{stats.available_tokens:,} tokens")
+        table.add_row("Model", config.model)
+        table.add_row("Mode", self.agent.mode.value.upper())
+
+        self._print_block(table, "Context Stats", "cyan", "📊")
         return False
 
     def cmd_debug(self, _):
@@ -1012,7 +1094,7 @@ class SuperCoderREPL:
         return True
 
     def cmd_models(self, _):
-        """List available model profiles."""
+        """List available model profiles in a table."""
         config = self.agent.llm.config
         current = config.current_profile_name
         models = config.get_available_models()
@@ -1021,14 +1103,18 @@ class SuperCoderREPL:
             self.console.print("[yellow]No model profiles defined in config[/]")
             return False
 
-        self.console.print("\n[bold]Available Model Profiles:[/]")
+        table = Table(box=box.SIMPLE, show_header=True, header_style="bold")
+        table.add_column("Profile", style="cyan")
+        table.add_column("Model")
+        table.add_column("Status")
+
         for name in models:
             profile = config.get_model_profile(name)
-            marker = " [green]← active[/]" if name == current else ""
-            self.console.print(f"  [cyan]{name}[/]: {profile.model}{marker}")
-        self.console.print()
+            status = "[green]● active[/]" if name == current else "[dim]○[/]"
+            table.add_row(name, profile.model, status)
+
+        self._print_block(table, "Model Profiles", "cyan", "🤖")
         self.console.print("[dim]Use /model <name> to switch[/]")
-        self.console.print()
         return False
 
     def cmd_model(self, user_input: str):
