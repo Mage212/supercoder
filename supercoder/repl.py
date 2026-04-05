@@ -234,8 +234,8 @@ class SuperCoderREPL:
         # --- Streaming state ---
         is_streaming = False
         display_buffer = None
-        accumulated_display = ""  # All safe text received so far
-        _paragraphs_printed = 0  # Number of complete paragraphs already printed
+        accumulated_display = ""  # All safe text received so far (tags already stripped by buffer)
+        _printed_up_to = 0  # Character offset into accumulated_display up to which we've printed
 
         # --- Spinner (manual start/stop) ---
         spinner = self.console.status(
@@ -253,54 +253,62 @@ class SuperCoderREPL:
 
         def start_streaming():
             """Switch from spinner to paragraph streaming."""
-            nonlocal is_streaming, display_buffer, accumulated_display, _paragraphs_printed
+            nonlocal is_streaming, display_buffer, accumulated_display, _printed_up_to
             flush_reasoning()
             spinner.stop()
             display_buffer = StreamingDisplayBuffer(self.agent.tool_calling_type)
             accumulated_display = ""
-            _paragraphs_printed = 0
+            _printed_up_to = 0
             is_streaming = True
 
         def print_new_paragraphs():
-            """Print any newly completed paragraphs as Markdown."""
-            nonlocal _paragraphs_printed
-            # Split accumulated text into paragraphs by \n\n
-            parts = accumulated_display.split("\n\n")
-            # All except the last part are "complete" paragraphs
-            complete = parts[:-1]
-            # Print only NEW complete paragraphs
-            new_paragraphs = complete[_paragraphs_printed:]
-            for para in new_paragraphs:
-                if para.strip():
-                    self.console.print(Markdown(para))
-            _paragraphs_printed = len(complete)
+            """Print newly completed paragraphs as Markdown using offset tracking.
+
+            Uses character offset (_printed_up_to) into accumulated_display so that
+            leading/trailing empty strings from split() do not distort the count.
+            """
+            nonlocal _printed_up_to
+            unprinted = accumulated_display[_printed_up_to:]
+            if not unprinted:
+                return
+            # Find the last paragraph boundary in unprinted text
+            boundary = unprinted.rfind("\n\n")
+            if boundary > 0:
+                to_print = unprinted[:boundary]
+                if to_print.strip():
+                    self.console.print(Markdown(to_print))
+                _printed_up_to += boundary + 2  # advance past the \n\n
+            elif len(unprinted) >= 300:
+                # Very long paragraph — force-print at last line break
+                last_nl = unprinted.rfind("\n")
+                if last_nl > 0:
+                    to_print = unprinted[:last_nl]
+                    if to_print.strip():
+                        self.console.print(Markdown(to_print))
+                    _printed_up_to += last_nl + 1
 
         def stop_streaming():
             """Finalize streaming, print any remaining text."""
-            nonlocal is_streaming, display_buffer, accumulated_display, _paragraphs_printed
+            nonlocal is_streaming, display_buffer, accumulated_display, _printed_up_to
             if not is_streaming:
                 spinner.stop()
                 flush_reasoning()
                 return
 
-            # Flush remaining buffer content
+            # Flush any text still held in the buffer
             remaining = display_buffer.flush()
             accumulated_display += remaining
 
-            # Clean any residual tool call tags (safety net)
-            clean = self._filter_special_tokens(accumulated_display)
-
-            # Split the CLEAN text into paragraphs and print unprinted ones
-            parts = clean.split("\n\n")
-            # Skip already-printed paragraphs, print the rest
-            remaining_paragraphs = parts[_paragraphs_printed:]
-            for para in remaining_paragraphs:
-                if para.strip():
-                    self.console.print(Markdown(para))
+            # Print everything after the last printed offset.
+            # StreamingDisplayBuffer already stripped tool-call tags, so we do NOT
+            # call _filter_special_tokens here — that would destroy \n\n boundaries.
+            unprinted = accumulated_display[_printed_up_to:]
+            if unprinted.strip():
+                self.console.print(Markdown(unprinted))
 
             display_buffer = None
             accumulated_display = ""
-            _paragraphs_printed = 0
+            _printed_up_to = 0
             is_streaming = False
 
         # --- Event processing ---
@@ -348,7 +356,7 @@ class SuperCoderREPL:
                     if is_streaming:
                         display_buffer = None
                         accumulated_display = ""
-                        _paragraphs_printed = 0
+                        _printed_up_to = 0
                         is_streaming = False
                     spinner.stop()
                     reasoning_text = ""
@@ -358,15 +366,27 @@ class SuperCoderREPL:
 
                 elif event_type == "command_confirm":
                     stop_streaming()
+                    # Stop the keyboard listener: it holds the terminal in raw mode
+                    # which breaks sys.stdin.readline() used in the confirm prompt.
+                    if hasattr(self, "keyboard_listener"):
+                        self.keyboard_listener.stop()
                     approved = self._handle_command_confirm(content.get("command", ""))
                     content["result"]["approved"] = approved
+                    # Restart listener for the upcoming LLM turn
+                    if hasattr(self, "keyboard_listener"):
+                        self.keyboard_listener.start()
                     spinner.update("[bold blue]Running command...[/]")
                     spinner.start()
 
                 elif event_type == "command_waiting":
                     spinner.stop()
                     flush_reasoning()
+                    # Stop raw-mode listener before interactive stdin read
+                    if hasattr(self, "keyboard_listener"):
+                        self.keyboard_listener.stop()
                     self._handle_command_waiting(event)
+                    if hasattr(self, "keyboard_listener"):
+                        self.keyboard_listener.start()
                     spinner.start()
 
                 elif event_type == "done":
@@ -628,9 +648,9 @@ class SuperCoderREPL:
         )
         # Remove any remaining special markers
         text = re.sub(r"<\|[^|]+\|>", "", text)
-        # Clean up extra whitespace - collapse multiple newlines to single
-        text = re.sub(r"\n{2,}", "\n", text)
-        text = re.sub(r"  +", " ", text)
+        # Collapse 3+ consecutive newlines to 2 (preserve paragraph breaks for Markdown).
+        # Do NOT collapse \n\n → \n — that destroys Markdown paragraph structure.
+        text = re.sub(r"\n{3,}", "\n\n", text)
         return text.strip()
 
     def _display_tool_call(self, tool_call):
