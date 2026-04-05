@@ -235,7 +235,7 @@ class SuperCoderREPL:
         is_streaming = False
         display_buffer = None
         accumulated_display = ""  # All safe text received so far
-        _printed_len = 0  # How much of accumulated_display we've already printed
+        _paragraphs_printed = 0  # Number of complete paragraphs already printed
 
         # --- Spinner (manual start/stop) ---
         spinner = self.console.status(
@@ -253,42 +253,31 @@ class SuperCoderREPL:
 
         def start_streaming():
             """Switch from spinner to paragraph streaming."""
-            nonlocal is_streaming, display_buffer, accumulated_display, _printed_len
+            nonlocal is_streaming, display_buffer, accumulated_display, _paragraphs_printed
             flush_reasoning()
             spinner.stop()
             display_buffer = StreamingDisplayBuffer(self.agent.tool_calling_type)
             accumulated_display = ""
-            _printed_len = 0
+            _paragraphs_printed = 0
             is_streaming = True
 
         def print_new_paragraphs():
             """Print any newly completed paragraphs as Markdown."""
-            nonlocal _printed_len
-            unprinted = accumulated_display[_printed_len:]
-            if not unprinted:
-                return
-
-            # Find the last paragraph boundary (\n\n) in the unprinted portion
-            boundary = unprinted.rfind("\n\n")
-            if boundary > 0:
-                # Print everything up to and including the boundary
-                to_print = unprinted[:boundary]
-                if to_print.strip():
-                    self.console.print(Markdown(to_print))
-                _printed_len += boundary + 2  # skip past the \n\n
-            elif len(unprinted) >= 300:
-                # Very long paragraph without boundary — force print
-                # Find last line break as a lesser boundary
-                last_nl = unprinted.rfind("\n")
-                if last_nl > 0:
-                    to_print = unprinted[:last_nl]
-                    if to_print.strip():
-                        self.console.print(Markdown(to_print))
-                    _printed_len += last_nl + 1
+            nonlocal _paragraphs_printed
+            # Split accumulated text into paragraphs by \n\n
+            parts = accumulated_display.split("\n\n")
+            # All except the last part are "complete" paragraphs
+            complete = parts[:-1]
+            # Print only NEW complete paragraphs
+            new_paragraphs = complete[_paragraphs_printed:]
+            for para in new_paragraphs:
+                if para.strip():
+                    self.console.print(Markdown(para))
+            _paragraphs_printed = len(complete)
 
         def stop_streaming():
             """Finalize streaming, print any remaining text."""
-            nonlocal is_streaming, display_buffer, accumulated_display, _printed_len
+            nonlocal is_streaming, display_buffer, accumulated_display, _paragraphs_printed
             if not is_streaming:
                 spinner.stop()
                 flush_reasoning()
@@ -301,14 +290,17 @@ class SuperCoderREPL:
             # Clean any residual tool call tags (safety net)
             clean = self._filter_special_tokens(accumulated_display)
 
-            # Print everything that hasn't been printed yet
-            unprinted = clean[_printed_len:]
-            if unprinted.strip():
-                self.console.print(Markdown(unprinted))
+            # Split the CLEAN text into paragraphs and print unprinted ones
+            parts = clean.split("\n\n")
+            # Skip already-printed paragraphs, print the rest
+            remaining_paragraphs = parts[_paragraphs_printed:]
+            for para in remaining_paragraphs:
+                if para.strip():
+                    self.console.print(Markdown(para))
 
             display_buffer = None
             accumulated_display = ""
-            _printed_len = 0
+            _paragraphs_printed = 0
             is_streaming = False
 
         # --- Event processing ---
@@ -356,7 +348,7 @@ class SuperCoderREPL:
                     if is_streaming:
                         display_buffer = None
                         accumulated_display = ""
-                        _printed_len = 0
+                        _paragraphs_printed = 0
                         is_streaming = False
                     spinner.stop()
                     reasoning_text = ""
