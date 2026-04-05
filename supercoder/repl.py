@@ -371,7 +371,7 @@ class SuperCoderREPL:
                     if hasattr(self, "keyboard_listener"):
                         self.keyboard_listener.stop()
                     approved = self._handle_command_confirm(content.get("command", ""))
-                    content["result"]["approved"] = approved
+                    event["result"]["approved"] = approved
                     # Restart listener for the upcoming LLM turn
                     if hasattr(self, "keyboard_listener"):
                         self.keyboard_listener.start()
