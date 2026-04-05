@@ -50,12 +50,45 @@ def main(
     if max_context is not None:
         config.max_context_tokens = max_context
 
-    # Validate config
+    # Validate config — launch interactive wizard if API key is missing
     errors = config.validate()
     if errors:
-        for error in errors:
+        # Check if the only error is a missing API key (wizard can fix that)
+        api_key_errors = [e for e in errors if "API key" in e]
+        other_errors = [e for e in errors if "API key" not in e]
+
+        # Print non-fixable errors immediately
+        for error in other_errors:
             console.print(f"[red]Error: {error}[/]")
-        return
+        if other_errors:
+            return
+
+        if api_key_errors:
+            from .setup_wizard import run_setup_wizard
+
+            ok = run_setup_wizard()
+            if not ok:
+                return
+            # Reload config after successful setup
+            config = Config.load()
+            if model:
+                if not config.switch_to_model(model):
+                    config.model = model
+            if endpoint:
+                config.base_url = endpoint
+            if temperature is not None:
+                config.temperature = temperature
+            config.debug = debug
+            if max_context is not None:
+                config.max_context_tokens = max_context
+
+            # Re-validate — abort if still broken
+            remaining = config.validate()
+            if remaining:
+                for error in remaining:
+                    console.print(f"[red]Error: {error}[/]")
+                return
+
 
     # Initialize logger
     logger = init_logger(config.model)
