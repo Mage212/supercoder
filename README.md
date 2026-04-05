@@ -8,7 +8,18 @@
 
 ---
 
-## 🆕 What's New in v0.2.9
+## 🆕 What's New in v0.3.0
+
+- **Interactive Setup Wizard**: On first launch (or when no API key is configured), SuperCoder now starts an interactive TUI wizard instead of exiting with an error. The wizard lets you:
+  - Choose a provider from presets: OpenAI, OpenRouter, Anthropic (via OpenRouter), Ollama, or custom
+  - Pick a model from a curated list or type your own
+  - Set the context window size (32K / 128K / 200K / 8K / custom)
+  - Enter your API key securely (masked input)
+  - Review a summary and confirm before writing `~/.supercoder/config.yaml`
+  - Continue straight into the REPL — no restart needed
+- **Full Traceback Logging**: All exceptions are now logged with complete Python tracebacks to `~/.supercoder/logs/` (JSONL format), making it easy to debug issues post-mortem.
+
+### v0.2.9
 
 - **Enhanced Autocomplete**: Added intelligent autocompletion for slash commands and file paths using `prompt_toolkit`.
 - **Multiline Input Support**: 
@@ -96,8 +107,29 @@ cd supercoder
 uv sync --dev
 uv run supercoder
 ```
+### First Run — Interactive Setup
 
-### Configuration
+On first launch, if no config file or API key is found, SuperCoder automatically starts an interactive setup wizard:
+
+```
+╭──────────────────────────────────────────────────────╮
+│ 🚀 SuperCoder Setup                                  │
+│ No API key configured. Let's set up your provider!   │
+╰──────────────────────────────────────────────────────╯
+
+Choose a provider:
+  1. OpenAI           (https://api.openai.com/v1)
+  2. OpenRouter       (https://openrouter.ai/api/v1)
+  3. Anthropic via OR (https://openrouter.ai/api/v1)
+  4. Ollama (local)   (http://localhost:11434/v1)
+  5. Custom endpoint
+
+Provider (1): 2
+...
+✓ Configuration saved to: ~/.supercoder/config.yaml
+```
+
+After saving, the REPL starts immediately — no restart needed.
 
 SuperCoder supports multiple models and endpoints. Configure them via environment variables or a config file.
 
@@ -245,16 +277,17 @@ If the agent is stuck or generating unwanted code, you can press **ESC twice** q
 
 ```text
 supercoder/
-├── agent/          # CoderAgent logic and prompts
-├── context/        # Token counting, context window, and session management
-├── llm/            # LLM providers (OpenAI-compatible endpoints)
-├── repomap/        # Repository mapping logic (tree-sitter)
-├── tools/          # Core tools (Search, Edit, Structure, Exec)
-├── rules_loader.py # Supercoder Rules loading logic
-├── config.py       # Configuration management
-├── logging.py      # Conversation logging
-├── repl.py         # Interactive REPL interface
-└── main.py         # CLI entry point
+├── agent/            # CoderAgent logic and prompts
+├── context/          # Token counting, context window, and session management
+├── llm/              # LLM providers (OpenAI-compatible endpoints)
+├── repomap/          # Repository mapping logic (tree-sitter)
+├── tools/            # Core tools (Search, Edit, Structure, Exec)
+├── rules_loader.py   # Supercoder Rules loading logic
+├── config.py         # Configuration management
+├── logging.py        # Conversation logging (JSONL → ~/.supercoder/logs/)
+├── setup_wizard.py   # Interactive first-run setup wizard
+├── repl.py           # Interactive REPL interface
+└── main.py           # CLI entry point
 ```
 
 ---
