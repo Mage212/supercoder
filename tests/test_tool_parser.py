@@ -8,6 +8,7 @@ from supercoder.agent.tool_parser import (
     JsonBlockParser,
     QwenStyleParser,
     SupercoderTagParser,
+    SupercoderTagFallbackParser,
     ToolCallParser,
     XmlFunctionParser,
 )
@@ -153,11 +154,12 @@ class TestToolCallParser:
         formats = parser.supported_formats
 
         assert "supercoder_tag" in formats
+        assert "supercoder_tag_fallback" in formats
         assert "qwen_style" in formats
         assert "json_block" in formats
         assert "xml_function" in formats
         assert "glm_tool_call" in formats
-        assert len(formats) == 5  # Now 5 parsers including GLM
+        assert len(formats) == 6  # 6 parsers including fallback and GLM
 
 
 class TestGlmToolCallParser:
@@ -217,6 +219,55 @@ class TestGlmToolCallParser:
 """
         results = parser.parse_all(text)
         assert len(results) == 2
+
+
+class TestSupercoderTagFallbackParser:
+    """Regression tests for qwen3.5-4b failure modes."""
+
+    def test_missing_closing_tag(self):
+        """qwen3.5-4b sometimes omits </@TOOL> at end of response."""
+        parser = SupercoderTagFallbackParser()
+        text = '<@TOOL>{"name": "code-search", "arguments": {"query": "def", "maxResults": 50}}'
+        result = parser.try_parse(text)
+
+        assert result is not None
+        assert result.name == "code-search"
+        assert result.arguments["query"] == "def"
+        assert result.format_name == "supercoder_tag_fallback"
+
+    def test_no_activation_when_closing_tag_present(self):
+        """Fallback must not activate when main parser would match."""
+        parser = SupercoderTagFallbackParser()
+        text = '<@TOOL>{"name": "file-read", "arguments": {"path": "main.py"}}</@TOOL>'
+        result = parser.try_parse(text)
+        assert result is None  # let SupercoderTagParser handle it
+
+    def test_waterfall_picks_up_missing_closing_tag(self):
+        """ToolCallParser should use fallback when closing tag absent."""
+        parser = ToolCallParser()
+        text = '<@TOOL>{"name": "code-search", "arguments": {"query": "def"}}'
+        result = parser.parse(text)
+
+        assert result is not None
+        assert result.name == "code-search"
+
+    def test_extra_gt_before_closing_tag(self):
+        """qwen3.5-4b sometimes emits '}></@TOOL>' instead of '}</@TOOL>'."""
+        parser = SupercoderTagParser()
+        text = '<@TOOL>{"name": "file-create", "arguments": {"fileName": "config.py"}}></@TOOL>'
+        result = parser.try_parse(text)
+
+        assert result is not None
+        assert result.name == "file-create"
+
+    def test_single_quote_strings_repaired(self):
+        """qwen3.5-4b uses single-quoted JSON strings instead of double."""
+        parser = ToolCallParser()
+        text = "<@TOOL>{\"name\": \"file-create\", \"arguments\": {\"content\": 'print(\"Hello\")'}}</@TOOL>"
+        result = parser.parse(text)
+
+        assert result is not None
+        assert result.name == "file-create"
 
 
 if __name__ == "__main__":

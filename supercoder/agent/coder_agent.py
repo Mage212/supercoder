@@ -266,6 +266,22 @@ class CoderAgent:
                     name = tool_call_data.get("name", "")
                     args = tool_call_data.get("arguments", "")
 
+                    # Normalize invented tool names that small models hallucinate
+                    TOOL_ALIASES: dict[str, str] = {
+                        "file-create": "code-edit",   # qwen3.5 invents this
+                        "file-write": "code-edit",
+                        "create-file": "code-edit",
+                        "write-file": "code-edit",
+                        "file_read": "file-read",      # underscore variants
+                        "file_edit": "code-edit",
+                        "code_edit": "code-edit",
+                        "code_search": "code-search",
+                        "run-command": "command-exec",
+                        "run_command": "command-exec",
+                        "execute": "command-exec",
+                    }
+                    name = TOOL_ALIASES.get(name, name)
+
                     if name == "code-edit":
                         has_file_edits = True
 

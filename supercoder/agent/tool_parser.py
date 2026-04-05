@@ -29,6 +29,8 @@ def _repair_json(text: str) -> str:
     out: list[str] = []
     in_string = False
     escape_next = False
+    # Track single-quote strings (Python/JS style) to convert to double-quote
+    in_single_string = False
 
     for ch in text:
         if escape_next:
@@ -36,14 +38,38 @@ def _repair_json(text: str) -> str:
             escape_next = False
             continue
 
-        if ch == '\\' and in_string:
+        if ch == '\\' and (in_string or in_single_string):
             out.append(ch)
             escape_next = True
+            continue
+
+        if in_single_string:
+            if ch == "'":
+                # End of single-quoted string — emit closing double quote
+                out.append('"')
+                in_single_string = False
+            elif ch == '"':
+                # Escape double quotes inside single-quoted strings
+                out.append('\\"')
+            elif ch == '\n':
+                out.append('\\n')
+            elif ch == '\r':
+                out.append('\\r')
+            elif ch == '\t':
+                out.append('\\t')
+            else:
+                out.append(ch)
             continue
 
         if ch == '"':
             in_string = not in_string
             out.append(ch)
+            continue
+
+        if not in_string and ch == "'":
+            # Single-quoted string — convert to double-quoted
+            in_single_string = True
+            out.append('"')
             continue
 
         if in_string:
@@ -152,7 +178,8 @@ class SupercoderTagParser(BaseToolParser):
     """
 
     name = "supercoder_tag"
-    pattern = re.compile(r"<@TOOL>(.*?)</@TOOL>", re.DOTALL)
+    # Accept optional '>' between closing brace and </@TOOL> — some models emit '}></@TOOL>'
+    pattern = re.compile(r"<@TOOL>(.*?)>?</@TOOL>", re.DOTALL)
 
     def try_parse(self, text: str) -> ToolCall | None:
         match = self.pattern.search(text)
@@ -191,6 +218,49 @@ class SupercoderTagParser(BaseToolParser):
                 continue
 
         return results
+
+
+class SupercoderTagFallbackParser(BaseToolParser):
+    """Fallback for <@TOOL>{...} without closing </@TOOL> tag.
+
+    Some models (qwen3.5-4b) emit the opening tag but cut off the response
+    before writing </@TOOL>. This parser extracts a balanced JSON object
+    after <@TOOL> even if no closing tag is present.
+    """
+
+    name = "supercoder_tag_fallback"
+    _opener = re.compile(r"<@TOOL>")
+
+    def try_parse(self, text: str) -> ToolCall | None:
+        match = self._opener.search(text)
+        if not match:
+            return None
+        # Don't activate if a closing tag is present — let the main parser handle it
+        if "</@TOOL>" in text:
+            return None
+
+        start = text.find("{", match.end())
+        if start < 0:
+            return None
+
+        json_text = _extract_balanced_json(text, start)
+        if not json_text:
+            return None
+
+        try:
+            data = _safe_json_loads(json_text)
+            return ToolCall(
+                name=data.get("name", ""),
+                arguments=data.get("arguments", ""),
+                raw_match=text[match.start(): start + len(json_text)],
+                format_name=self.name,
+            )
+        except (json.JSONDecodeError, KeyError):
+            return None
+
+    def try_parse_all(self, text: str) -> list[ToolCall]:
+        result = self.try_parse(text)
+        return [result] if result else []
 
 
 class QwenStyleParser(BaseToolParser):
@@ -394,11 +464,12 @@ class ToolCallParser:
         self.debug = debug
         # Parsers in priority order - matching our supported tool_calling_types
         self.parsers: list[BaseToolParser] = [
-            SupercoderTagParser(),  # tool_calling_type: supercoder
-            QwenStyleParser(),  # tool_calling_type: qwen_like
-            JsonBlockParser(),  # tool_calling_type: json_block
-            XmlFunctionParser(),  # tool_calling_type: xml_function
-            GlmToolCallParser(),  # tool_calling_type: glm_tool_call
+            SupercoderTagParser(),          # tool_calling_type: supercoder (complete tags)
+            SupercoderTagFallbackParser(),  # same, but without closing </@TOOL> tag
+            QwenStyleParser(),              # tool_calling_type: qwen_like
+            JsonBlockParser(),              # tool_calling_type: json_block
+            XmlFunctionParser(),            # tool_calling_type: xml_function
+            GlmToolCallParser(),            # tool_calling_type: glm_tool_call
         ]
 
     def parse(self, text: str) -> ToolCall | None:
