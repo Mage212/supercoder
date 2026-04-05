@@ -220,9 +220,13 @@ class SuperCoderREPL:
 
         Uses a state machine to transition between:
         - SPINNER: waiting for LLM response (console.status)
-        - STREAMING: live markdown rendering (MarkdownStream + StreamingDisplayBuffer)
+        - STREAMING: live markdown rendering (Live + StreamingDisplayBuffer)
         """
-        from .mdstream import MarkdownStream
+        import time
+
+        from rich.live import Live
+        from rich.padding import Padding
+
         from .streaming_buffer import StreamingDisplayBuffer
 
         # Buffers
@@ -234,9 +238,11 @@ class SuperCoderREPL:
 
         # --- Streaming state ---
         is_streaming = False
-        md_stream = None
+        live_display = None
         display_buffer = None
-        accumulated_display = ""  # All safe text sent to md_stream so far
+        accumulated_display = ""  # All safe text sent to Live so far
+        _last_update = 0.0  # Throttle timestamp
+        _MIN_UPDATE_INTERVAL = 0.05  # 20fps max
 
         # --- Spinner (manual start/stop — avoids context manager conflict with Live) ---
         spinner = self.console.status(
@@ -254,17 +260,39 @@ class SuperCoderREPL:
 
         def start_streaming():
             """Switch from spinner to live markdown streaming."""
-            nonlocal is_streaming, md_stream, display_buffer, accumulated_display
+            nonlocal is_streaming, live_display, display_buffer, accumulated_display
             flush_reasoning()
             spinner.stop()
-            md_stream = MarkdownStream()
+            live_display = Live(
+                Text(""),
+                console=self.console,
+                refresh_per_second=15,
+                vertical_overflow="visible",
+            )
+            live_display.start()
             display_buffer = StreamingDisplayBuffer(self.agent.tool_calling_type)
             accumulated_display = ""
             is_streaming = True
 
+        def update_live(text: str, final: bool = False):
+            """Update the Live display with rendered markdown."""
+            nonlocal _last_update
+            if not text.strip() and not final:
+                return
+
+            now = time.time()
+            # Throttle non-final updates
+            if not final and (now - _last_update) < _MIN_UPDATE_INTERVAL:
+                return
+            _last_update = now
+
+            md = Markdown(text)
+            # Add slight left padding for visual alignment
+            live_display.update(Padding(md, (0, 0, 0, 1)))
+
         def stop_streaming():
             """Finalize streaming display, clean up."""
-            nonlocal is_streaming, md_stream, display_buffer, accumulated_display
+            nonlocal is_streaming, live_display, display_buffer, accumulated_display
             if not is_streaming:
                 spinner.stop()
                 flush_reasoning()
@@ -277,12 +305,10 @@ class SuperCoderREPL:
             # Clean any residual tool call tags (safety net)
             clean = self._filter_special_tokens(accumulated_display)
             if clean.strip():
-                md_stream.update(clean, final=True)
-            else:
-                # Nothing to show — still need to stop the Live display
-                md_stream.update("", final=True)
+                update_live(clean, final=True)
 
-            md_stream = None
+            live_display.stop()
+            live_display = None
             display_buffer = None
             accumulated_display = ""
             is_streaming = False
@@ -306,7 +332,7 @@ class SuperCoderREPL:
                     chunk = display_buffer.add(content)
                     if chunk:
                         accumulated_display += chunk
-                        md_stream.update(accumulated_display)
+                        update_live(accumulated_display)
 
                 elif event_type == "tool_call":
                     stop_streaming()
@@ -329,10 +355,9 @@ class SuperCoderREPL:
 
                 elif event_type == "aborted":
                     was_aborted = True
-                    if is_streaming:
-                        # Discard — data may be corrupted
-                        md_stream.update("", final=True)
-                        md_stream = None
+                    if is_streaming and live_display:
+                        live_display.stop()
+                        live_display = None
                         display_buffer = None
                         accumulated_display = ""
                         is_streaming = False
@@ -359,13 +384,10 @@ class SuperCoderREPL:
                     stop_streaming()
 
         except Exception:
-            # Log the unexpected error before cleanup
-            from .logging import get_logger
-            get_logger().log_exception("Unexpected error in _handle_chat")
             # Ensure Live display is cleaned up on unexpected errors
-            if is_streaming and md_stream:
+            if is_streaming and live_display:
                 try:
-                    md_stream.update("", final=True)
+                    live_display.stop()
                 except Exception:
                     pass
             raise
