@@ -106,6 +106,7 @@ class CoderAgent:
             except Exception as e:
                 if self.debug:
                     console.print(f"[red]Error generating RepoMap: {e}[/]")
+                get_logger().log_error(e)
 
         self.context.set_system_prompt(prompt)
         # Log the updated system prompt
@@ -238,6 +239,7 @@ class CoderAgent:
                 return
 
             except Exception as e:
+                get_logger().log_error(e)
                 if checkpoint_active:
                     restored = self.checkpoint_manager.rollback()
                     if restored:
@@ -339,6 +341,7 @@ class CoderAgent:
                         get_logger().log_tool_result(name, result)
                         all_results.append(f"[{name}]: {result}")
                     except Exception as e:
+                        get_logger().log_error(e)
                         result = f"Error executing tool: {e}"
                         yield {"type": "error", "content": result}
                         all_results.append(f"[{name}]: {result}")
@@ -475,6 +478,7 @@ class CoderAgent:
         try:
             summary = self.llm.chat(summary_messages)
         except Exception as e:
+            get_logger().log_error(e)
             return (f"Error generating summary: {e}", stats_before, stats_before)
 
         # Clear history and set summary as initial context

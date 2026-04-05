@@ -359,6 +359,9 @@ class SuperCoderREPL:
                     stop_streaming()
 
         except Exception:
+            # Log the unexpected error before cleanup
+            from .logging import get_logger
+            get_logger().log_exception("Unexpected error in _handle_chat")
             # Ensure Live display is cleaned up on unexpected errors
             if is_streaming and md_stream:
                 try:

@@ -93,7 +93,8 @@ pip install git+https://github.com/Mage212/supercoder.git
 ```bash
 git clone https://github.com/Mage212/supercoder.git
 cd supercoder
-pip install -e .
+uv sync --dev
+uv run supercoder
 ```
 
 ### Configuration
@@ -178,9 +179,12 @@ supercoder
 
 ```bash
 supercoder --help
-supercoder --model gpt-4o          # Use specific model
-supercoder --debug                 # Enable debug mode
-supercoder --no-repo-map           # Disable RepoMap
+supercoder --model gpt-4o              # Use specific model or profile name
+supercoder --endpoint http://...       # Override LLM API endpoint
+supercoder --temperature 0.5           # Override temperature
+supercoder --debug                     # Enable debug mode
+supercoder --no-repo-map               # Disable RepoMap
+supercoder --max-context 16000         # Override context token limit
 ```
 
 ### Slash Commands
@@ -188,8 +192,9 @@ supercoder --no-repo-map           # Disable RepoMap
 | Command | Description |
 |---------|-------------|
 | `/ask` | Switch to Ask mode (Q&A without edits) |
-| `/ask <question>` | Ask one question without editing, then return |
+| `/ask <question>` | Ask one question without editing, then return to previous mode |
 | `/code` | Switch to Code mode (full editing) |
+| `/code <request>` | Execute one request in code mode, then return to previous mode |
 | `/undo` | Revert changes to a specific checkpoint |
 | `/help` | Show available commands |
 | `/continue` | Resume a previous session |
@@ -217,6 +222,16 @@ Every user message that leads to a file modification creates a new **Checkpoint*
 - **Created Files**: Tracked and automatically deleted on rollback.
 - **Rotation**: Automatically keeps only the last 10 checkpoints to save space.
 - **Self-Healing**: Incomplete or orphaned checkpoint directories are automatically cleaned on startup.
+
+### Command Execution Confirmation
+Before running any shell command, SuperCoder pauses and asks for explicit approval:
+```
+⚡ Run Command?
+Command:
+  <the command to execute>
+Allow? [y/N]>
+```
+This prevents the agent from running unintended or destructive shell commands without user consent.
 
 ### Interruption (ESC-ESC)
 If the agent is stuck or generating unwanted code, you can press **ESC twice** quickly.
@@ -255,6 +270,7 @@ supercoder/
 - `tree-sitter-languages` — Code parsing for RepoMap
 - `tiktoken` — Token counting
 - `pyyaml` — Configuration files
+- `questionary` — Interactive terminal prompts
 
 ---
 

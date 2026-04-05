@@ -88,6 +88,7 @@ def main(
         )
         agent.set_debug(debug)
     except Exception as e:
+        logger.log_error(e)
         console.print(f"[red]Failed to initialize: {e}[/]")
         return
 

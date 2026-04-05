@@ -1,6 +1,7 @@
 """Conversation logging for debugging and analysis."""
 
 import json
+import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -162,17 +163,42 @@ class ConversationLogger:
             }
         )
 
-    def log_error(self, error: str) -> None:
-        """Log error."""
+    def log_error(self, error: str | Exception, *, include_traceback: bool = True) -> None:
+        """Log error with optional full traceback.
+
+        Args:
+            error: Error message string or Exception object.
+            include_traceback: If True and error is an Exception, include full traceback.
+        """
         if not self.enabled:
             return
-        self._write_entry(
-            {
-                "type": "error",
-                "error": error,
-                "timestamp": datetime.now().isoformat(),
-            }
-        )
+        entry: dict[str, Any] = {
+            "type": "error",
+            "error": str(error),
+            "timestamp": datetime.now().isoformat(),
+        }
+        if include_traceback and isinstance(error, BaseException):
+            entry["traceback"] = traceback.format_exception(error)
+        self._write_entry(entry)
+
+    def log_exception(self, context: str = "") -> None:
+        """Log the current exception with full traceback.
+
+        Call this from inside an except block to capture the active exception.
+
+        Args:
+            context: Optional description of where the error occurred.
+        """
+        if not self.enabled:
+            return
+        tb = traceback.format_exc()
+        entry: dict[str, Any] = {
+            "type": "error",
+            "error": context or "Unhandled exception",
+            "traceback": tb,
+            "timestamp": datetime.now().isoformat(),
+        }
+        self._write_entry(entry)
 
     def _write_entry(self, entry: dict) -> None:
         """Write a log entry to file."""
