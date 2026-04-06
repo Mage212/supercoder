@@ -217,7 +217,118 @@ class SuperCoderREPL:
         self.console.print("[green]Goodbye![/]")
 
     def _handle_chat(self, message):
+        """Handle chat interaction — dispatches to native or streaming handler."""
+        if self.agent.streaming:
+            return self._handle_chat_streaming(message)
+        return self._handle_chat_native(message)
+
+    def _handle_chat_native(self, message):
+        """Handle chat using native API tool calls (non-streaming).
+
+        Clean and simple: receives complete responses from chat_turn(),
+        no streaming buffer, no tag filtering, no paragraph boundary detection.
+        """
+        errors = []
+        rollback_info = None
+        touched_files = set()
+
+        spinner = self.console.status(
+            "[bold blue]SuperCoder is thinking...[/]", spinner="dots"
+        )
+        spinner.start()
+
+        # Setup keyboard listener for ESC (between-iteration abort only)
+        if hasattr(self, "keyboard_listener"):
+            self.keyboard_listener.start()
+
+        try:
+            for event in self.agent.chat_turn(message):
+                event_type = event.get("type")
+                content = event.get("content")
+
+                if event_type == "thinking":
+                    spinner.stop()
+                    self._print_block(content.strip(), "Reasoning", "magenta", "💭")
+                    spinner.update("[bold blue]SuperCoder is thinking...[/]")
+                    spinner.start()
+
+                elif event_type == "response":
+                    spinner.stop()
+                    # Full response — render as Markdown
+                    self.console.print(Markdown(content))
+                    spinner.update("[bold blue]SuperCoder is thinking...[/]")
+                    spinner.start()
+
+                elif event_type == "tool_call":
+                    spinner.stop()
+                    self._display_tool_call(content)
+                    self._track_files(content, touched_files)
+                    name = content.get("name", "tool")
+                    spinner.update(f"[bold blue]Executing {name}...[/]")
+                    spinner.start()
+
+                elif event_type == "tool_result":
+                    spinner.stop()
+                    self._display_tool_result(content)
+                    spinner.update("[bold blue]SuperCoder is thinking...[/]")
+                    spinner.start()
+
+                elif event_type == "error":
+                    errors.append(content)
+
+                elif event_type == "rollback":
+                    rollback_info = content
+
+                elif event_type == "command_confirm":
+                    spinner.stop()
+                    if hasattr(self, "keyboard_listener"):
+                        self.keyboard_listener.stop()
+                    approved = self._handle_command_confirm(content.get("command", ""))
+                    event["result"]["approved"] = approved
+                    if hasattr(self, "keyboard_listener"):
+                        self.keyboard_listener.start()
+                    spinner.update("[bold blue]Running command...[/]")
+                    spinner.start()
+
+                elif event_type == "command_waiting":
+                    spinner.stop()
+                    if hasattr(self, "keyboard_listener"):
+                        self.keyboard_listener.stop()
+                    self._handle_command_waiting(event)
+                    if hasattr(self, "keyboard_listener"):
+                        self.keyboard_listener.start()
+                    spinner.start()
+
+                elif event_type == "done":
+                    spinner.stop()
+
+        except Exception:
+            raise
+        finally:
+            spinner.stop()
+            if hasattr(self, "keyboard_listener"):
+                self.keyboard_listener.stop()
+
+        # === Post-processing ===
+        if rollback_info:
+            files = rollback_info.get("files", [])
+            reason = rollback_info.get("reason", "Unknown")
+            rollback_content = f"[dim]Reason: {reason}[/]\n" + "\n".join(
+                f"  ✓ Restored: {f}" for f in files
+            )
+            self._print_block(rollback_content, "Files Rolled Back", "cyan", "↩")
+
+        for error in errors:
+            self._print_block(f"[red]{error}[/]", "Error", "red", "❌")
+
+        self._display_status_footer(touched_files)
+        self.console.print(Rule(style="dim grey50"))
+
+    def _handle_chat_streaming(self, message):
         """Handle chat interaction with streaming output.
+
+        .. deprecated::
+            Use ``_handle_chat_native()`` instead. Streaming mode is deprecated.
 
         Uses a state machine to transition between:
         - SPINNER: waiting for LLM response (console.status)

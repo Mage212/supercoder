@@ -46,11 +46,34 @@ class CodeEditTool(BaseTool):
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             name="code-edit",
-            description="""Edit code. Operations:
-- search_replace: {"filepath": "...", "operation": "search_replace", "search": "old", "replace": "new"}
-- insert_after: {"filepath": "...", "operation": "insert_after", "after": "line", "content": "new"}
-- replace_lines: {"filepath": "...", "operation": "replace_lines", "startLine": N, "endLine": M, "content": "new"}
-- create: {"filepath": "...", "operation": "create", "content": "file content"}""",
+            description=(
+                "Edit code files. Operations: "
+                "search_replace (find and replace text), "
+                "insert_after (insert content after a matching line), "
+                "insert_before (insert content before a matching line), "
+                "replace_lines (replace a line range), "
+                "append (append to end of file), "
+                "create (create a new file)."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "filepath": {"type": "string", "description": "Path to the file to edit or create"},
+                    "operation": {
+                        "type": "string",
+                        "description": "Edit operation to perform",
+                        "enum": ["search_replace", "insert_after", "insert_before", "replace_lines", "append", "create"],
+                    },
+                    "search": {"type": "string", "description": "Text to find (for search_replace)"},
+                    "replace": {"type": "string", "description": "Replacement text (for search_replace)"},
+                    "after": {"type": "string", "description": "Line to insert after (for insert_after)"},
+                    "before": {"type": "string", "description": "Line to insert before (for insert_before)"},
+                    "content": {"type": "string", "description": "New content (for create, insert_after, insert_before, replace_lines, append)"},
+                    "startLine": {"type": "integer", "description": "Start line number (for replace_lines)"},
+                    "endLine": {"type": "integer", "description": "End line number (for replace_lines)"},
+                },
+                "required": ["filepath", "operation"],
+            },
         )
 
     def execute(self, arguments: str) -> str:

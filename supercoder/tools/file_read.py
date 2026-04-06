@@ -15,7 +15,17 @@ class FileReadTool(BaseTool):
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             name="file-read",
-            description='Read a file. Args: {"fileName": "path", "startLine": N, "endLine": M, "maxLines": 100}',
+            description="Read a file with optional line range.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "fileName": {"type": "string", "description": "Path to the file to read"},
+                    "startLine": {"type": "integer", "description": "Start line (1-indexed)", "default": 1},
+                    "endLine": {"type": "integer", "description": "End line (1-indexed, inclusive)"},
+                    "maxLines": {"type": "integer", "description": "Maximum lines to return", "default": 200},
+                },
+                "required": ["fileName"],
+            },
         )
 
     def execute(self, arguments: str) -> str:

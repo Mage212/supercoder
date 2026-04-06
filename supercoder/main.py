@@ -23,6 +23,10 @@ console = Console()
     "--max-context", "-c", type=int, default=None, help="Max context tokens (default: from config)"
 )
 @click.option("--repo-map/--no-repo-map", default=True, help="Enable/disable RepoMap")
+@click.option(
+    "--stream/--no-stream", default=False,
+    help="Enable deprecated streaming mode (default: off, uses native tool calls)",
+)
 @click.version_option(version=__version__)
 def main(
     model: str,
@@ -31,6 +35,7 @@ def main(
     temperature: float | None,
     max_context: int,
     repo_map: bool,
+    stream: bool,
 ):
     """SuperCoder - AI Coding Assistant for the Terminal."""
 
@@ -111,13 +116,21 @@ def main(
         profile = config.get_model_profile(config.current_profile_name)
         tool_calling_type = profile.tool_calling_type if profile else "supercoder"
 
+        # Resolve streaming mode: CLI flag > model profile > global config
+        use_streaming = stream  # CLI flag takes precedence
+        if not stream and profile and profile.streaming:
+            use_streaming = profile.streaming
+        if not use_streaming:
+            use_streaming = config.streaming
+
         agent = CoderAgent(
             llm,
             tools=ALL_TOOLS,
             context_config=context_config,
             use_repo_map=repo_map,
-            repo_root=".",  # Default to current directory
+            repo_root=".",
             tool_calling_type=tool_calling_type,
+            streaming=use_streaming,
         )
         agent.set_debug(debug)
     except Exception as e:

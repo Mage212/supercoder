@@ -48,24 +48,32 @@ Create a summary in this format:
 
 
 def build_system_prompt(
-    tools: list, rules: str = "", tool_calling_type: str = "supercoder", mode_suffix: str = ""
+    tools: list, rules: str = "", tool_calling_type: str = "supercoder",
+    mode_suffix: str = "", native_tools: bool = False,
 ) -> str:
     """Build system prompt with available tools and project rules.
 
     Args:
         tools: List of available tools.
         rules: Optional project-specific rules to include.
-        tool_calling_type: Type of tool calling format to use in instructions.
-                          Valid: supercoder, qwen_like, json_block, xml_function
+        tool_calling_type: Type of tool calling format (only used when native_tools=False).
         mode_suffix: Additional prompt suffix for specific modes (e.g., ask mode).
+        native_tools: If True, tools are passed via API — skip verbose format instructions.
     """
     if not tools:
         tool_list = "(no tools available yet)"
     else:
         tool_list = "\n".join(f"- {t.definition.name}: {t.definition.description}" for t in tools)
 
-    # Get tool calling instructions for this model type
-    tool_calling_instructions = get_tool_calling_prompt(tool_calling_type)
+    # Get tool calling instructions
+    if native_tools:
+        # Tools are passed via the API `tools` parameter — minimal prompt
+        tool_calling_instructions = (
+            "You have access to tools. Call them when needed to accomplish the task. "
+            "The system handles tool execution and returns results automatically."
+        )
+    else:
+        tool_calling_instructions = get_tool_calling_prompt(tool_calling_type)
 
     prompt = SYSTEM_PROMPT.format(
         tools=tool_list, tool_calling_instructions=tool_calling_instructions

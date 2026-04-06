@@ -1,5 +1,10 @@
 """Streaming markdown renderer that progressively displays content.
 
+.. deprecated::
+    This module is only used in legacy streaming mode (``streaming: true``).
+    Native mode renders complete responses as Markdown.
+    Will be removed in a future version.
+
 Adapted from Aider's mdstream.py - provides smooth live-updating markdown output
 using Rich's Live display with a sliding window approach.
 """

@@ -1,5 +1,10 @@
 """Tool calling prompt templates for different model types.
 
+.. deprecated::
+    This module is only used in legacy streaming mode (``streaming: true``).
+    Native mode passes tool schemas via the API ``tools`` parameter.
+    Will be removed in a future version.
+
 Each model may expect tools to be called in a specific format.
 This module provides format-specific instructions that are injected
 into the system prompt based on the model's `tool_calling_type`.

@@ -1,5 +1,10 @@
 """Multi-format tool call parser.
 
+.. deprecated::
+    This module is only used in legacy streaming mode (``streaming: true``).
+    Native mode uses structured ``tool_calls`` from the API response.
+    Will be removed in a future version.
+
 Supports tool calling formats based on model's tool_calling_type configuration:
 1. Our native format: <@TOOL>{"name": "...", "arguments": "..."}</@TOOL>
 2. Qwen-style: to=tool:name {...}

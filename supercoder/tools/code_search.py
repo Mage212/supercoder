@@ -12,7 +12,16 @@ class CodeSearchTool(BaseTool):
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             name="code-search",
-            description='Search code. Args: {"query": "pattern", "maxResults": 10, "filePattern": "*.py"}',
+            description="Search for code patterns in the project using git grep.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search pattern (text or regex)"},
+                    "maxResults": {"type": "integer", "description": "Maximum number of matches to return", "default": 10},
+                    "filePattern": {"type": "string", "description": "Glob pattern to filter files, e.g. '*.py'"},
+                },
+                "required": ["query"],
+            },
         )
 
     def execute(self, arguments: str) -> str:

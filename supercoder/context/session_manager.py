@@ -23,19 +23,40 @@ class ChatSession:
 
     def to_dict(self) -> dict[str, Any]:
         """Convert session to dictionary for JSON serialization."""
+        serialized_messages = []
+        for msg in self.messages:
+            m: dict[str, Any] = {"role": msg.role, "content": msg.content}
+            if msg.tool_calls:
+                m["tool_calls"] = msg.tool_calls
+            if msg.tool_call_id:
+                m["tool_call_id"] = msg.tool_call_id
+            if msg.name:
+                m["name"] = msg.name
+            serialized_messages.append(m)
+
         return {
             "id": self.id,
             "title": self.title,
             "created_at": self.created_at,
             "last_modified": self.last_modified,
             "is_compacted": self.is_compacted,
-            "messages": [{"role": msg.role, "content": msg.content} for msg in self.messages],
+            "messages": serialized_messages,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ChatSession":
         """Create session from dictionary."""
-        messages = [Message(role=m["role"], content=m["content"]) for m in data.get("messages", [])]
+        messages = []
+        for m in data.get("messages", []):
+            messages.append(
+                Message(
+                    role=m["role"],
+                    content=m["content"],
+                    tool_calls=m.get("tool_calls"),
+                    tool_call_id=m.get("tool_call_id"),
+                    name=m.get("name"),
+                )
+            )
         return cls(
             id=data["id"],
             title=data.get("title", "Untitled"),
@@ -109,7 +130,9 @@ class SessionManager:
         user_messages = [
             m
             for m in session.messages
-            if m.role == "user" and not m.content.startswith("<@TOOL_RESULT>")
+            if m.role == "user"
+            and not m.content.startswith("<@TOOL_RESULT>")
+            and not m.content.startswith("[Previous Context")
         ]
         if user_messages:
             last_msg = user_messages[-1].content

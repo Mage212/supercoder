@@ -1,5 +1,10 @@
 """Streaming display buffer with safe-prefix tag detection.
 
+.. deprecated::
+    This module is only used in legacy streaming mode (``streaming: true``).
+    Native tool calling mode does not require tag filtering.
+    Will be removed in a future version.
+
 Ensures tool call tags (e.g. <@TOOL>...</@TOOL>) are never shown to the user
 during live markdown streaming. Only "safe" text — guaranteed free of tool call
 markup — is released for display.

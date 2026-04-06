@@ -37,7 +37,15 @@ class ProjectStructureTool(BaseTool):
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             name="project-structure",
-            description='Show project structure. Args: {"maxDepth": 3, "maxFiles": 50, "path": "."}',
+            description="Show the project directory tree structure.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Root path to show structure from", "default": "."},
+                    "maxDepth": {"type": "integer", "description": "Maximum directory depth", "default": 3},
+                    "maxFiles": {"type": "integer", "description": "Maximum number of files to show", "default": 50},
+                },
+            },
         )
 
     def execute(self, arguments: str) -> str:

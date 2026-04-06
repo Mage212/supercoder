@@ -47,6 +47,7 @@ max_context_tokens: 32000  # Default context limit (used if model doesn't specif
 reserved_for_response: 4096
 request_timeout: 60.0
 debug: false
+streaming: false  # DEPRECATED — native tool calls used by default. Set to true for legacy streaming mode.
 """
 
 
@@ -79,6 +80,7 @@ class ModelProfile:
         "supercoder"  # supercoder, qwen_like, json_block, xml_function, glm_tool_call
     )
     max_context_tokens: int | None = None  # None = use global default
+    streaming: bool = False  # DEPRECATED — legacy streaming mode
 
     @property
     def base_url(self) -> str:
@@ -102,6 +104,7 @@ class Config:
     max_context_tokens: int = 32000
     reserved_for_response: int = 4096
     request_timeout: float = 60.0
+    streaming: bool = False  # DEPRECATED — native tool calls by default
 
     # Multi-model support
     default_model: str = "default"

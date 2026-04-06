@@ -67,7 +67,15 @@ class CommandExecutionTool(BaseTool):
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             name="command-exec",
-            description='Execute shell command. Args: {"command": "ls -la", "timeout": 60}',
+            description="Execute a shell command and return its output.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "Shell command to execute"},
+                    "timeout": {"type": "integer", "description": "Timeout in seconds (max 120)", "default": 60},
+                },
+                "required": ["command"],
+            },
         )
 
     def execute(self, arguments: str) -> str:

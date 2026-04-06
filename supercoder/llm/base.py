@@ -2,20 +2,67 @@
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
 class Message:
-    """Chat message."""
+    """Chat message.
 
-    role: str  # "system", "user", "assistant"
+    Supports standard roles (system, user, assistant) and native tool calling:
+    - Assistant messages with tool calls: set ``tool_calls`` to the raw API list.
+    - Tool result messages: set ``role="tool"``, ``tool_call_id``, and ``name``.
+    """
+
+    role: str  # "system", "user", "assistant", "tool"
     content: str
+    # For assistant messages that contain tool calls (raw API format)
+    tool_calls: list[dict] | None = field(default=None, repr=False)
+    # For tool result messages (role="tool")
+    tool_call_id: str | None = None
+    name: str | None = None  # tool name (used with role="tool")
+
+    def to_api_dict(self) -> dict:
+        """Serialize to a dict suitable for the OpenAI messages array."""
+        d: dict[str, Any] = {"role": self.role, "content": self.content}
+        if self.tool_calls:
+            d["tool_calls"] = self.tool_calls
+        if self.tool_call_id:
+            d["tool_call_id"] = self.tool_call_id
+        if self.name and self.role == "tool":
+            d["name"] = self.name
+        return d
+
+
+@dataclass
+class NativeToolCall:
+    """A single tool call extracted from the API response."""
+
+    id: str  # tool_call ID from API (required for multi-turn)
+    name: str
+    arguments: dict
+
+
+@dataclass
+class CompletionResult:
+    """Structured response from LLM (non-streaming)."""
+
+    content: str  # Text part of the response
+    tool_calls: list[NativeToolCall]  # Native tool calls (already parsed dicts)
+    reasoning: str = ""  # Reasoning / thinking content (GLM, DeepSeek, etc.)
+    raw_tool_calls: list[dict] | None = field(
+        default=None, repr=False
+    )  # Raw API tool_calls for context
 
 
 @dataclass
 class StreamChunk:
-    """Streaming response chunk."""
+    """Streaming response chunk.
+
+    .. deprecated::
+        Streaming mode is deprecated. Use ``chat_with_tools()`` instead.
+    """
 
     content: str
     reasoning: str = ""  # For reasoning_content (GLM, DeepSeek, etc.)
@@ -33,6 +80,27 @@ class BaseLLM(ABC):
         pass
 
     @abstractmethod
+    def chat_with_tools(
+        self,
+        messages: list[Message],
+        tools: list[dict] | None = None,
+    ) -> CompletionResult:
+        """Send messages with native tool support (non-streaming).
+
+        Args:
+            messages: Conversation history.
+            tools: OpenAI-compatible tool schemas (from ToolDefinition.to_openai_schema()).
+
+        Returns:
+            CompletionResult with content, tool_calls, and reasoning.
+        """
+        pass
+
+    @abstractmethod
     def chat_stream(self, messages: list[Message]) -> Iterator[StreamChunk]:
-        """Send messages and stream response chunks."""
+        """Send messages and stream response chunks.
+
+        .. deprecated::
+            Streaming mode is deprecated. Use ``chat_with_tools()`` instead.
+        """
         pass

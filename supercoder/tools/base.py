@@ -2,15 +2,30 @@
 
 import json
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
 class ToolDefinition:
-    """Tool metadata."""
+    """Tool metadata with optional JSON Schema for native function calling."""
 
     name: str
     description: str
+    parameters: dict | None = field(default=None, repr=False)
+
+    def to_openai_schema(self) -> dict:
+        """Convert to OpenAI-compatible function tool schema.
+
+        Returns a dict suitable for the ``tools`` parameter of
+        ``chat.completions.create()``.
+        """
+        func: dict = {
+            "name": self.name,
+            "description": self.description,
+        }
+        if self.parameters:
+            func["parameters"] = self.parameters
+        return {"type": "function", "function": func}
 
 
 class BaseTool(ABC):

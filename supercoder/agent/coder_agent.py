@@ -1,5 +1,6 @@
 """Main coding agent with context management."""
 
+import json
 from pathlib import Path
 
 from rich.console import Console
@@ -34,9 +35,11 @@ class CoderAgent:
         use_repo_map: bool = False,
         repo_root: str = ".",
         tool_calling_type: str = "supercoder",
+        streaming: bool = False,
     ):
         self.llm = llm
         self.repo_root = Path(repo_root).resolve()
+        self.streaming = streaming  # False = native API (default), True = deprecated streaming
 
         # Abort controller for graceful interruption
         self.abort_controller = AbortController()
@@ -72,12 +75,16 @@ class CoderAgent:
         self._tools_list = tools or []  # Keep reference for prompt rebuilding
         self._project_rules = project_rules
 
+        # Build OpenAI-compatible tool schemas for native mode
+        self._tools_schema = [t.definition.to_openai_schema() for t in self._tools_list]
+
         # Build system prompt template with tools and project rules
         self.base_system_prompt = build_system_prompt(
             self._get_tools_for_mode(),
             rules=project_rules,
             tool_calling_type=self.tool_calling_type,
             mode_suffix=MODE_CONFIGS[self._mode].prompt_suffix,
+            native_tools=not self.streaming,
         )
 
         # Setup context management
@@ -85,7 +92,7 @@ class CoderAgent:
         self.context = ContextWindowManager(config)
         self._update_system_prompt()
 
-        # Multi-format tool call parser
+        # Multi-format tool call parser (used only in deprecated streaming mode)
         self.tool_parser = ToolCallParser(debug=False)
 
         # Session management
@@ -156,11 +163,219 @@ class CoderAgent:
                 rules=self._project_rules,
                 tool_calling_type=self.tool_calling_type,
                 mode_suffix=MODE_CONFIGS[self._mode].prompt_suffix,
+                native_tools=not self.streaming,
             )
             self._update_system_prompt()
 
+    # ------------------------------------------------------------------
+    # Primary path: native tool calling (non-streaming)
+    # ------------------------------------------------------------------
+
+    def chat_turn(self, user_message: str):
+        """Process user message using native API tool calls (non-streaming).
+
+        Yields event dicts consumed by the REPL for display:
+          - ``{"type": "thinking", "content": "..."}``      → reasoning
+          - ``{"type": "response", "content": "..."}``      → full text response
+          - ``{"type": "tool_call", "content": {...}}``      → tool invocation
+          - ``{"type": "tool_result", "content": {...}}``    → tool output
+          - ``{"type": "command_confirm", ...}``             → confirm shell cmd
+          - ``{"type": "command_waiting", ...}``             → interactive cmd
+          - ``{"type": "error", "content": "..."}``
+          - ``{"type": "rollback", "content": {...}}``
+          - ``{"type": "done", "content": ""}``
+        """
+        MAX_TOOL_ITERATIONS = 50
+
+        # Reset abort controller
+        self.abort_controller.reset()
+
+        # Create checkpoint for this interaction
+        checkpoint_active = False
+        if user_message:
+            self.checkpoint_manager.create(description=user_message[:100])
+            checkpoint_active = True
+            self.context.add_message(Message("user", user_message))
+            get_logger().log_user_input(user_message)
+
+        # Update RepoMap if enabled
+        if self.repo_map:
+            self._update_system_prompt()
+
+        tool_iterations = 0
+
+        while True:
+            if tool_iterations >= MAX_TOOL_ITERATIONS:
+                if checkpoint_active:
+                    self.checkpoint_manager.rollback()
+                yield {
+                    "type": "error",
+                    "content": f"Tool call limit ({MAX_TOOL_ITERATIONS}) reached. Stopping to prevent infinite loop.",
+                }
+                return
+
+            messages = self.context.get_messages_for_api()
+            get_logger().log_messages(messages)
+
+            # --- Call LLM with native tool support ---
+            try:
+                result = self.llm.chat_with_tools(messages, self._tools_schema)
+            except Exception as e:
+                get_logger().log_error(e)
+                if checkpoint_active:
+                    restored = self.checkpoint_manager.rollback()
+                    if restored:
+                        yield {"type": "rollback", "content": {"files": restored, "reason": str(e)}}
+                yield {"type": "error", "content": str(e)}
+                return
+
+            # 1. Reasoning
+            if result.reasoning:
+                yield {"type": "thinking", "content": result.reasoning}
+                get_logger().log_reasoning(result.reasoning, stage="pre_response")
+
+            # 2. Text response
+            if result.content:
+                # Add assistant message (with tool_calls metadata for API replay)
+                self.context.add_message(
+                    Message(
+                        role="assistant",
+                        content=result.content,
+                        tool_calls=result.raw_tool_calls,
+                    )
+                )
+                get_logger().log_model_response(result.content, self.llm.model)
+                yield {"type": "response", "content": result.content}
+            elif result.tool_calls:
+                # Assistant message with no text, only tool calls
+                self.context.add_message(
+                    Message(
+                        role="assistant",
+                        content="",
+                        tool_calls=result.raw_tool_calls,
+                    )
+                )
+
+            self._save_current_session()
+
+            # 3. Tool calls
+            if not result.tool_calls:
+                # No tool calls — conversation turn is done
+                if checkpoint_active:
+                    self.checkpoint_manager.rollback()
+                yield {"type": "done", "content": ""}
+                return
+
+            tool_iterations += 1
+            has_file_edits = False
+
+            for tc in result.tool_calls:
+                yield {"type": "tool_call", "content": {"name": tc.name, "arguments": tc.arguments}}
+
+                name = tc.name
+                if name == "code-edit":
+                    has_file_edits = True
+
+                if name not in self.tools:
+                    error_msg = f"Unknown tool: '{name}'. Available tools: {', '.join(self.tools.keys())}"
+                    yield {"type": "error", "content": error_msg}
+                    # Add tool error result for context
+                    self.context.add_message(
+                        Message(
+                            role="tool",
+                            content=f"ERROR - {error_msg}",
+                            tool_call_id=tc.id,
+                            name=name,
+                        )
+                    )
+                    continue
+
+                try:
+                    tool = self.tools[name]
+                    args_str = json.dumps(tc.arguments)
+
+                    # Confirm shell commands
+                    if name == "command-exec":
+                        _cmd_str = tc.arguments.get("command", args_str)
+                        confirm_result: dict = {}
+                        yield {
+                            "type": "command_confirm",
+                            "content": {"command": _cmd_str},
+                            "result": confirm_result,
+                        }
+                        if not confirm_result.get("approved", False):
+                            tool_result = "Command execution cancelled by user."
+                            yield {"type": "tool_result", "content": {"name": name, "result": tool_result}}
+                            self.context.add_message(
+                                Message(role="tool", content=tool_result, tool_call_id=tc.id, name=name)
+                            )
+                            continue
+
+                    # Execute tool (streaming for command-exec)
+                    if name == "command-exec" and hasattr(tool, "execute_streaming"):
+                        tool_result = ""
+                        for event in tool.execute_streaming(args_str):
+                            if event["type"] == "waiting_input":
+                                process_to_kill = event.get("process")
+                                yield {
+                                    "type": "command_waiting",
+                                    "content": event["content"],
+                                    "process": process_to_kill,
+                                    "tool_name": name,
+                                }
+                                if process_to_kill and process_to_kill.poll() is not None:
+                                    partial = "".join(event.get("stdout", []))
+                                    tool_result = (
+                                        f"⚠️ INTERACTIVE PROCESS KILLED BY USER\n"
+                                        f"DO NOT attempt to run this command again.\n"
+                                        f"Partial output:\n{partial}"
+                                    )
+                                    break
+                            elif event["type"] in ("done", "error"):
+                                tool_result = event["content"]
+                    else:
+                        tool_result = tool.execute(args_str)
+
+                    yield {"type": "tool_result", "content": {"name": name, "result": tool_result}}
+                    get_logger().log_tool_call(name, args_str)
+                    get_logger().log_tool_result(name, tool_result)
+
+                    # Add tool result as role="tool" with tool_call_id
+                    self.context.add_message(
+                        Message(role="tool", content=tool_result, tool_call_id=tc.id, name=name)
+                    )
+
+                except Exception as e:
+                    get_logger().log_error(e)
+                    error_result = f"Error executing tool: {e}"
+                    yield {"type": "error", "content": error_result}
+                    self.context.add_message(
+                        Message(role="tool", content=error_result, tool_call_id=tc.id, name=name)
+                    )
+                    if checkpoint_active:
+                        restored = self.checkpoint_manager.rollback()
+                        if restored:
+                            yield {"type": "rollback", "content": {"files": restored, "reason": str(e)}}
+                        checkpoint_active = False
+
+            # Commit checkpoint after successful file edits
+            if checkpoint_active and has_file_edits:
+                self.checkpoint_manager.commit()
+                checkpoint_active = False
+
+            # Loop back — LLM will see the tool results and continue
+            continue
+
+    # ------------------------------------------------------------------
+    # Deprecated: streaming with text-based tool parsing
+    # ------------------------------------------------------------------
+
     def chat_stream(self, user_message: str):
         """Process user message and yield response chunks.
+
+        .. deprecated::
+            Use ``chat_turn()`` instead. This method uses text-based tool
+            parsing which is fragile and requires per-model format templates.
 
         Yields:
             dict: Event dictionary with 'type' and 'content' keys.
