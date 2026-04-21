@@ -21,6 +21,7 @@ from rich.text import Text
 from . import __version__
 from .abort_controller import InterruptHandler, KeyboardListener
 from .agent.agent_modes import AgentMode
+from .utils import format_relative_time
 
 
 class SuperCoderREPL:
@@ -1140,51 +1141,58 @@ class SuperCoderREPL:
 
         return False
 
-    def cmd_continue(self, _):
-        """Continue a previous session."""
+    def _pick_session(self) -> dict | None:
+        """Show interactive session picker. Returns session dict or None."""
         sessions = self.agent.session_manager.list_sessions()
 
         if not sessions:
             self.console.print("[yellow]No previous sessions found[/]")
+            return None
+
+        from questionary import Choice, Style, select
+
+        choices = []
+        for s in sessions:
+            rel = format_relative_time(s["last_modified"])
+            compacted = " (compacted)" if s.get("is_compacted") else ""
+            title = s.get("title", "Untitled")
+            msg_count = s.get("message_count", 0)
+            display = f"{title}{compacted}  {rel} · {msg_count} msgs"
+            choices.append(Choice(title=display, value=s))
+
+        style = Style([
+            ("qmark", "fg:#00aa00 bold"),
+            ("pointer", "fg:#00aa00 bold"),
+            ("highlighted", "bold"),
+        ])
+
+        return select(
+            "Resume which session?",
+            choices=choices,
+            style=style,
+            qmark="▸",
+            instruction="(↑↓ navigate, Enter select, Ctrl+C cancel)",
+        ).unsafe_ask()
+
+    def cmd_continue(self, _):
+        """Continue a previous session."""
+        session_meta = self._pick_session()
+
+        if session_meta is None:
+            self.console.print("[dim]Cancelled[/]")
             return False
 
-        self.console.print("\n[bold]Available Sessions:[/]")
-        for i, session in enumerate(sessions, 1):
-            compacted = " [dim](compacted)[/]" if session.get("is_compacted") else ""
-            modified = session.get("last_modified", "")[:16].replace("T", " ")  # Format datetime
-            title = session.get("title", "Untitled")
-            msg_count = session.get("message_count", 0)
-            self.console.print(f"  [cyan]{i}[/]. {title}{compacted}")
-            self.console.print(f"      [dim]{modified} • {msg_count} messages[/]")
-
-        self.console.print("\n[dim]Enter session number (or 'cancel'):[/]")
-
-        try:
-            choice = self.session.prompt("Select> ").strip()
-
-            if choice.lower() == "cancel" or not choice:
-                self.console.print("[dim]Cancelled[/]")
-                return False
-
-            idx = int(choice) - 1
-            if 0 <= idx < len(sessions):
-                session_id = sessions[idx]["id"]
-                if self.agent.load_session(session_id):
-                    session = self.agent.current_session
-                    title = sessions[idx].get("title", "Untitled")
-                    modified = sessions[idx].get("last_modified", "")[:16].replace("T", " ")
-                    self.console.print(Rule(f"[bold blue]Restored: {title} — {modified}[/]", style="blue"))
-                    self._render_session_history(session.messages)
-                    self.console.print(Rule(style="dim grey50"))
-                    self.console.print("[green]✓ Session restored — continue the conversation[/]")
-                else:
-                    self.console.print("[red]Failed to load session[/]")
-            else:
-                self.console.print("[red]Invalid selection[/]")
-        except ValueError:
-            self.console.print("[red]Invalid selection[/]")
-        except (KeyboardInterrupt, EOFError):
-            self.console.print("\n[dim]Cancelled[/]")
+        session_id = session_meta["id"]
+        if self.agent.load_session(session_id):
+            session = self.agent.current_session
+            title = session_meta.get("title", "Untitled")
+            rel = format_relative_time(session_meta["last_modified"])
+            self.console.print(Rule(f"[bold blue]Restored: {title} — {rel}[/]", style="blue"))
+            self._render_session_history(session.messages)
+            self.console.print(Rule(style="dim grey50"))
+            self.console.print("[green]✓ Session restored — continue the conversation[/]")
+        else:
+            self.console.print("[red]Failed to load session[/]")
 
         return False
 
@@ -1199,11 +1207,11 @@ class SuperCoderREPL:
         self.console.print("\n[bold]Saved Sessions:[/]")
         for session in sessions:
             compacted = " (compacted)" if session.get("is_compacted") else ""
-            modified = session.get("last_modified", "")[:16].replace("T", " ")
+            rel = format_relative_time(session.get("last_modified", ""))
             title = session.get("title", "Untitled")
             msg_count = session.get("message_count", 0)
             self.console.print(f"  • {title}{compacted}")
-            self.console.print(f"    [dim]{modified} • {msg_count} messages[/]")
+            self.console.print(f"    [dim]{rel} · {msg_count} messages[/]")
 
         self.console.print(f"\n[dim]Total: {len(sessions)} sessions (max 10)[/]")
         self.console.print("[dim]Use /continue to resume a session[/]")
