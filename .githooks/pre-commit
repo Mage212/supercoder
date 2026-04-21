@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "🔍 Running pre-commit checks..."
+
+echo "  ruff check..."
+uv run ruff check .
+echo "  ✅ ruff check passed"
+
+echo "  ruff format..."
+uv run ruff format --check .
+echo "  ✅ ruff format passed"
+
+echo "  pyright..."
+uv run pyright
+echo "  ✅ pyright passed"
+
+echo "  pytest..."
+uv run pytest tests/ -q
+echo "  ✅ pytest passed"
+
+echo "✅ All checks passed"
+# test
