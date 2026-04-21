@@ -105,6 +105,11 @@ class CoderAgent:
         self.current_session: ChatSession | None = None
 
         self.debug = False
+        self._chunk_callback = None  # Set by REPL for live token counting
+
+    def set_chunk_callback(self, callback):
+        """Set a callback invoked with approx token count during generation."""
+        self._chunk_callback = callback
 
     def _update_system_prompt(self):
         """Update system prompt with latest RepoMap if enabled."""
@@ -229,11 +234,13 @@ class CoderAgent:
             messages = self.context.get_messages_for_api()
             get_logger().log_messages(messages)
 
-            # --- Call LLM with native tool support ---
+            # --- Call LLM with interruptible streaming ---
             try:
-                result = self.llm.chat_with_tools(messages, self._tools_schema)
+                result = self.llm.chat_with_tools_interruptible(
+                    messages, self._tools_schema, self.abort_controller,
+                    on_chunk=self._chunk_callback,
+                )
             except Exception as e:
-                get_logger().log_error(e)
                 if checkpoint_active:
                     restored = self.checkpoint_manager.rollback()
                     if restored:

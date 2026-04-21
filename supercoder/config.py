@@ -45,7 +45,7 @@ temperature: 0.2
 top_p: 0.1
 max_context_tokens: 32000  # Default context limit (used if model doesn't specify one)
 reserved_for_response: 4096
-request_timeout: 60.0
+request_timeout: 300.0
 debug: false
 streaming: false  # DEPRECATED — native tool calls used by default. Set to true for legacy streaming mode.
 """
@@ -99,7 +99,7 @@ class ModelProfile:
     endpoint: str = "https://api.openai.com/v1"
     model: str = "gpt-4o-mini"
     temperature: float = 0.2
-    request_timeout: float = 60.0
+    request_timeout: float = 300.0
     tool_calling_type: str = (
         "supercoder"  # supercoder, qwen_like, json_block, xml_function, glm_tool_call
     )
@@ -128,7 +128,7 @@ class Config:
     debug: bool = False
     max_context_tokens: int = 32000
     reserved_for_response: int = 4096
-    request_timeout: float = 60.0
+    request_timeout: float = 300.0
     streaming: bool = False  # DEPRECATED — native tool calls by default
 
     # Multi-model support

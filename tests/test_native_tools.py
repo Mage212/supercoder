@@ -208,7 +208,7 @@ class TestChatTurnEventFlow:
     def test_simple_text_response(self):
         """LLM returns text only, no tool calls → response + done."""
         agent, mock_llm = self._make_agent()
-        mock_llm.chat_with_tools.return_value = CompletionResult(
+        mock_llm.chat_with_tools_interruptible.return_value = CompletionResult(
             content="Hello, how can I help?",
             tool_calls=[],
             reasoning="",
@@ -228,7 +228,7 @@ class TestChatTurnEventFlow:
     def test_response_with_reasoning(self):
         """LLM returns reasoning + text → thinking + response + done."""
         agent, mock_llm = self._make_agent()
-        mock_llm.chat_with_tools.return_value = CompletionResult(
+        mock_llm.chat_with_tools_interruptible.return_value = CompletionResult(
             content="The answer is 42.",
             tool_calls=[],
             reasoning="Let me think about this...",
@@ -246,7 +246,7 @@ class TestChatTurnEventFlow:
         agent, mock_llm = self._make_agent()
 
         # First call: LLM wants to call file-read
-        mock_llm.chat_with_tools.side_effect = [
+        mock_llm.chat_with_tools_interruptible.side_effect = [
             CompletionResult(
                 content="",
                 tool_calls=[
@@ -278,7 +278,7 @@ class TestChatTurnEventFlow:
     def test_unknown_tool_yields_error(self):
         """LLM calls a non-existent tool → error event."""
         agent, mock_llm = self._make_agent()
-        mock_llm.chat_with_tools.side_effect = [
+        mock_llm.chat_with_tools_interruptible.side_effect = [
             CompletionResult(
                 content="",
                 tool_calls=[
@@ -302,7 +302,7 @@ class TestChatTurnEventFlow:
     def test_llm_error_yields_error_event(self):
         """LLM raises exception → error event."""
         agent, mock_llm = self._make_agent()
-        mock_llm.chat_with_tools.side_effect = Exception("Connection refused")
+        mock_llm.chat_with_tools_interruptible.side_effect = Exception("Connection refused")
 
         events = list(agent.chat_turn("Hello"))
         types = [e["type"] for e in events]
@@ -330,7 +330,7 @@ class TestChatTurnEventFlow:
                 ],
             )
 
-        mock_llm.chat_with_tools.side_effect = always_tool_call
+        mock_llm.chat_with_tools_interruptible.side_effect = always_tool_call
 
         events = list(agent.chat_turn("Loop forever"))
 
@@ -344,7 +344,7 @@ class TestChatTurnEventFlow:
         """Verify that tool results are added to context as role='tool' with tool_call_id."""
         agent, mock_llm = self._make_agent()
 
-        mock_llm.chat_with_tools.side_effect = [
+        mock_llm.chat_with_tools_interruptible.side_effect = [
             CompletionResult(
                 content="",
                 tool_calls=[

@@ -129,6 +129,7 @@ class ContextWindowManager:
         Note: We use 'user' role so the model treats this as input context
         to remember, not as its own previous response.
         """
+        self._actual_used_tokens = None
         self.history = [
             Message("user", f"[Previous Context Summary - remember this information]\n\n{summary}")
         ]

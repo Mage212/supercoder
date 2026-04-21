@@ -77,7 +77,7 @@ class SuperCoderREPL:
         from prompt_toolkit.completion import ThreadedCompleter
         from prompt_toolkit.key_binding import KeyBindings
 
-        from .autocomplete import AutoCompleter
+        from .autocomplete import AutoCompleter, SlashCommandAutoSuggest
 
         style = PromptStyle.from_dict(
             {
@@ -92,6 +92,9 @@ class SuperCoderREPL:
         )
         completer = ThreadedCompleter(auto_completer)
 
+        # Inline auto-suggest for slash commands (gray text)
+        auto_suggest = SlashCommandAutoSuggest(commands=list(self.commands.keys()))
+
         # Key bindings for multiline support
         kb = KeyBindings()
 
@@ -99,6 +102,15 @@ class SuperCoderREPL:
         def _(event):
             """Insert newline without submitting."""
             event.current_buffer.insert_text("\n")
+
+        @kb.add("enter")
+        def _(event):
+            """Accept auto-suggestion if present, otherwise submit."""
+            buff = event.current_buffer
+            if buff.suggestion and buff.suggestion.text:
+                buff.insert_text(buff.suggestion.text)
+            else:
+                buff.validate_and_handle()
 
         # History file in project-specific directory
         history_path = self.agent.repo_root / ".supercoder" / "history"
@@ -109,6 +121,7 @@ class SuperCoderREPL:
             lexer=PygmentsLexer(MarkdownLexer),
             style=style,
             completer=completer,
+            auto_suggest=auto_suggest,
             key_bindings=kb,
             multiline=False,  # We handle multiline via { } or Alt+Enter
         )
@@ -236,6 +249,11 @@ class SuperCoderREPL:
             "[bold blue]SuperCoder is thinking...[/]", spinner="dots"
         )
         spinner.start()
+
+        # Live token counter during generation
+        self.agent.set_chunk_callback(
+            lambda n: spinner.update(f"[bold blue]Generating... {n:,} tokens[/]")
+        )
 
         # Setup keyboard listener for ESC (between-iteration abort only)
         if hasattr(self, "keyboard_listener"):
@@ -627,7 +645,8 @@ class SuperCoderREPL:
 
         Returns True if user approved, False otherwise.
         """
-        import sys
+        from prompt_toolkit import prompt as pt_prompt
+        from prompt_toolkit.key_binding import KeyBindings
 
         self._print_block(
             f"[bold]Command:[/]\n[yellow]{command}[/]",
@@ -635,17 +654,44 @@ class SuperCoderREPL:
             "yellow",
             "⚡",
         )
-        self.console.print("\n[bold]Allow? [[green]y[/]/[red]N[/]]>[/] ", end="")
+
+        kb = KeyBindings()
+
+        @kb.add("y")
+        @kb.add("Y")
+        def _(event):
+            event.app.exit(result="yes")
+
+        @kb.add("a")
+        @kb.add("A")
+        def _(event):
+            event.app.exit(result="always")
+
+        @kb.add("n")
+        @kb.add("N")
+        @kb.add("escape")
+        @kb.add("enter")
+        def _(event):
+            event.app.exit(result="no")
+
+        self.console.print(
+            "  [bold green][[y]][/bold green] Yes   "
+            "[bold cyan][[a]][/bold cyan] Always allow   "
+            "[bold red][[n]][/bold red] No"
+        )
         try:
-            choice = sys.stdin.readline().strip().lower()
-            if choice in ("y", "yes"):
-                self.console.print("[green]✓ Approved[/]")
-                return True
-            self.console.print("[red]✗ Cancelled[/]")
-            return False
+            choice = pt_prompt("  > ", key_bindings=kb)
         except (KeyboardInterrupt, EOFError):
-            self.console.print("\n[red]✗ Cancelled[/]")
-            return False
+            choice = "no"
+
+        if choice == "yes":
+            self.console.print("[green]✓ Approved[/]")
+            return True
+        if choice == "always":
+            self.console.print("[green]✓ Approved (always allowed this session)[/]")
+            return True
+        self.console.print("[red]✗ Cancelled[/]")
+        return False
 
     def _handle_command_waiting(self, event):
         """Handle a command that appears to be waiting for input."""

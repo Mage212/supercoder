@@ -1,9 +1,14 @@
 """Base LLM client interface."""
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ..abort_controller import AbortController
 
 
 @dataclass
@@ -105,6 +110,20 @@ class BaseLLM(ABC):
             CompletionResult with content, tool_calls, and reasoning.
         """
         pass
+
+    def chat_with_tools_interruptible(
+        self,
+        messages: list[Message],
+        tools: list[dict] | None = None,
+        abort_controller: AbortController | None = None,
+        on_chunk: Callable[[int], None] | None = None,
+        max_completion_tokens: int = 16000,
+    ) -> CompletionResult:
+        """Interruptible variant of chat_with_tools using streaming internally.
+
+        Falls back to ``chat_with_tools()`` if not overridden.
+        """
+        return self.chat_with_tools(messages, tools)
 
     @abstractmethod
     def chat_stream(self, messages: list[Message]) -> Iterator[StreamChunk]:

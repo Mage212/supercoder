@@ -276,7 +276,7 @@ def _write_config(
     config_data.setdefault("top_p", 0.1)
     config_data.setdefault("max_context_tokens", max_context_tokens)
     config_data.setdefault("reserved_for_response", 4096)
-    config_data.setdefault("request_timeout", 60.0)
+    config_data.setdefault("request_timeout", 300.0)
     config_data.setdefault("debug", False)
 
     # Merge new profile (overwrites only the named profile)

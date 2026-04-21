@@ -10,7 +10,24 @@ import os
 from collections import defaultdict
 from pathlib import Path
 
+from prompt_toolkit.auto_suggest import AutoSuggest, Suggestion
 from prompt_toolkit.completion import Completer, Completion
+
+
+class SlashCommandAutoSuggest(AutoSuggest):
+    """Inline gray-text auto-suggestion for slash commands."""
+
+    def __init__(self, commands):
+        self.commands = sorted(commands)
+
+    def get_suggestion(self, buffer, document):
+        text = document.text_before_cursor
+        if not text.startswith("/") or " " in text:
+            return None
+        for cmd in self.commands:
+            if cmd.startswith(text) and cmd != text:
+                return Suggestion(cmd[len(text):])
+        return None
 
 
 class AutoCompleter(Completer):
