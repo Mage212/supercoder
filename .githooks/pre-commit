@@ -20,4 +20,3 @@ uv run pytest tests/ -q
 echo "  ✅ pytest passed"
 
 echo "✅ All checks passed"
-# test
