@@ -653,6 +653,97 @@ class SuperCoderREPL:
 
         self.console.print(" │ ".join(parts), justify="right")
 
+    def _render_session_history(self, messages: list) -> None:
+        """Render session messages visually after restore.
+
+        Reuses the same rendering helpers as live output (_print_block,
+        _display_tool_call, _display_tool_result) to maintain visual fidelity.
+        Tool calls are interleaved with their matching tool results by tool_call_id.
+        """
+        import json
+
+        MAX_SHOW = 30
+
+        # Filter out system messages
+        showable = [m for m in messages if m.role != "system"]
+        to_show = showable[-MAX_SHOW:] if len(showable) > MAX_SHOW else showable
+
+        if len(showable) > MAX_SHOW:
+            skipped = len(showable) - MAX_SHOW
+            self.console.print(f"[dim]... {skipped} earlier messages not shown[/]\n")
+
+        # Build index: tool_call_id → position for fast lookup
+        result_index: dict[str, int] = {}
+        for i, m in enumerate(to_show):
+            if m.tool_call_id:
+                result_index[m.tool_call_id] = i
+
+        consumed: set[int] = set()
+        i = 0
+        while i < len(to_show):
+            if i in consumed:
+                i += 1
+                continue
+
+            msg = to_show[i]
+            dt = msg.display_type
+
+            if dt == "user_input":
+                self._print_block(msg.content, "You", "cyan", "👤")
+
+            elif dt == "thinking":
+                text = msg.content[:500] + ("..." if len(msg.content) > 500 else "")
+                self._print_block(text, "Reasoning", "magenta", "💭")
+
+            elif dt in ("response", "tool_call"):
+                # Render text content
+                if msg.content and msg.content.strip():
+                    self.console.print(Markdown(msg.content))
+
+                # Interleave: tool_call → matching tool_result
+                if msg.tool_calls:
+                    for tc in msg.tool_calls:
+                        fn = tc.get("function", {})
+                        name = fn.get("name", "?")
+                        args_str = fn.get("arguments", "{}")
+                        try:
+                            args_obj = json.loads(args_str) if isinstance(args_str, str) else args_str
+                        except Exception:
+                            args_obj = {"_raw": args_str}
+                        self._display_tool_call({"name": name, "arguments": args_obj})
+
+                        # Find and render matching tool result
+                        tc_id = tc.get("id", "")
+                        j = result_index.get(tc_id)
+                        if j is not None and j not in consumed:
+                            result_msg = to_show[j]
+                            self._display_tool_result(
+                                {"name": result_msg.name or name, "result": result_msg.content}
+                            )
+                            consumed.add(j)
+
+            elif dt == "tool_result":
+                # Only render if not already consumed by interleaving above
+                self._display_tool_result({"name": msg.name or "tool", "result": msg.content})
+
+            elif dt == "error":
+                self._print_block(msg.content, "Error", "red", "❌")
+
+            elif dt == "compact_summary":
+                text = msg.content[:200]
+                self._print_block(f"[dim]{text}...[/]", "Context Summary", "dim", "📋")
+
+            else:
+                # Fallback for old sessions without display_type
+                if msg.role == "user" and msg.content:
+                    self._print_block(msg.content, "You", "cyan", "👤")
+                elif msg.role == "assistant" and msg.content:
+                    self.console.print(Markdown(msg.content))
+                elif msg.role == "tool":
+                    self._display_tool_result({"name": msg.name or "tool", "result": msg.content})
+
+            i += 1
+
     def _print_block(self, content, title: str, color: str, icon: str = ""):
         """Print content in a panel with horizontal lines only (no vertical borders).
 
@@ -1079,11 +1170,13 @@ class SuperCoderREPL:
             if 0 <= idx < len(sessions):
                 session_id = sessions[idx]["id"]
                 if self.agent.load_session(session_id):
-                    self.console.print("[green]✓ Resumed session[/]")
-                    stats = self.agent.context.get_stats()
-                    self.console.print(
-                        f"[dim]Loaded {stats.message_count} messages, {stats.used_tokens:,} tokens[/]"
-                    )
+                    session = self.agent.current_session
+                    title = sessions[idx].get("title", "Untitled")
+                    modified = sessions[idx].get("last_modified", "")[:16].replace("T", " ")
+                    self.console.print(Rule(f"[bold blue]Restored: {title} — {modified}[/]", style="blue"))
+                    self._render_session_history(session.messages)
+                    self.console.print(Rule(style="dim grey50"))
+                    self.console.print("[green]✓ Session restored — continue the conversation[/]")
                 else:
                     self.console.print("[red]Failed to load session[/]")
             else:
