@@ -1,6 +1,6 @@
 # 🤖 SuperCoder
 
-[![Version](https://img.shields.io/badge/version-0.2.9-blue.svg)](https://github.com/Mage212/supercoder)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/Mage212/supercoder)
 [![Python](https://img.shields.io/badge/python-3.11+-green.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -10,14 +10,19 @@
 
 ## 🆕 What's New in v0.3.0
 
-- **Interactive Setup Wizard**: On first launch (or when no API key is configured), SuperCoder now starts an interactive TUI wizard instead of exiting with an error. The wizard lets you:
-  - Choose a provider from presets: OpenAI, OpenRouter, Anthropic (via OpenRouter), Ollama, or custom
-  - Pick a model from a curated list or type your own
-  - Set the context window size (32K / 128K / 200K / 8K / custom)
-  - Enter your API key securely (masked input)
-  - Review a summary and confirm before writing `~/.supercoder/config.yaml`
-  - Continue straight into the REPL — no restart needed
-- **Full Traceback Logging**: All exceptions are now logged with complete Python tracebacks to `~/.supercoder/logs/` (JSONL format), making it easy to debug issues post-mortem.
+- **Native API Tool Calling**: Migrated from text-based streaming parsing to native OpenAI-compatible `tools` parameter. More reliable, no format-dependent parsing. Streaming mode still available via `--stream`.
+- **Interactive Session Picker**: `/continue` now shows an arrow-key navigable session list with relative timestamps ("5m ago") and message counts. No more typing numbers.
+- **Visual Session History**: Restored sessions render full conversation history with the same styling as live output — tool calls interleaved with results, reasoning blocks, markdown responses.
+- **Message Display Types**: Each message now stores its role (`user_input`, `thinking`, `response`, `tool_call`, `tool_result`, `error`) for accurate session restoration. Backward compatible with old sessions.
+- **Fuzzy Matching for Edits**: Three-tier edit matching — exact → whitespace-normalized → fuzzy (`SequenceMatcher`) — so local/weak models with formatting inconsistencies still apply edits correctly.
+- **Lean Prompt Mode**: Optional 75% shorter system prompts for weak/local models via `lean: true` in model profile config.
+- **Parser Hardening**: Fixed 4 Qwen3.5-4B failure modes — missing closing tags, single-quoted JSON, extra characters, and hallucinated tool names.
+- **Live Generation Progress**: Spinner shows token count, phase label ("response" / "tool call"), and elapsed time during generation. Works even when providers buffer output.
+- **Streaming Abort**: Double-ESC now works during active API streaming, with checkpoint rollback on abort.
+- **Inline Auto-suggest**: Gray-text suggestions for slash commands while typing. Enter to accept.
+- **Command Approval Menu**: Instant key-press approval (`[y]`/`[a]`/`[n]`) for shell commands instead of typing.
+- **Interactive Setup Wizard**: On first launch, a guided TUI wizard configures provider, model, context size, and API key.
+- **Full Traceback Logging**: All exceptions logged with complete Python tracebacks to `~/.supercoder/logs/` (JSONL format).
 
 ### v0.2.9
 
@@ -85,8 +90,9 @@ Uses `tree-sitter` and `networkx` to generate a high-level map of your repositor
 
 ### 💾 Session Persistence
 - **Auto-Save**: Your conversation is automatically saved after each message exchange.
-- **Resume Sessions**: Use `/continue` to pick up where you left off after closing SuperCoder.
-- **Session History**: Up to 10 sessions are stored in `.supercoder/sessions/`.
+- **Interactive Resume**: Use `/continue` to browse sessions with arrow keys and select one to restore.
+- **Visual History**: Restored sessions render full conversation with original styling — tool calls, reasoning, markdown responses.
+- **Session Storage**: Up to 10 sessions stored in `.supercoder/sessions/`.
 - **Compact Integration**: When you `/compact`, the session file is also updated with the summary.
 
 ---
@@ -229,9 +235,7 @@ supercoder --max-context 16000         # Override context token limit
 | `/code <request>` | Execute one request in code mode, then return to previous mode |
 | `/undo` | Revert changes to a specific checkpoint |
 | `/help` | Show available commands |
-| `/continue` | Resume a previous session |
-| `/sessions` | List saved sessions |
-| `/tools` | List active tools and their descriptions |
+| `/continue` | Resume a previous session (interactive picker) |
 | `/compact` | Summarize history to save context tokens |
 | `/stats` | View current token usage and context status |
 | `/clear` | Clear conversation history |
@@ -261,15 +265,15 @@ Before running any shell command, SuperCoder pauses and asks for explicit approv
 ⚡ Run Command?
 Command:
   <the command to execute>
-Allow? [y/N]>
+  [y] Yes   [a] Always allow   [n] No
 ```
-This prevents the agent from running unintended or destructive shell commands without user consent.
+Single keypress response — `[a]` remembers approval for the rest of the session.
 
 ### Interruption (ESC-ESC)
-If the agent is stuck or generating unwanted code, you can press **ESC twice** quickly.
-1. The background keyboard listener detects the interrupt.
+Press **ESC twice** to abort at any time — during generation, tool calls, or streaming.
+1. The keyboard listener detects the interrupt.
 2. The current LLM stream is aborted immediately.
-3. Any partial file changes from the current turn are **rolled back** automatically to maintain project integrity.
+3. Any partial file changes from the current turn are **rolled back** automatically.
 
 ---
 
