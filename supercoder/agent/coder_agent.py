@@ -36,10 +36,12 @@ class CoderAgent:
         repo_root: str = ".",
         tool_calling_type: str = "supercoder",
         streaming: bool = False,
+        lean: bool = False,
     ):
         self.llm = llm
         self.repo_root = Path(repo_root).resolve()
         self.streaming = streaming  # False = native API (default), True = deprecated streaming
+        self.lean = lean  # Shorter prompts for weak/local models
 
         # Abort controller for graceful interruption
         self.abort_controller = AbortController()
@@ -79,12 +81,15 @@ class CoderAgent:
         self._tools_schema = [t.definition.to_openai_schema() for t in self._tools_list]
 
         # Build system prompt template with tools and project rules
+        mode_config = MODE_CONFIGS[self._mode]
+        suffix = mode_config.lean_prompt_suffix if self.lean and mode_config.lean_prompt_suffix else mode_config.prompt_suffix
         self.base_system_prompt = build_system_prompt(
             self._get_tools_for_mode(),
             rules=project_rules,
             tool_calling_type=self.tool_calling_type,
-            mode_suffix=MODE_CONFIGS[self._mode].prompt_suffix,
+            mode_suffix=suffix,
             native_tools=not self.streaming,
+            lean=self.lean,
         )
 
         # Setup context management
@@ -143,11 +148,15 @@ class CoderAgent:
         self._mode = mode
 
         # Rebuild system prompt with new mode's tools and suffix
+        mode_config = MODE_CONFIGS[self._mode]
+        suffix = mode_config.lean_prompt_suffix if self.lean and mode_config.lean_prompt_suffix else mode_config.prompt_suffix
         self.base_system_prompt = build_system_prompt(
             self._get_tools_for_mode(),
             rules=self._project_rules,
             tool_calling_type=self.tool_calling_type,
-            mode_suffix=MODE_CONFIGS[self._mode].prompt_suffix,
+            mode_suffix=suffix,
+            native_tools=not self.streaming,
+            lean=self.lean,
         )
         self._update_system_prompt()
 
@@ -158,12 +167,15 @@ class CoderAgent:
         """
         if tool_calling_type != self.tool_calling_type:
             self.tool_calling_type = tool_calling_type
+            mode_config = MODE_CONFIGS[self._mode]
+            suffix = mode_config.lean_prompt_suffix if self.lean and mode_config.lean_prompt_suffix else mode_config.prompt_suffix
             self.base_system_prompt = build_system_prompt(
                 self._get_tools_for_mode(),
                 rules=self._project_rules,
                 tool_calling_type=self.tool_calling_type,
-                mode_suffix=MODE_CONFIGS[self._mode].prompt_suffix,
+                mode_suffix=suffix,
                 native_tools=not self.streaming,
+                lean=self.lean,
             )
             self._update_system_prompt()
 
@@ -568,8 +580,8 @@ class CoderAgent:
                             result = tool.execute(args)
 
                         yield {"type": "tool_result", "content": {"name": name, "result": result}}
-                        get_logger().log_tool_call(name, args)
-                        get_logger().log_tool_result(name, result)
+                        get_logger().log_tool_call(name or "", args)
+                        get_logger().log_tool_result(name or "", result)
                         all_results.append(f"[{name}]: {result}")
                     except Exception as e:
                         get_logger().log_error(e)

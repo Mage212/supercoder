@@ -76,9 +76,8 @@ def main(
                 return
             # Reload config after successful setup
             config = Config.load()
-            if model:
-                if not config.switch_to_model(model):
-                    config.model = model
+            if model and not config.switch_to_model(model):
+                config.model = model
             if endpoint:
                 config.base_url = endpoint
             if temperature is not None:
@@ -115,6 +114,7 @@ def main(
         # Get tool_calling_type from current model profile
         profile = config.get_model_profile(config.current_profile_name)
         tool_calling_type = profile.tool_calling_type if profile else "supercoder"
+        lean = profile.lean if profile else False
 
         # Resolve streaming mode: CLI flag > model profile > global config
         use_streaming = stream  # CLI flag takes precedence
@@ -131,6 +131,7 @@ def main(
             repo_root=".",
             tool_calling_type=tool_calling_type,
             streaming=use_streaming,
+            lean=lean,
         )
         agent.set_debug(debug)
     except Exception as e:

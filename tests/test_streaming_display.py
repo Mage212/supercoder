@@ -5,9 +5,6 @@ _handle_chat() to prevent regressions in the streaming display pipeline.
 """
 import re
 
-import pytest
-
-
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers that replicate the logic in repl.py without instantiating SuperCoderREPL
 # ──────────────────────────────────────────────────────────────────────────────

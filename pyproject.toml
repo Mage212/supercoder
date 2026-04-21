@@ -85,7 +85,7 @@ venvPath = "."
 venv = ".venv"
 reportMissingImports = true
 reportMissingModuleSource = false
-exclude = ["tests/**"]
+exclude = ["tests/**", ".venv/**", "venv/**", "scripts/**", "build/**"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

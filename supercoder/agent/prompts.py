@@ -18,6 +18,11 @@ Available tools:
 4. Be concise in responses
 """
 
+SYSTEM_PROMPT_LEAN = """You are a coding assistant.
+{tool_calling_instructions}
+Tools: {tools}
+"""
+
 
 # Prompt for context summarization (/compact command)
 CONTEXT_SUMMARY_PROMPT = """Analyze the following conversation history and create a concise but informative summary.
@@ -49,7 +54,7 @@ Create a summary in this format:
 
 def build_system_prompt(
     tools: list, rules: str = "", tool_calling_type: str = "supercoder",
-    mode_suffix: str = "", native_tools: bool = False,
+    mode_suffix: str = "", native_tools: bool = False, lean: bool = False,
 ) -> str:
     """Build system prompt with available tools and project rules.
 
@@ -59,6 +64,7 @@ def build_system_prompt(
         tool_calling_type: Type of tool calling format (only used when native_tools=False).
         mode_suffix: Additional prompt suffix for specific modes (e.g., ask mode).
         native_tools: If True, tools are passed via API — skip verbose format instructions.
+        lean: If True, use shorter prompts for weak/local models.
     """
     if not tools:
         tool_list = "(no tools available yet)"
@@ -75,12 +81,13 @@ def build_system_prompt(
     else:
         tool_calling_instructions = get_tool_calling_prompt(tool_calling_type)
 
-    prompt = SYSTEM_PROMPT.format(
+    template = SYSTEM_PROMPT_LEAN if lean else SYSTEM_PROMPT
+    prompt = template.format(
         tools=tool_list, tool_calling_instructions=tool_calling_instructions
     )
 
-    # Add project rules if provided
-    if rules:
+    # Skip project rules in lean mode to save tokens
+    if rules and not lean:
         prompt += f"\n{rules}"
 
     # Add mode-specific suffix (e.g., ask mode restrictions)

@@ -81,6 +81,7 @@ class ModelProfile:
     )
     max_context_tokens: int | None = None  # None = use global default
     streaming: bool = False  # DEPRECATED — legacy streaming mode
+    lean: bool = False  # Use shorter prompts for weak/local models
 
     @property
     def base_url(self) -> str:
@@ -172,6 +173,7 @@ class Config:
                     ),
                     tool_calling_type=profile_data.get("tool_calling_type", "supercoder"),
                     max_context_tokens=profile_data.get("max_context_tokens"),
+                    lean=profile_data.get("lean", False),
                 )
 
         # Create instance with shared settings

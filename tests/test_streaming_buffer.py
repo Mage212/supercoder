@@ -5,7 +5,6 @@ passes through, including edge cases like partial tags, multiple tags,
 tags at stream start, and format-specific behaviors.
 """
 
-import pytest
 
 from supercoder.streaming_buffer import StreamingDisplayBuffer
 

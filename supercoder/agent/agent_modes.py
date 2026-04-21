@@ -21,6 +21,7 @@ class ModeConfig:
     name: str
     prompt_suffix: str
     allowed_tools: list[str] | None  # None means all tools allowed
+    lean_prompt_suffix: str = ""  # Shorter suffix for weak/local models
 
 
 # Read-only tools that are always safe in ask mode
@@ -57,6 +58,7 @@ You are AUTHORIZED and EXPECTED to:
 
 Do NOT refuse to execute commands. Use the tools provided.
 """,
+        lean_prompt_suffix="MODE: CODE. Edit files, run commands. Use tools to accomplish tasks.",
         allowed_tools=None,  # All tools allowed
     ),
     AgentMode.ASK: ModeConfig(
@@ -77,6 +79,7 @@ You CANNOT:
 
 If asked to make changes, explain what would be needed and suggest using /code command.
 """,
+        lean_prompt_suffix="ASK mode: read and analyze only. No edits or commands.",
         allowed_tools=ASK_MODE_TOOLS,
     ),
 }

@@ -7,8 +7,8 @@ from supercoder.agent.tool_parser import (
     GlmToolCallParser,
     JsonBlockParser,
     QwenStyleParser,
-    SupercoderTagParser,
     SupercoderTagFallbackParser,
+    SupercoderTagParser,
     ToolCallParser,
     XmlFunctionParser,
 )

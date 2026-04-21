@@ -10,7 +10,6 @@ from collections.abc import Callable
 # Platform-specific imports for raw keyboard input
 try:
     import termios
-    import tty
 
     HAS_TERMIOS = True
 except ImportError:

@@ -33,13 +33,12 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from supercoder.config import Config
-from supercoder.llm.openai_client import OpenAIClient
-from supercoder.llm.base import Message
 from supercoder.agent.prompts import build_system_prompt
-from supercoder.agent.tool_parser import ToolCallParser, _safe_json_loads, _repair_json
+from supercoder.agent.tool_parser import ToolCallParser, _repair_json
+from supercoder.config import Config
+from supercoder.llm.base import Message
+from supercoder.llm.openai_client import OpenAIClient
 from supercoder.tools import ALL_TOOLS
-
 
 # ─── Probe definitions ───────────────────────────────────────────────────
 
@@ -338,7 +337,7 @@ def run_probe(
             if not chunk.is_done:
                 response += chunk.content
                 reasoning += chunk.reasoning
-            
+
         result.response_time_ms = int((time.time() - t0) * 1000)
         result.raw_response = response
         result.reasoning_text = reasoning
@@ -385,7 +384,7 @@ def run_probe(
 PASS = "✅"
 FAIL = "❌"
 WARN = "⚠️"
-INFO = "ℹ️"
+INFO = "ℹ️"  # noqa: RUF001
 
 
 def print_result(r: ProbeResult) -> None:
@@ -393,17 +392,9 @@ def print_result(r: ProbeResult) -> None:
     p = r.probe
 
     # Status icon
-    if r.error:
+    if r.error or not r.json_valid or (p.expect_tool_call and r.tool_calls_found == 0):
         icon = FAIL
-    elif not r.json_valid:
-        icon = FAIL
-    elif p.expect_tool_call and r.tool_calls_found == 0:
-        icon = FAIL
-    elif not p.expect_tool_call and r.tool_calls_found > 0:
-        icon = WARN
-    elif p.expect_tool_name and p.expect_tool_name not in r.tool_names:
-        icon = WARN
-    elif r.json_needed_repair:
+    elif (not p.expect_tool_call and r.tool_calls_found > 0) or (p.expect_tool_name and p.expect_tool_name not in r.tool_names) or r.json_needed_repair:
         icon = WARN
     else:
         icon = PASS
@@ -472,20 +463,20 @@ def print_summary(results: list[ProbeResult], model: str, tool_type: str) -> Non
     text_before = sum(1 for r in results if r.has_text_before_tool)
     has_reasoning = sum(1 for r in results if r.has_reasoning)
 
-    print(f"\n  Patterns:")
+    print("\n  Patterns:")
     print(f"    Text before tool call:  {text_before}/{total}")
     print(f"    Uses reasoning tokens:  {has_reasoning}/{total}")
 
     # JSON issues breakdown
     if repairs or failed:
-        print(f"\n  JSON Issues:")
+        print("\n  JSON Issues:")
         for r in results:
             if r.raw_json_error:
                 print(f"    [{r.probe.id}] {r.raw_json_error}")
 
     # Failed probes
     if failed:
-        print(f"\n  Failed Probes:")
+        print("\n  Failed Probes:")
         for r in results:
             if r.error or not r.json_valid or (r.probe.expect_tool_call and r.tool_calls_found == 0):
                 reason = r.error or r.raw_json_error or "no tool call found"
@@ -508,12 +499,11 @@ def main():
     # Load config
     config = Config.load()
 
-    if args.profile:
-        if not config.switch_to_model(args.profile):
-            print(f"❌ Unknown profile: {args.profile}")
-            available = ", ".join(config.get_available_models())
-            print(f"   Available: {available}")
-            return 1
+    if args.profile and not config.switch_to_model(args.profile):
+        print(f"❌ Unknown profile: {args.profile}")
+        available = ", ".join(config.get_available_models())
+        print(f"   Available: {available}")
+        return 1
 
     errors = config.validate()
     if errors:

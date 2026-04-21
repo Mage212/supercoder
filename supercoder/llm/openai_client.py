@@ -67,9 +67,10 @@ class OpenAIClient(BaseLLM):
 
     def chat(self, messages: list[Message]) -> str:
         """Send messages and get complete response."""
+        api_messages = [m.to_api_dict() for m in messages]
         response = self.client.chat.completions.create(
             model=self.model,
-            messages=[m.to_api_dict() for m in messages],
+            messages=api_messages,  # type: ignore[arg-type]
             temperature=self.temperature,
         )
         return response.choices[0].message.content or ""
@@ -150,9 +151,10 @@ class OpenAIClient(BaseLLM):
             Streaming mode is deprecated. Use ``chat_with_tools()`` for
             reliable native tool calling instead.
         """
+        api_messages = [m.to_api_dict() for m in messages]
         stream = self.client.chat.completions.create(
             model=self.model,
-            messages=[m.to_api_dict() for m in messages],
+            messages=api_messages,  # type: ignore[arg-type]
             temperature=self.temperature,
             stream=True,
         )

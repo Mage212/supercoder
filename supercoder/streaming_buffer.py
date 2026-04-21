@@ -15,7 +15,6 @@ opening/closing tag patterns.
 
 from __future__ import annotations
 
-
 # Tag signatures for each supported tool calling format.
 # 'opener' is the string that marks the START of a tool call block.
 # 'closer' is the string that marks the END (None = consume to end of line).

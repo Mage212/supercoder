@@ -404,7 +404,7 @@ class SuperCoderREPL:
         def stop_streaming():
             """Finalize streaming, print any remaining text."""
             nonlocal is_streaming, display_buffer, accumulated_display, _printed_up_to
-            if not is_streaming:
+            if not is_streaming or display_buffer is None:
                 spinner.stop()
                 flush_reasoning()
                 return
@@ -441,6 +441,7 @@ class SuperCoderREPL:
                     if not is_streaming:
                         start_streaming()
 
+                    assert display_buffer is not None  # set by start_streaming()
                     chunk = display_buffer.add(content)
                     if chunk:
                         accumulated_display += chunk
@@ -1252,6 +1253,9 @@ class SuperCoderREPL:
 
         # Switch in LLM client
         self.agent.llm.switch_model(profile)
+
+        # Update lean mode before rebuilding prompt
+        self.agent.lean = profile.lean
 
         # Update tool calling type in agent (rebuilds system prompt if needed)
         self.agent.set_tool_calling_type(profile.tool_calling_type)
