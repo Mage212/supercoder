@@ -42,9 +42,11 @@ from supercoder.tools import ALL_TOOLS
 
 # ─── Probe definitions ───────────────────────────────────────────────────
 
+
 @dataclass
 class Probe:
     """A single test prompt to send to the model."""
+
     id: str
     category: str
     description: str
@@ -90,7 +92,6 @@ PROBES = [
         prompt="Run the command: echo hello",
         expect_tool_name="command-exec",
     ),
-
     # ── JSON escaping edge cases ──
     Probe(
         id="escape_quotes",
@@ -124,13 +125,10 @@ PROBES = [
         id="escape_nested_json",
         category="escaping",
         description="Code containing JSON strings",
-        prompt=(
-            'Create a file config.py with: data = {"key": "value", "list": [1, 2, 3]}'
-        ),
+        prompt=('Create a file config.py with: data = {"key": "value", "list": [1, 2, 3]}'),
         expect_tool_name="code-edit",
         tests_json_escaping=True,
     ),
-
     # ── Multi-line / large code ──
     Probe(
         id="multiline_function",
@@ -156,20 +154,15 @@ PROBES = [
         expect_tool_name="code-edit",
         tests_multiline=True,
     ),
-
     # ── Unicode ──
     Probe(
         id="unicode_content",
         category="unicode",
         description="Code with unicode characters",
-        prompt=(
-            "Create file greeting.py with: "
-            'print("Привет мир! 你好世界! مرحبا")'
-        ),
+        prompt=('Create file greeting.py with: print("Привет мир! 你好世界! مرحبا")'),
         expect_tool_name="code-edit",
         tests_unicode=True,
     ),
-
     # ── Multiple tool calls ──
     Probe(
         id="multi_read_edit",
@@ -179,7 +172,6 @@ PROBES = [
         expect_multiple_tools=True,
         tests_multi_tool=True,
     ),
-
     # ── No tool needed ──
     Probe(
         id="no_tool_question",
@@ -188,7 +180,6 @@ PROBES = [
         prompt="What is the difference between a list and a tuple in Python?",
         expect_tool_call=False,
     ),
-
     # ── Error recovery ──
     Probe(
         id="recovery_retry",
@@ -203,9 +194,11 @@ PROBES = [
 
 # ─── Analysis result ─────────────────────────────────────────────────────
 
+
 @dataclass
 class ProbeResult:
     """Result of running a single probe."""
+
     probe: Probe
     raw_response: str = ""
     response_time_ms: int = 0
@@ -230,6 +223,7 @@ class ProbeResult:
 
 
 # ─── Runner ───────────────────────────────────────────────────────────────
+
 
 def build_system_message(tool_calling_type: str) -> str:
     """Build system prompt using real tools."""
@@ -321,10 +315,13 @@ def run_probe(
             Message("system", system_msg),
             Message("user", "Read the file main.py"),
             Message("assistant", '<@TOOL>{"name": "file-read", "arguments": BROKEN JSON}</@TOOL>'),
-            Message("user", (
-                "<@TOOL_RESULT>ERROR: Your tool call could not be parsed — the JSON "
-                "was malformed. Please retry with properly escaped JSON.</@TOOL_RESULT>"
-            )),
+            Message(
+                "user",
+                (
+                    "<@TOOL_RESULT>ERROR: Your tool call could not be parsed — the JSON "
+                    "was malformed. Please retry with properly escaped JSON.</@TOOL_RESULT>"
+                ),
+            ),
         ]
 
     try:
@@ -369,9 +366,7 @@ def run_probe(
         result.parse_format = tool_calls[0].format_name
 
     # Check JSON quality
-    json_valid, needed_repair, json_error = analyze_json_quality(
-        response, tool_calling_type
-    )
+    json_valid, needed_repair, json_error = analyze_json_quality(response, tool_calling_type)
     result.json_valid = json_valid
     result.json_needed_repair = needed_repair
     result.raw_json_error = json_error
@@ -394,7 +389,11 @@ def print_result(r: ProbeResult) -> None:
     # Status icon
     if r.error or not r.json_valid or (p.expect_tool_call and r.tool_calls_found == 0):
         icon = FAIL
-    elif (not p.expect_tool_call and r.tool_calls_found > 0) or (p.expect_tool_name and p.expect_tool_name not in r.tool_names) or r.json_needed_repair:
+    elif (
+        (not p.expect_tool_call and r.tool_calls_found > 0)
+        or (p.expect_tool_name and p.expect_tool_name not in r.tool_names)
+        or r.json_needed_repair
+    ):
         icon = WARN
     else:
         icon = PASS
@@ -436,8 +435,11 @@ def print_result(r: ProbeResult) -> None:
 def print_summary(results: list[ProbeResult], model: str, tool_type: str) -> None:
     """Print aggregate summary."""
     total = len(results)
-    passed = sum(1 for r in results if not r.error and r.json_valid and
-                 (not r.probe.expect_tool_call or r.tool_calls_found > 0))
+    passed = sum(
+        1
+        for r in results
+        if not r.error and r.json_valid and (not r.probe.expect_tool_call or r.tool_calls_found > 0)
+    )
     failed = total - passed
     repairs = sum(1 for r in results if r.json_needed_repair)
     avg_time = sum(r.response_time_ms for r in results) // max(total, 1)
@@ -478,7 +480,11 @@ def print_summary(results: list[ProbeResult], model: str, tool_type: str) -> Non
     if failed:
         print("\n  Failed Probes:")
         for r in results:
-            if r.error or not r.json_valid or (r.probe.expect_tool_call and r.tool_calls_found == 0):
+            if (
+                r.error
+                or not r.json_valid
+                or (r.probe.expect_tool_call and r.tool_calls_found == 0)
+            ):
                 reason = r.error or r.raw_json_error or "no tool call found"
                 print(f"    [{r.probe.id}] {reason}")
 
@@ -486,6 +492,7 @@ def print_summary(results: list[ProbeResult], model: str, tool_type: str) -> Non
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────
+
 
 def main():
     ap = argparse.ArgumentParser(description="Probe model tool call behavior")
@@ -561,22 +568,24 @@ def main():
 
         # Save raw
         if args.save_raw:
-            raw_outputs.append({
-                "probe_id": probe.id,
-                "category": probe.category,
-                "prompt": probe.prompt,
-                "response": result.raw_response,
-                "reasoning": result.reasoning_text,
-                "tool_calls_found": result.tool_calls_found,
-                "tool_names": result.tool_names,
-                "parse_format": result.parse_format,
-                "json_valid": result.json_valid,
-                "json_needed_repair": result.json_needed_repair,
-                "json_error": result.raw_json_error,
-                "tag_format": result.tag_format_used,
-                "response_time_ms": result.response_time_ms,
-                "timestamp": datetime.now().isoformat(),
-            })
+            raw_outputs.append(
+                {
+                    "probe_id": probe.id,
+                    "category": probe.category,
+                    "prompt": probe.prompt,
+                    "response": result.raw_response,
+                    "reasoning": result.reasoning_text,
+                    "tool_calls_found": result.tool_calls_found,
+                    "tool_names": result.tool_names,
+                    "parse_format": result.parse_format,
+                    "json_valid": result.json_valid,
+                    "json_needed_repair": result.json_needed_repair,
+                    "json_error": result.raw_json_error,
+                    "tag_format": result.tag_format_used,
+                    "response_time_ms": result.response_time_ms,
+                    "timestamp": datetime.now().isoformat(),
+                }
+            )
 
     # Print detailed results
     print("\n" + "─" * 70)
@@ -596,10 +605,16 @@ def main():
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         print(f"\n📄 Raw responses saved to {output_path}")
 
-    return 0 if all(
-        not r.error and r.json_valid and (not r.probe.expect_tool_call or r.tool_calls_found > 0)
-        for r in results
-    ) else 1
+    return (
+        0
+        if all(
+            not r.error
+            and r.json_valid
+            and (not r.probe.expect_tool_call or r.tool_calls_found > 0)
+            for r in results
+        )
+        else 1
+    )
 
 
 if __name__ == "__main__":

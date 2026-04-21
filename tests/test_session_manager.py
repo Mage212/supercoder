@@ -216,7 +216,9 @@ class TestSessionManager:
             Message("assistant", "Let me think...", display_type="thinking"),
             Message("assistant", "Hi!", display_type="response"),
             Message("assistant", "", display_type="tool_call"),
-            Message("tool", "result", tool_call_id="tc1", name="file-read", display_type="tool_result"),
+            Message(
+                "tool", "result", tool_call_id="tc1", name="file-read", display_type="tool_result"
+            ),
             Message("tool", "ERROR", tool_call_id="tc2", name="code-edit", display_type="error"),
         ]
         manager.save_session(session)

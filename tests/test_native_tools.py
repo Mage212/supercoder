@@ -250,7 +250,9 @@ class TestChatTurnEventFlow:
             CompletionResult(
                 content="",
                 tool_calls=[
-                    NativeToolCall(id="call_1", name="file-read", arguments={"fileName": "test.txt"})
+                    NativeToolCall(
+                        id="call_1", name="file-read", arguments={"fileName": "test.txt"}
+                    )
                 ],
                 raw_tool_calls=[
                     {
@@ -281,9 +283,7 @@ class TestChatTurnEventFlow:
         mock_llm.chat_with_tools_interruptible.side_effect = [
             CompletionResult(
                 content="",
-                tool_calls=[
-                    NativeToolCall(id="call_1", name="unknown-tool", arguments={})
-                ],
+                tool_calls=[NativeToolCall(id="call_1", name="unknown-tool", arguments={})],
                 raw_tool_calls=[
                     {
                         "id": "call_1",

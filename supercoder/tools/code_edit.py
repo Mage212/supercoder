@@ -59,19 +59,50 @@ class CodeEditTool(BaseTool):
             parameters={
                 "type": "object",
                 "properties": {
-                    "filepath": {"type": "string", "description": "Path to the file to edit or create"},
+                    "filepath": {
+                        "type": "string",
+                        "description": "Path to the file to edit or create",
+                    },
                     "operation": {
                         "type": "string",
                         "description": "Edit operation to perform",
-                        "enum": ["search_replace", "insert_after", "insert_before", "replace_lines", "append", "create"],
+                        "enum": [
+                            "search_replace",
+                            "insert_after",
+                            "insert_before",
+                            "replace_lines",
+                            "append",
+                            "create",
+                        ],
                     },
-                    "search": {"type": "string", "description": "Text to find (for search_replace)"},
-                    "replace": {"type": "string", "description": "Replacement text (for search_replace)"},
-                    "after": {"type": "string", "description": "Line to insert after (for insert_after)"},
-                    "before": {"type": "string", "description": "Line to insert before (for insert_before)"},
-                    "content": {"type": "string", "description": "New content (for create, insert_after, insert_before, replace_lines, append)"},
-                    "startLine": {"type": "integer", "description": "Start line number (for replace_lines)"},
-                    "endLine": {"type": "integer", "description": "End line number (for replace_lines)"},
+                    "search": {
+                        "type": "string",
+                        "description": "Text to find (for search_replace)",
+                    },
+                    "replace": {
+                        "type": "string",
+                        "description": "Replacement text (for search_replace)",
+                    },
+                    "after": {
+                        "type": "string",
+                        "description": "Line to insert after (for insert_after)",
+                    },
+                    "before": {
+                        "type": "string",
+                        "description": "Line to insert before (for insert_before)",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "New content (for create, insert_after, insert_before, replace_lines, append)",
+                    },
+                    "startLine": {
+                        "type": "integer",
+                        "description": "Start line number (for replace_lines)",
+                    },
+                    "endLine": {
+                        "type": "integer",
+                        "description": "End line number (for replace_lines)",
+                    },
                 },
                 "required": ["filepath", "operation"],
             },
@@ -144,14 +175,28 @@ class CodeEditTool(BaseTool):
         Returns dict with: found, match_type ("exact"/"whitespace_normalized"/"fuzzy"/"none"),
         start, end, matched_text, ratio, best_ratio (for error reporting).
         """
-        result = {"found": False, "match_type": "none", "start": -1, "end": -1,
-                  "matched_text": "", "ratio": 0.0, "best_ratio": 0.0}
+        result = {
+            "found": False,
+            "match_type": "none",
+            "start": -1,
+            "end": -1,
+            "matched_text": "",
+            "ratio": 0.0,
+            "best_ratio": 0.0,
+        }
 
         # 1. Exact match
         idx = content.find(search)
         if idx != -1:
-            result.update(found=True, match_type="exact", start=idx, end=idx + len(search),
-                          matched_text=search, ratio=1.0, best_ratio=1.0)
+            result.update(
+                found=True,
+                match_type="exact",
+                start=idx,
+                end=idx + len(search),
+                matched_text=search,
+                ratio=1.0,
+                best_ratio=1.0,
+            )
             return result
 
         # 2. Whitespace-normalized match (line-based)
@@ -162,14 +207,24 @@ class CodeEditTool(BaseTool):
         if search_lines_norm and content_norm_lines:
             norm_match_len = len(search_lines_norm)
             for i in range(len(content_norm_lines) - norm_match_len + 1):
-                if content_norm_lines[i:i + norm_match_len] == search_lines_norm:
+                if content_norm_lines[i : i + norm_match_len] == search_lines_norm:
                     start_char = sum(len(ln) + 1 for ln in content_lines[:i])
-                    end_char = start_char + sum(len(ln) + 1 for ln in content_lines[i:i + norm_match_len]) - 1
+                    end_char = (
+                        start_char
+                        + sum(len(ln) + 1 for ln in content_lines[i : i + norm_match_len])
+                        - 1
+                    )
                     matched_text = content[start_char:end_char]
                     ratio = difflib.SequenceMatcher(None, search, matched_text).ratio()
-                    result.update(found=True, match_type="whitespace_normalized",
-                                  start=start_char, end=end_char,
-                                  matched_text=matched_text, ratio=ratio, best_ratio=ratio)
+                    result.update(
+                        found=True,
+                        match_type="whitespace_normalized",
+                        start=start_char,
+                        end=end_char,
+                        matched_text=matched_text,
+                        ratio=ratio,
+                        best_ratio=ratio,
+                    )
                     return result
 
         # 3. Fuzzy match using SequenceMatcher on lines
@@ -209,10 +264,15 @@ class CodeEditTool(BaseTool):
                     matched_text = "\n".join(content_lines_for_fuzzy[best_i:best_j])
                     start_char = sum(len(ln) + 1 for ln in content_lines_for_fuzzy[:best_i])
                     end_char = start_char + len(matched_text)
-                    result.update(found=True, match_type="fuzzy",
-                                  start=start_char, end=end_char,
-                                  matched_text=matched_text, ratio=best_ratio,
-                                  best_ratio=best_ratio)
+                    result.update(
+                        found=True,
+                        match_type="fuzzy",
+                        start=start_char,
+                        end=end_char,
+                        matched_text=matched_text,
+                        ratio=best_ratio,
+                        best_ratio=best_ratio,
+                    )
                     return result
 
                 # Store best ratio for error reporting
@@ -256,13 +316,15 @@ class CodeEditTool(BaseTool):
                 parts.append("\n".join(context_lines))
 
                 # Show diff between search and closest match
-                diff_lines = list(difflib.unified_diff(
-                    search.splitlines(),
-                    best_text.splitlines(),
-                    fromfile="search_string",
-                    tofile="actual_content",
-                    lineterm="",
-                ))
+                diff_lines = list(
+                    difflib.unified_diff(
+                        search.splitlines(),
+                        best_text.splitlines(),
+                        fromfile="search_string",
+                        tofile="actual_content",
+                        lineterm="",
+                    )
+                )
                 if diff_lines:
                     parts.append("\nDiff (search vs actual):\n" + "\n".join(diff_lines))
 
@@ -355,7 +417,9 @@ class CodeEditTool(BaseTool):
                 # Build detailed error
                 parts = [f"Error: Line containing '{after[:60]}' not found in {path}"]
                 if best_ratio > 0.4 and best_idx >= 0:
-                    parts.append(f"\nClosest match (line {best_idx + 1}, similarity: {best_ratio:.0%}):")
+                    parts.append(
+                        f"\nClosest match (line {best_idx + 1}, similarity: {best_ratio:.0%}):"
+                    )
                     start = max(0, best_idx - 1)
                     end = min(len(lines), best_idx + 2)
                     for i in range(start, end):
@@ -403,7 +467,9 @@ class CodeEditTool(BaseTool):
             else:
                 parts = [f"Error: Line containing '{before[:60]}' not found in {path}"]
                 if best_ratio > 0.4 and best_idx >= 0:
-                    parts.append(f"\nClosest match (line {best_idx + 1}, similarity: {best_ratio:.0%}):")
+                    parts.append(
+                        f"\nClosest match (line {best_idx + 1}, similarity: {best_ratio:.0%}):"
+                    )
                     start = max(0, best_idx - 1)
                     end = min(len(lines), best_idx + 2)
                     for i in range(start, end):

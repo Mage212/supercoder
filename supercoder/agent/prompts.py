@@ -53,8 +53,12 @@ Create a summary in this format:
 
 
 def build_system_prompt(
-    tools: list, rules: str = "", tool_calling_type: str = "supercoder",
-    mode_suffix: str = "", native_tools: bool = False, lean: bool = False,
+    tools: list,
+    rules: str = "",
+    tool_calling_type: str = "supercoder",
+    mode_suffix: str = "",
+    native_tools: bool = False,
+    lean: bool = False,
 ) -> str:
     """Build system prompt with available tools and project rules.
 
@@ -82,9 +86,7 @@ def build_system_prompt(
         tool_calling_instructions = get_tool_calling_prompt(tool_calling_type)
 
     template = SYSTEM_PROMPT_LEAN if lean else SYSTEM_PROMPT
-    prompt = template.format(
-        tools=tool_list, tool_calling_instructions=tool_calling_instructions
-    )
+    prompt = template.format(tools=tool_list, tool_calling_instructions=tool_calling_instructions)
 
     # Skip project rules in lean mode to save tokens
     if rules and not lean:

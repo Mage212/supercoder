@@ -24,7 +24,8 @@ console = Console()
 )
 @click.option("--repo-map/--no-repo-map", default=True, help="Enable/disable RepoMap")
 @click.option(
-    "--stream/--no-stream", default=False,
+    "--stream/--no-stream",
+    default=False,
     help="Enable deprecated streaming mode (default: off, uses native tool calls)",
 )
 @click.version_option(version=__version__)
@@ -98,15 +99,11 @@ def main(
                     return
             else:
                 # Existing config with profiles: show diagnostic, do NOT launch wizard
-                console.print(
-                    "\n[red]Error: API key not configured for the active profile.[/]\n"
-                )
+                console.print("\n[red]Error: API key not configured for the active profile.[/]\n")
                 available = config.get_available_models()
                 console.print(f"  Active profile: [cyan]{config.current_profile_name}[/]")
                 if available:
-                    console.print(
-                        f"  Available profiles: [cyan]{', '.join(available)}[/]"
-                    )
+                    console.print(f"  Available profiles: [cyan]{', '.join(available)}[/]")
                 console.print(
                     "\n[yellow]To fix this, either:[/]\n"
                     "  1. Edit your config:   [dim]nano ~/.supercoder/config.yaml[/]\n"
@@ -114,7 +111,6 @@ def main(
                     "  3. Switch to a profile: [dim]supercoder -m <profile-name>[/]"
                 )
                 return
-
 
     # Initialize logger
     logger = init_logger(config.model)

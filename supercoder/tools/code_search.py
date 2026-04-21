@@ -17,8 +17,15 @@ class CodeSearchTool(BaseTool):
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Search pattern (text or regex)"},
-                    "maxResults": {"type": "integer", "description": "Maximum number of matches to return", "default": 10},
-                    "filePattern": {"type": "string", "description": "Glob pattern to filter files, e.g. '*.py'"},
+                    "maxResults": {
+                        "type": "integer",
+                        "description": "Maximum number of matches to return",
+                        "default": 10,
+                    },
+                    "filePattern": {
+                        "type": "string",
+                        "description": "Glob pattern to filter files, e.g. '*.py'",
+                    },
                 },
                 "required": ["query"],
             },

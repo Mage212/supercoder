@@ -20,9 +20,20 @@ class FileReadTool(BaseTool):
                 "type": "object",
                 "properties": {
                     "fileName": {"type": "string", "description": "Path to the file to read"},
-                    "startLine": {"type": "integer", "description": "Start line (1-indexed)", "default": 1},
-                    "endLine": {"type": "integer", "description": "End line (1-indexed, inclusive)"},
-                    "maxLines": {"type": "integer", "description": "Maximum lines to return", "default": 200},
+                    "startLine": {
+                        "type": "integer",
+                        "description": "Start line (1-indexed)",
+                        "default": 1,
+                    },
+                    "endLine": {
+                        "type": "integer",
+                        "description": "End line (1-indexed, inclusive)",
+                    },
+                    "maxLines": {
+                        "type": "integer",
+                        "description": "Maximum lines to return",
+                        "default": 200,
+                    },
                 },
                 "required": ["fileName"],
             },

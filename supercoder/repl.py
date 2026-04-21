@@ -246,9 +246,7 @@ class SuperCoderREPL:
         rollback_info = None
         touched_files = set()
 
-        spinner = self.console.status(
-            "[bold blue]SuperCoder is thinking...[/]", spinner="dots"
-        )
+        spinner = self.console.status("[bold blue]SuperCoder is thinking...[/]", spinner="dots")
         spinner.start()
 
         # Live token counter + elapsed timer for generation progress
@@ -265,9 +263,7 @@ class SuperCoderREPL:
                 elapsed = int(time.monotonic() - _gen_start)
                 n = _gen_tokens[0]
                 label = _gen_phase[0]
-                spinner.update(
-                    f"[bold blue]Generating {label}... {n:,} tokens ({elapsed}s)[/]"
-                )
+                spinner.update(f"[bold blue]Generating {label}... {n:,} tokens ({elapsed}s)[/]")
 
         _tick_thread = threading.Thread(target=_tick, daemon=True)
         _tick_thread.start()
@@ -394,9 +390,7 @@ class SuperCoderREPL:
         _printed_up_to = 0  # Character offset into accumulated_display up to which we've printed
 
         # --- Spinner (manual start/stop) ---
-        spinner = self.console.status(
-            "[bold blue]SuperCoder is thinking...[/]", spinner="dots"
-        )
+        spinner = self.console.status("[bold blue]SuperCoder is thinking...[/]", spinner="dots")
         spinner.start()
 
         def flush_reasoning():
@@ -638,8 +632,10 @@ class SuperCoderREPL:
         filled = int(bar_w * stats.utilization_percent / 100)
         empty = bar_w - filled
         color = (
-            "green" if stats.utilization_percent < 50
-            else "yellow" if stats.utilization_percent < 80
+            "green"
+            if stats.utilization_percent < 50
+            else "yellow"
+            if stats.utilization_percent < 80
             else "red"
         )
         bar = f"[{color}]{'━' * filled}[/][dim]{'━' * empty}[/]"
@@ -706,7 +702,9 @@ class SuperCoderREPL:
                         name = fn.get("name", "?")
                         args_str = fn.get("arguments", "{}")
                         try:
-                            args_obj = json.loads(args_str) if isinstance(args_str, str) else args_str
+                            args_obj = (
+                                json.loads(args_str) if isinstance(args_str, str) else args_str
+                            )
                         except Exception:
                             args_obj = {"_raw": args_str}
                         self._display_tool_call({"name": name, "arguments": args_obj})
@@ -975,8 +973,11 @@ class SuperCoderREPL:
         if name == "file-read" and result:
             display = result[:800] + "\n..." if len(result) > 800 else result
             syntax = Syntax(
-                display, "text", theme="monokai",
-                line_numbers=True, background_color="default",
+                display,
+                "text",
+                theme="monokai",
+                line_numbers=True,
+                background_color="default",
             )
             self._print_block(syntax, f"Result: {name}", "green", "✔")
             return
@@ -985,8 +986,11 @@ class SuperCoderREPL:
         if name == "command-exec" and result:
             display = result[:800] + "\n..." if len(result) > 800 else result
             syntax = Syntax(
-                display, "bash", theme="monokai",
-                line_numbers=False, background_color="default",
+                display,
+                "bash",
+                theme="monokai",
+                line_numbers=False,
+                background_color="default",
             )
             self._print_block(syntax, f"Result: {name}", "green", "✔")
             return
@@ -1158,11 +1162,13 @@ class SuperCoderREPL:
             display = f"{title}{compacted}  {rel} · {msg_count} msgs"
             choices.append(Choice(title=display, value=s))
 
-        style = Style([
-            ("qmark", "fg:#00aa00 bold"),
-            ("pointer", "fg:#00aa00 bold"),
-            ("highlighted", "bold"),
-        ])
+        style = Style(
+            [
+                ("qmark", "fg:#00aa00 bold"),
+                ("pointer", "fg:#00aa00 bold"),
+                ("highlighted", "bold"),
+            ]
+        )
 
         return select(
             "Resume which session?",
@@ -1240,8 +1246,11 @@ class SuperCoderREPL:
 
     def cmd_help(self, _):
         table = Table(
-            title="SuperCoder Commands", box=box.SIMPLE_HEAVY,
-            title_style="bold", show_header=True, header_style="bold cyan",
+            title="SuperCoder Commands",
+            box=box.SIMPLE_HEAVY,
+            title_style="bold",
+            show_header=True,
+            header_style="bold cyan",
         )
         table.add_column("Command", style="green", min_width=14)
         table.add_column("Description")
@@ -1314,8 +1323,10 @@ class SuperCoderREPL:
         filled = int(bar_width * stats.utilization_percent / 100)
         empty = bar_width - filled
         color = (
-            "green" if stats.utilization_percent < 50
-            else "yellow" if stats.utilization_percent < 80
+            "green"
+            if stats.utilization_percent < 50
+            else "yellow"
+            if stats.utilization_percent < 80
             else "red"
         )
         bar = f"[{color}]{'━' * filled}[/][dim]{'━' * empty}[/]"

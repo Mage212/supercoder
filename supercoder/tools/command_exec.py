@@ -72,7 +72,11 @@ class CommandExecutionTool(BaseTool):
                 "type": "object",
                 "properties": {
                     "command": {"type": "string", "description": "Shell command to execute"},
-                    "timeout": {"type": "integer", "description": "Timeout in seconds (max 120)", "default": 60},
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Timeout in seconds (max 120)",
+                        "default": 60,
+                    },
                 },
                 "required": ["command"],
             },

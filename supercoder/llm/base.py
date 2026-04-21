@@ -28,7 +28,9 @@ class Message:
     tool_call_id: str | None = None
     name: str | None = None  # tool name (used with role="tool")
     # Display hint for session restore rendering (not sent to API)
-    display_type: str | None = None  # "user_input", "thinking", "response", "tool_call", "tool_result", "error", "compact_summary"
+    display_type: str | None = (
+        None  # "user_input", "thinking", "response", "tool_call", "tool_result", "error", "compact_summary"
+    )
 
     def to_api_dict(self) -> dict:
         """Serialize to a dict suitable for the OpenAI messages array."""

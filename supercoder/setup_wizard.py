@@ -73,9 +73,7 @@ def _print_header() -> None:
     header = Text()
     header.append("🚀 SuperCoder Setup\n", style="bold green")
     header.append("No API key configured. Let's set up your first provider!\n", style="dim")
-    header.append(
-        "Config will be saved to ", style="dim"
-    )
+    header.append("Config will be saved to ", style="dim")
     header.append(str(Path.home() / ".supercoder" / "config.yaml"), style="cyan")
     console.print(Panel(header, border_style="green", box=box.ROUNDED))
 
@@ -113,7 +111,7 @@ def _pick_model(provider: dict) -> str:
         for i, m in enumerate(models, 1):
             marker = " [dim](default)[/]" if m == default else ""
             console.print(f"  [cyan]{i}[/]. {m}{marker}")
-        console.print(f"  [cyan]{len(models)+1}[/]. Enter custom model name")
+        console.print(f"  [cyan]{len(models) + 1}[/]. Enter custom model name")
 
         while True:
             raw = Prompt.ask("\n[bold green]Model[/]", default="1")
@@ -140,8 +138,11 @@ def _sanitize_key(raw: str) -> str:
     sanitize as a defence-in-depth measure.
     """
     import re
+
     # Remove ANSI escape sequences (ESC + anything up to a letter)
-    cleaned = re.sub(r"\x1b[\[\]()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><~]", "", raw)
+    cleaned = re.sub(
+        r"\x1b[\[\]()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><~]", "", raw
+    )
     # Remove other non-printable characters (keep normal ASCII/Unicode)
     cleaned = "".join(ch for ch in cleaned if ch.isprintable())
     return cleaned.strip()
@@ -155,8 +156,7 @@ def _get_api_key(provider: dict) -> str:
 
     if is_local:
         console.print(
-            "\n[dim]Local endpoint detected — no API key needed. "
-            "Using 'ollama' as placeholder.[/]"
+            "\n[dim]Local endpoint detected — no API key needed. Using 'ollama' as placeholder.[/]"
         )
         return "ollama"
 
@@ -167,6 +167,7 @@ def _get_api_key(provider: dict) -> str:
     hint = provider.get("key_hint", "...")
     while True:
         import getpass
+
         console.print(f"\n[bold green]API Key[/] [dim]({hint})[/]: ", end="")
         try:
             raw = getpass.getpass(prompt="")
@@ -208,9 +209,9 @@ def _pick_tool_calling_type(suggested: str = "supercoder") -> str:
     """Ask user to select the tool calling format for the model."""
     formats = [
         ("supercoder", "Native format — best for most instruction-following models (default)"),
-        ("qwen_like",  "Qwen / GPT-OSS style:  to=tool:name {...}"),
-        ("json_block", "JSON code block:  ```json {\"tool\": \"...\", ...} ```"),
-        ("xml_function", "XML function:  <function_call name=\"...\">...</function_call>"),
+        ("qwen_like", "Qwen / GPT-OSS style:  to=tool:name {...}"),
+        ("json_block", 'JSON code block:  ```json {"tool": "...", ...} ```'),
+        ("xml_function", 'XML function:  <function_call name="...">...</function_call>'),
         ("glm_tool_call", "GLM-4 style:  <tool_call>name<arg_key>k</arg_key>...</tool_call>"),
     ]
     console.print("\n[bold]Tool calling format[/] [dim](how the model sends tool calls)[/]\n")
@@ -290,7 +291,9 @@ def _write_config(
 
     config_data["default_model"] = profile_name
 
-    header = "# SuperCoder Configuration\n# Documentation: https://github.com/your-repo/supercoder\n\n"
+    header = (
+        "# SuperCoder Configuration\n# Documentation: https://github.com/your-repo/supercoder\n\n"
+    )
     content = header + yaml.dump(config_data, default_flow_style=False, sort_keys=False)
     AtomicFileWriter.write(CONFIG_FILE, content)
     return CONFIG_FILE
@@ -341,9 +344,7 @@ def run_setup_wizard() -> bool:
             max_context_tokens=max_context_tokens,
         )
 
-        console.print(
-            f"\n[bold green]✓ Configuration saved to:[/] [cyan]{config_path}[/]\n"
-        )
+        console.print(f"\n[bold green]✓ Configuration saved to:[/] [cyan]{config_path}[/]\n")
         return True
 
     except (KeyboardInterrupt, EOFError):

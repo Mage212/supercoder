@@ -26,7 +26,7 @@ class SlashCommandAutoSuggest(AutoSuggest):
             return None
         for cmd in self.commands:
             if cmd.startswith(text) and cmd != text:
-                return Suggestion(cmd[len(text):])
+                return Suggestion(cmd[len(text) :])
         return None
 
 

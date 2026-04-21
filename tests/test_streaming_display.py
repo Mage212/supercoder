@@ -3,11 +3,13 @@
 These tests simulate the paragraph-tracking and offset logic used inside
 _handle_chat() to prevent regressions in the streaming display pipeline.
 """
+
 import re
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers that replicate the logic in repl.py without instantiating SuperCoderREPL
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 def simulate_streaming(tokens: list[str], tool_calling_type: str = "supercoder"):
     """Simulate the full streaming display pipeline.
@@ -75,8 +77,8 @@ def simulate_filter(text: str) -> str:
 # Bug #1 + #2: Text not displayed due to paragraph offset vs count mismatch
 # ──────────────────────────────────────────────────────────────────────────────
 
-class TestStreamingDisplay:
 
+class TestStreamingDisplay:
     def test_leading_newlines_simple_response(self):
         """Qwen3.5 always starts with \\n\\n — full response must still display."""
         tokens = ["\n\n", "Привет!", " 👋", " Как", " дела", "?"]
@@ -129,9 +131,8 @@ class TestStreamingDisplay:
 
     def test_leading_nn_with_tool_call_text_visible(self):
         """\\n\\n prefix + text + tool call: text must be visible, tag must not."""
-        tokens = (
-            list("\n\nЯ проверю файлы.\n\n") +
-            list('<@TOOL>{"name":"project-structure","arguments":{}}</@TOOL>')
+        tokens = list("\n\nЯ проверю файлы.\n\n") + list(
+            '<@TOOL>{"name":"project-structure","arguments":{}}</@TOOL>'
         )
         parts = simulate_streaming(tokens)
         full = "".join(parts)
@@ -143,8 +144,8 @@ class TestStreamingDisplay:
 # Bug #2: _filter_special_tokens must preserve \n\n
 # ──────────────────────────────────────────────────────────────────────────────
 
-class TestFilterSpecialTokens:
 
+class TestFilterSpecialTokens:
     def test_double_newlines_preserved(self):
         """The filter must NOT collapse \\n\\n into \\n."""
         result = simulate_filter("Paragraph A.\n\nParagraph B.")

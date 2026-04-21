@@ -135,7 +135,11 @@ class ContextWindowManager:
         """
         self._actual_used_tokens = None
         self.history = [
-            Message("user", f"[Previous Context Summary - remember this information]\n\n{summary}", display_type="compact_summary")
+            Message(
+                "user",
+                f"[Previous Context Summary - remember this information]\n\n{summary}",
+                display_type="compact_summary",
+            )
         ]
 
     def _compress(self) -> None:

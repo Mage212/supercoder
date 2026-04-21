@@ -82,7 +82,11 @@ class CoderAgent:
 
         # Build system prompt template with tools and project rules
         mode_config = MODE_CONFIGS[self._mode]
-        suffix = mode_config.lean_prompt_suffix if self.lean and mode_config.lean_prompt_suffix else mode_config.prompt_suffix
+        suffix = (
+            mode_config.lean_prompt_suffix
+            if self.lean and mode_config.lean_prompt_suffix
+            else mode_config.prompt_suffix
+        )
         self.base_system_prompt = build_system_prompt(
             self._get_tools_for_mode(),
             rules=project_rules,
@@ -154,7 +158,11 @@ class CoderAgent:
 
         # Rebuild system prompt with new mode's tools and suffix
         mode_config = MODE_CONFIGS[self._mode]
-        suffix = mode_config.lean_prompt_suffix if self.lean and mode_config.lean_prompt_suffix else mode_config.prompt_suffix
+        suffix = (
+            mode_config.lean_prompt_suffix
+            if self.lean and mode_config.lean_prompt_suffix
+            else mode_config.prompt_suffix
+        )
         self.base_system_prompt = build_system_prompt(
             self._get_tools_for_mode(),
             rules=self._project_rules,
@@ -173,7 +181,11 @@ class CoderAgent:
         if tool_calling_type != self.tool_calling_type:
             self.tool_calling_type = tool_calling_type
             mode_config = MODE_CONFIGS[self._mode]
-            suffix = mode_config.lean_prompt_suffix if self.lean and mode_config.lean_prompt_suffix else mode_config.prompt_suffix
+            suffix = (
+                mode_config.lean_prompt_suffix
+                if self.lean and mode_config.lean_prompt_suffix
+                else mode_config.prompt_suffix
+            )
             self.base_system_prompt = build_system_prompt(
                 self._get_tools_for_mode(),
                 rules=self._project_rules,
@@ -237,7 +249,9 @@ class CoderAgent:
             # --- Call LLM with interruptible streaming ---
             try:
                 result = self.llm.chat_with_tools_interruptible(
-                    messages, self._tools_schema, self.abort_controller,
+                    messages,
+                    self._tools_schema,
+                    self.abort_controller,
                     on_chunk=self._chunk_callback,
                 )
             except Exception as e:
@@ -305,7 +319,9 @@ class CoderAgent:
                     has_file_edits = True
 
                 if name not in self.tools:
-                    error_msg = f"Unknown tool: '{name}'. Available tools: {', '.join(self.tools.keys())}"
+                    error_msg = (
+                        f"Unknown tool: '{name}'. Available tools: {', '.join(self.tools.keys())}"
+                    )
                     yield {"type": "error", "content": error_msg}
                     # Add tool error result for context
                     self.context.add_message(
@@ -334,9 +350,18 @@ class CoderAgent:
                         }
                         if not confirm_result.get("approved", False):
                             tool_result = "Command execution cancelled by user."
-                            yield {"type": "tool_result", "content": {"name": name, "result": tool_result}}
+                            yield {
+                                "type": "tool_result",
+                                "content": {"name": name, "result": tool_result},
+                            }
                             self.context.add_message(
-                                Message(role="tool", content=tool_result, tool_call_id=tc.id, name=name, display_type="tool_result")
+                                Message(
+                                    role="tool",
+                                    content=tool_result,
+                                    tool_call_id=tc.id,
+                                    name=name,
+                                    display_type="tool_result",
+                                )
                             )
                             continue
 
@@ -371,7 +396,13 @@ class CoderAgent:
 
                     # Add tool result as role="tool" with tool_call_id
                     self.context.add_message(
-                        Message(role="tool", content=tool_result, tool_call_id=tc.id, name=name, display_type="tool_result")
+                        Message(
+                            role="tool",
+                            content=tool_result,
+                            tool_call_id=tc.id,
+                            name=name,
+                            display_type="tool_result",
+                        )
                     )
 
                 except Exception as e:
@@ -379,12 +410,21 @@ class CoderAgent:
                     error_result = f"Error executing tool: {e}"
                     yield {"type": "error", "content": error_result}
                     self.context.add_message(
-                        Message(role="tool", content=error_result, tool_call_id=tc.id, name=name, display_type="error")
+                        Message(
+                            role="tool",
+                            content=error_result,
+                            tool_call_id=tc.id,
+                            name=name,
+                            display_type="error",
+                        )
                     )
                     if checkpoint_active:
                         restored = self.checkpoint_manager.rollback()
                         if restored:
-                            yield {"type": "rollback", "content": {"files": restored, "reason": str(e)}}
+                            yield {
+                                "type": "rollback",
+                                "content": {"files": restored, "reason": str(e)},
+                            }
                         checkpoint_active = False
 
             # Commit checkpoint after successful file edits
@@ -512,11 +552,11 @@ class CoderAgent:
 
                     # Normalize invented tool names that small models hallucinate
                     TOOL_ALIASES: dict[str, str] = {
-                        "file-create": "code-edit",   # qwen3.5 invents this
+                        "file-create": "code-edit",  # qwen3.5 invents this
                         "file-write": "code-edit",
                         "create-file": "code-edit",
                         "write-file": "code-edit",
-                        "file_read": "file-read",      # underscore variants
+                        "file_read": "file-read",  # underscore variants
                         "file_edit": "code-edit",
                         "code_edit": "code-edit",
                         "code_search": "code-search",

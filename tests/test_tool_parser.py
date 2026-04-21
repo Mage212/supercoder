@@ -263,7 +263,9 @@ class TestSupercoderTagFallbackParser:
     def test_single_quote_strings_repaired(self):
         """qwen3.5-4b uses single-quoted JSON strings instead of double."""
         parser = ToolCallParser()
-        text = "<@TOOL>{\"name\": \"file-create\", \"arguments\": {\"content\": 'print(\"Hello\")'}}</@TOOL>"
+        text = (
+            '<@TOOL>{"name": "file-create", "arguments": {"content": \'print("Hello")\'}}</@TOOL>'
+        )
         result = parser.parse(text)
 
         assert result is not None

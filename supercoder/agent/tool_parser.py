@@ -43,7 +43,7 @@ def _repair_json(text: str) -> str:
             escape_next = False
             continue
 
-        if ch == '\\' and (in_string or in_single_string):
+        if ch == "\\" and (in_string or in_single_string):
             out.append(ch)
             escape_next = True
             continue
@@ -56,12 +56,12 @@ def _repair_json(text: str) -> str:
             elif ch == '"':
                 # Escape double quotes inside single-quoted strings
                 out.append('\\"')
-            elif ch == '\n':
-                out.append('\\n')
-            elif ch == '\r':
-                out.append('\\r')
-            elif ch == '\t':
-                out.append('\\t')
+            elif ch == "\n":
+                out.append("\\n")
+            elif ch == "\r":
+                out.append("\\r")
+            elif ch == "\t":
+                out.append("\\t")
             else:
                 out.append(ch)
             continue
@@ -79,18 +79,18 @@ def _repair_json(text: str) -> str:
 
         if in_string:
             # Replace raw control characters with JSON escape sequences
-            if ch == '\n':
-                out.append('\\n')
-            elif ch == '\r':
-                out.append('\\r')
-            elif ch == '\t':
-                out.append('\\t')
+            if ch == "\n":
+                out.append("\\n")
+            elif ch == "\r":
+                out.append("\\r")
+            elif ch == "\t":
+                out.append("\\t")
             else:
                 out.append(ch)
         else:
             out.append(ch)
 
-    return ''.join(out)
+    return "".join(out)
 
 
 def _safe_json_loads(text: str) -> Any:
@@ -257,7 +257,7 @@ class SupercoderTagFallbackParser(BaseToolParser):
             return ToolCall(
                 name=data.get("name", ""),
                 arguments=data.get("arguments", ""),
-                raw_match=text[match.start(): start + len(json_text)],
+                raw_match=text[match.start() : start + len(json_text)],
                 format_name=self.name,
             )
         except (json.JSONDecodeError, KeyError):
@@ -469,12 +469,12 @@ class ToolCallParser:
         self.debug = debug
         # Parsers in priority order - matching our supported tool_calling_types
         self.parsers: list[BaseToolParser] = [
-            SupercoderTagParser(),          # tool_calling_type: supercoder (complete tags)
+            SupercoderTagParser(),  # tool_calling_type: supercoder (complete tags)
             SupercoderTagFallbackParser(),  # same, but without closing </@TOOL> tag
-            QwenStyleParser(),              # tool_calling_type: qwen_like
-            JsonBlockParser(),              # tool_calling_type: json_block
-            XmlFunctionParser(),            # tool_calling_type: xml_function
-            GlmToolCallParser(),            # tool_calling_type: glm_tool_call
+            QwenStyleParser(),  # tool_calling_type: qwen_like
+            JsonBlockParser(),  # tool_calling_type: json_block
+            XmlFunctionParser(),  # tool_calling_type: xml_function
+            GlmToolCallParser(),  # tool_calling_type: glm_tool_call
         ]
 
     def parse(self, text: str) -> ToolCall | None:

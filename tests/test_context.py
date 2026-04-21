@@ -109,7 +109,9 @@ class TestContextWindowManager:
 
         cm.add_message(Message("user", "Hello", display_type="user_input"))
         cm.add_message(Message("assistant", "Result", display_type="response"))
-        cm.add_message(Message("tool", "output", tool_call_id="tc1", name="f", display_type="tool_result"))
+        cm.add_message(
+            Message("tool", "output", tool_call_id="tc1", name="f", display_type="tool_result")
+        )
 
         api_msgs = cm.get_messages_for_api()
         assert len(api_msgs) == 3  # all pass through

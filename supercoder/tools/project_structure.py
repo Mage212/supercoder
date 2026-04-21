@@ -41,9 +41,21 @@ class ProjectStructureTool(BaseTool):
             parameters={
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Root path to show structure from", "default": "."},
-                    "maxDepth": {"type": "integer", "description": "Maximum directory depth", "default": 3},
-                    "maxFiles": {"type": "integer", "description": "Maximum number of files to show", "default": 50},
+                    "path": {
+                        "type": "string",
+                        "description": "Root path to show structure from",
+                        "default": ".",
+                    },
+                    "maxDepth": {
+                        "type": "integer",
+                        "description": "Maximum directory depth",
+                        "default": 3,
+                    },
+                    "maxFiles": {
+                        "type": "integer",
+                        "description": "Maximum number of files to show",
+                        "default": 50,
+                    },
                 },
             },
         )

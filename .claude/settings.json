@@ -1,0 +1,38 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "axme-code hook pre-tool-use --workspace /Users/vadimmitroshkin/coding_projects/macbook_m1_projects/supercoder-cli/supercoder",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "axme-code hook post-tool-use --workspace /Users/vadimmitroshkin/coding_projects/macbook_m1_projects/supercoder-cli/supercoder",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "axme-code hook session-end --workspace /Users/vadimmitroshkin/coding_projects/macbook_m1_projects/supercoder-cli/supercoder",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  }
+}
