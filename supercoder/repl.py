@@ -38,10 +38,8 @@ class SuperCoderREPL:
             "/clear": self.cmd_clear,
             "/compact": self.cmd_compact,
             "/continue": self.cmd_continue,
-            "/sessions": self.cmd_sessions,
             "/undo": self.cmd_undo,
             "/help": self.cmd_help,
-            "/tools": self.cmd_tools,
             "/config": self.cmd_config,
             "/stats": self.cmd_stats,
             "/debug": self.cmd_debug,
@@ -1196,27 +1194,6 @@ class SuperCoderREPL:
 
         return False
 
-    def cmd_sessions(self, _):
-        """List available sessions."""
-        sessions = self.agent.session_manager.list_sessions()
-
-        if not sessions:
-            self.console.print("[yellow]No sessions found[/]")
-            return False
-
-        self.console.print("\n[bold]Saved Sessions:[/]")
-        for session in sessions:
-            compacted = " (compacted)" if session.get("is_compacted") else ""
-            rel = format_relative_time(session.get("last_modified", ""))
-            title = session.get("title", "Untitled")
-            msg_count = session.get("message_count", 0)
-            self.console.print(f"  • {title}{compacted}")
-            self.console.print(f"    [dim]{rel} · {msg_count} messages[/]")
-
-        self.console.print(f"\n[dim]Total: {len(sessions)} sessions (max 10)[/]")
-        self.console.print("[dim]Use /continue to resume a session[/]")
-        return False
-
     def cmd_undo(self, _):
         """Undo changes to a selected checkpoint."""
         checkpoints = self.agent.checkpoint_manager.list_checkpoints()
@@ -1286,13 +1263,11 @@ class SuperCoderREPL:
         table.add_section()
         table.add_row("[bold dim]Session[/]", "")
         table.add_row("/continue", "Resume a previous session")
-        table.add_row("/sessions", "List saved sessions")
         table.add_row("/undo", "Undo changes to a checkpoint")
 
         # Config
         table.add_section()
         table.add_row("[bold dim]Config[/]", "")
-        table.add_row("/tools", "List available tools")
         table.add_row("/models", "List available model profiles")
         table.add_row("/model <name>", "Switch to a model profile")
         table.add_row("/config", "Show current configuration")
@@ -1302,17 +1277,6 @@ class SuperCoderREPL:
         table.add_row("/exit", "Quit SuperCoder")
 
         self.console.print(table)
-        return False
-
-    def cmd_tools(self, _):
-        table = Table(box=box.SIMPLE, show_header=True, header_style="bold")
-        table.add_column("Tool", style="cyan", min_width=18)
-        table.add_column("Description")
-
-        for name, tool in self.agent.tools.items():
-            table.add_row(name, tool.definition.description[:70])
-
-        self._print_block(table, "Available Tools", "cyan", "🔧")
         return False
 
     def cmd_config(self, _):
