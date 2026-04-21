@@ -1,6 +1,8 @@
 """Interactive REPL for SuperCoder."""
 
 import sys
+import threading
+import time
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -250,10 +252,31 @@ class SuperCoderREPL:
         )
         spinner.start()
 
-        # Live token counter during generation
-        self.agent.set_chunk_callback(
-            lambda n: spinner.update(f"[bold blue]Generating... {n:,} tokens[/]")
-        )
+        # Live token counter + elapsed timer for generation progress
+        # The timer thread ensures the spinner always shows activity,
+        # even when the provider (e.g. LMStudio) buffers tool call arguments
+        # and doesn't stream chunks incrementally.
+        _gen_tokens = [0]
+        _gen_start = time.monotonic()
+        _gen_stop = threading.Event()
+        _gen_phase = ["response"]  # "response" or "tool_call"
+
+        def _tick():
+            while not _gen_stop.wait(0.7):
+                elapsed = int(time.monotonic() - _gen_start)
+                n = _gen_tokens[0]
+                label = _gen_phase[0]
+                spinner.update(
+                    f"[bold blue]Generating {label}... {n:,} tokens ({elapsed}s)[/]"
+                )
+
+        _tick_thread = threading.Thread(target=_tick, daemon=True)
+        _tick_thread.start()
+
+        def _on_chunk(n):
+            _gen_tokens[0] = n
+
+        self.agent.set_chunk_callback(_on_chunk)
 
         # Setup keyboard listener for ESC (between-iteration abort only)
         if hasattr(self, "keyboard_listener"):
@@ -288,6 +311,9 @@ class SuperCoderREPL:
                 elif event_type == "tool_result":
                     spinner.stop()
                     self._display_tool_result(content)
+                    _gen_tokens[0] = 0
+                    _gen_start = time.monotonic()
+                    _gen_phase[0] = "tool call"
                     spinner.update("[bold blue]SuperCoder is thinking...[/]")
                     spinner.start()
 
@@ -323,6 +349,7 @@ class SuperCoderREPL:
         except Exception:
             raise
         finally:
+            _gen_stop.set()
             spinner.stop()
             if hasattr(self, "keyboard_listener"):
                 self.keyboard_listener.stop()

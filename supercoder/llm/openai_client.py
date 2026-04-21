@@ -194,6 +194,7 @@ class OpenAIClient(BaseLLM):
         tc_buffers: dict[int, dict] = {}  # index -> {id, name, arguments}
         usage: UsageStats | None = None
         truncated = False
+        total_chars = 0  # Running character count for token estimation
 
         try:
             for chunk in stream:
@@ -213,25 +214,18 @@ class OpenAIClient(BaseLLM):
                     continue
 
                 delta = chunk.choices[0].delta
+                chunk_chars = 0
 
                 # Accumulate content
                 if delta.content:
                     content_parts.append(delta.content)
-
-                    # Approximate token count and notify
-                    approx_tokens = sum(len(p.split()) for p in content_parts)
-                    if on_chunk:
-                        on_chunk(approx_tokens)
-
-                    # Truncate if over limit
-                    if approx_tokens >= max_completion_tokens:
-                        truncated = True
-                        break
+                    chunk_chars += len(delta.content)
 
                 # Accumulate reasoning
                 rc = getattr(delta, "reasoning_content", None)
                 if rc:
                     reasoning_parts.append(rc)
+                    chunk_chars += len(rc)
 
                 # Accumulate tool calls (arrive in fragments)
                 if delta.tool_calls:
@@ -246,8 +240,22 @@ class OpenAIClient(BaseLLM):
                         if fn:
                             if fn.name:
                                 buf["name"] += fn.name
+                                chunk_chars += len(fn.name)
                             if fn.arguments:
                                 buf["arguments"] += fn.arguments
+                                chunk_chars += len(fn.arguments)
+
+                # Update running count and notify
+                if chunk_chars:
+                    total_chars += chunk_chars
+                    approx_tokens = total_chars // 4
+                    if on_chunk:
+                        on_chunk(approx_tokens)
+
+                    # Truncate if over limit
+                    if approx_tokens >= max_completion_tokens:
+                        truncated = True
+                        break
 
             # Final usage (some providers send it on the last content chunk)
             if not truncated and chunk.usage and usage is None:

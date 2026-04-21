@@ -205,3 +205,41 @@ class TestSessionManager:
         assert loaded.is_compacted is True
         assert len(loaded.messages) == 1
         assert summary in loaded.messages[0].content
+
+    def test_display_type_roundtrip(self, tmp_path):
+        """Test that display_type survives save/load cycle."""
+        manager = SessionManager(tmp_path)
+
+        session = manager.create_new_session()
+        session.messages = [
+            Message("user", "Hello", display_type="user_input"),
+            Message("assistant", "Let me think...", display_type="thinking"),
+            Message("assistant", "Hi!", display_type="response"),
+            Message("assistant", "", display_type="tool_call"),
+            Message("tool", "result", tool_call_id="tc1", name="file-read", display_type="tool_result"),
+            Message("tool", "ERROR", tool_call_id="tc2", name="code-edit", display_type="error"),
+        ]
+        manager.save_session(session)
+
+        loaded = manager.load_session(session.id)
+        assert loaded is not None
+        types = [m.display_type for m in loaded.messages]
+        assert types == ["user_input", "thinking", "response", "tool_call", "tool_result", "error"]
+
+    def test_display_type_backward_compat(self, tmp_path):
+        """Test loading old session without display_type."""
+        manager = SessionManager(tmp_path)
+
+        session = manager.create_new_session()
+        session.messages = [Message("user", "Hello"), Message("assistant", "Hi")]
+        manager.save_session(session)
+
+        loaded = manager.load_session(session.id)
+        assert all(m.display_type is None for m in loaded.messages)
+
+    def test_display_type_not_in_api_dict(self):
+        """Test that to_api_dict() does NOT include display_type."""
+        msg = Message("user", "Hello", display_type="user_input")
+        d = msg.to_api_dict()
+        assert "display_type" not in d
+        assert d == {"role": "user", "content": "Hello"}

@@ -32,6 +32,8 @@ class ChatSession:
                 m["tool_call_id"] = msg.tool_call_id
             if msg.name:
                 m["name"] = msg.name
+            if msg.display_type:
+                m["display_type"] = msg.display_type
             serialized_messages.append(m)
 
         return {
@@ -55,6 +57,7 @@ class ChatSession:
                     tool_calls=m.get("tool_calls"),
                     tool_call_id=m.get("tool_call_id"),
                     name=m.get("name"),
+                    display_type=m.get("display_type"),
                 )
             )
         return cls(
@@ -209,7 +212,7 @@ class SessionManager:
         Replaces all messages with the summary and marks as compacted.
         """
         session.is_compacted = True
-        session.messages = [Message("user", f"[Previous Context Summary]\n\n{summary}")]
+        session.messages = [Message("user", f"[Previous Context Summary]\n\n{summary}", display_type="compact_summary")]
         session.last_modified = datetime.now().isoformat()
 
         # Save updated session

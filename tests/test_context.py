@@ -87,3 +87,29 @@ class TestContextWindowManager:
         cm.clear()
         stats = cm.get_stats()
         assert stats.message_count == 0
+
+    def test_get_messages_for_api_filters_thinking(self):
+        """Test that get_messages_for_api() excludes thinking messages."""
+        config = ContextConfig(max_tokens=10000)
+        cm = ContextWindowManager(config)
+        cm.set_system_prompt("System")
+
+        cm.add_message(Message("user", "Hello", display_type="user_input"))
+        cm.add_message(Message("assistant", "Reasoning...", display_type="thinking"))
+        cm.add_message(Message("assistant", "Hi!", display_type="response"))
+
+        api_msgs = cm.get_messages_for_api()
+        roles = [m.role for m in api_msgs]
+        assert roles == ["system", "user", "assistant"]  # thinking filtered out
+
+    def test_get_messages_for_api_keeps_other_display_types(self):
+        """Test that non-thinking display types pass through to API."""
+        config = ContextConfig(max_tokens=10000)
+        cm = ContextWindowManager(config)
+
+        cm.add_message(Message("user", "Hello", display_type="user_input"))
+        cm.add_message(Message("assistant", "Result", display_type="response"))
+        cm.add_message(Message("tool", "output", tool_call_id="tc1", name="f", display_type="tool_result"))
+
+        api_msgs = cm.get_messages_for_api()
+        assert len(api_msgs) == 3  # all pass through

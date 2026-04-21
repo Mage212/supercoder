@@ -79,11 +79,15 @@ class ContextWindowManager:
         return self.history.copy()
 
     def get_messages_for_api(self) -> list[Message]:
-        """Get messages formatted for API call (with system prompt)."""
+        """Get messages formatted for API call (with system prompt).
+
+        Filters out display-only messages (e.g. reasoning) that should
+        not be sent back to the model.
+        """
         messages = []
         if self._system_prompt:
             messages.append(Message("system", self._system_prompt))
-        messages.extend(self.history)
+        messages.extend(m for m in self.history if m.display_type != "thinking")
         return messages
 
     def get_stats(self) -> ContextStats:
@@ -131,7 +135,7 @@ class ContextWindowManager:
         """
         self._actual_used_tokens = None
         self.history = [
-            Message("user", f"[Previous Context Summary - remember this information]\n\n{summary}")
+            Message("user", f"[Previous Context Summary - remember this information]\n\n{summary}", display_type="compact_summary")
         ]
 
     def _compress(self) -> None:

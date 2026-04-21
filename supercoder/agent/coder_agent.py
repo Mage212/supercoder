@@ -212,7 +212,7 @@ class CoderAgent:
         if user_message:
             self.checkpoint_manager.create(description=user_message[:100])
             checkpoint_active = True
-            self.context.add_message(Message("user", user_message))
+            self.context.add_message(Message("user", user_message, display_type="user_input"))
             get_logger().log_user_input(user_message)
 
         # Update RepoMap if enabled
@@ -254,6 +254,9 @@ class CoderAgent:
 
             # 1. Reasoning
             if result.reasoning:
+                self.context.add_message(
+                    Message(role="assistant", content=result.reasoning, display_type="thinking")
+                )
                 yield {"type": "thinking", "content": result.reasoning}
                 get_logger().log_reasoning(result.reasoning, stage="pre_response")
 
@@ -265,6 +268,7 @@ class CoderAgent:
                         role="assistant",
                         content=result.content,
                         tool_calls=result.raw_tool_calls,
+                        display_type="response",
                     )
                 )
                 get_logger().log_model_response(result.content, self.llm.model)
@@ -276,6 +280,7 @@ class CoderAgent:
                         role="assistant",
                         content="",
                         tool_calls=result.raw_tool_calls,
+                        display_type="tool_call",
                     )
                 )
 
@@ -309,6 +314,7 @@ class CoderAgent:
                             content=f"ERROR - {error_msg}",
                             tool_call_id=tc.id,
                             name=name,
+                            display_type="error",
                         )
                     )
                     continue
@@ -330,7 +336,7 @@ class CoderAgent:
                             tool_result = "Command execution cancelled by user."
                             yield {"type": "tool_result", "content": {"name": name, "result": tool_result}}
                             self.context.add_message(
-                                Message(role="tool", content=tool_result, tool_call_id=tc.id, name=name)
+                                Message(role="tool", content=tool_result, tool_call_id=tc.id, name=name, display_type="tool_result")
                             )
                             continue
 
@@ -365,7 +371,7 @@ class CoderAgent:
 
                     # Add tool result as role="tool" with tool_call_id
                     self.context.add_message(
-                        Message(role="tool", content=tool_result, tool_call_id=tc.id, name=name)
+                        Message(role="tool", content=tool_result, tool_call_id=tc.id, name=name, display_type="tool_result")
                     )
 
                 except Exception as e:
@@ -373,7 +379,7 @@ class CoderAgent:
                     error_result = f"Error executing tool: {e}"
                     yield {"type": "error", "content": error_result}
                     self.context.add_message(
-                        Message(role="tool", content=error_result, tool_call_id=tc.id, name=name)
+                        Message(role="tool", content=error_result, tool_call_id=tc.id, name=name, display_type="error")
                     )
                     if checkpoint_active:
                         restored = self.checkpoint_manager.rollback()
@@ -421,7 +427,7 @@ class CoderAgent:
 
         # Add user message to context (only once, before the loop)
         if user_message:
-            self.context.add_message(Message("user", user_message))
+            self.context.add_message(Message("user", user_message, display_type="user_input"))
             get_logger().log_user_input(user_message)
 
         tool_iterations = 0
