@@ -69,28 +69,50 @@ def main(
             return
 
         if api_key_errors:
-            from .setup_wizard import run_setup_wizard
+            from .config import is_first_run
 
-            ok = run_setup_wizard()
-            if not ok:
-                return
-            # Reload config after successful setup
-            config = Config.load()
-            if model and not config.switch_to_model(model):
-                config.model = model
-            if endpoint:
-                config.base_url = endpoint
-            if temperature is not None:
-                config.temperature = temperature
-            config.debug = debug
-            if max_context is not None:
-                config.max_context_tokens = max_context
+            if is_first_run():
+                # Genuine first run: launch interactive wizard
+                from .setup_wizard import run_setup_wizard
 
-            # Re-validate — abort if still broken
-            remaining = config.validate()
-            if remaining:
-                for error in remaining:
-                    console.print(f"[red]Error: {error}[/]")
+                ok = run_setup_wizard()
+                if not ok:
+                    return
+                # Reload config after successful setup
+                config = Config.load()
+                if model and not config.switch_to_model(model):
+                    config.model = model
+                if endpoint:
+                    config.base_url = endpoint
+                if temperature is not None:
+                    config.temperature = temperature
+                config.debug = debug
+                if max_context is not None:
+                    config.max_context_tokens = max_context
+
+                # Re-validate — abort if still broken
+                remaining = config.validate()
+                if remaining:
+                    for error in remaining:
+                        console.print(f"[red]Error: {error}[/]")
+                    return
+            else:
+                # Existing config with profiles: show diagnostic, do NOT launch wizard
+                console.print(
+                    "\n[red]Error: API key not configured for the active profile.[/]\n"
+                )
+                available = config.get_available_models()
+                console.print(f"  Active profile: [cyan]{config.current_profile_name}[/]")
+                if available:
+                    console.print(
+                        f"  Available profiles: [cyan]{', '.join(available)}[/]"
+                    )
+                console.print(
+                    "\n[yellow]To fix this, either:[/]\n"
+                    "  1. Edit your config:   [dim]nano ~/.supercoder/config.yaml[/]\n"
+                    "  2. Set the API key:    [dim]export SUPERCODER_API_KEY=<your-key>[/]\n"
+                    "  3. Switch to a profile: [dim]supercoder -m <profile-name>[/]"
+                )
                 return
 
 

@@ -248,37 +248,51 @@ def _write_config(
     max_context_tokens: int = 32000,
     profile_name: str = "default",
 ) -> Path:
-    """Write the config file with the given profile."""
+    """Write config file, merging the new profile into any existing config."""
+    import yaml
+
     from .config import CONFIG_DIR, CONFIG_FILE
+    from .utils.atomic_writer import AtomicFileWriter
 
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Always write tool_calling_type (makes config self-documenting)
-    tct_line = f"\n    tool_calling_type: \"{tool_calling_type}\""
+    # Load existing config data (if any)
+    config_data: dict = {}
+    if CONFIG_FILE.exists():
+        try:
+            raw = CONFIG_FILE.read_text(encoding="utf-8")
+            if raw.strip():
+                loaded = yaml.safe_load(raw)
+                if isinstance(loaded, dict):
+                    config_data = loaded
+        except Exception:
+            config_data = {}
 
-    content = f"""# SuperCoder Configuration
-# Documentation: https://github.com/your-repo/supercoder
+    # Ensure top-level structure
+    if not isinstance(config_data.get("models"), dict):
+        config_data["models"] = {}
 
-# Default model profile to use on startup
-default_model: "{profile_name}"
+    config_data.setdefault("temperature", 0.2)
+    config_data.setdefault("top_p", 0.1)
+    config_data.setdefault("max_context_tokens", max_context_tokens)
+    config_data.setdefault("reserved_for_response", 4096)
+    config_data.setdefault("request_timeout", 60.0)
+    config_data.setdefault("debug", False)
 
-# Model profiles
-models:
-  {profile_name}:
-    api_key: "{api_key}"
-    endpoint: "{endpoint}"
-    model: "{model}"
-    max_context_tokens: {max_context_tokens}{tct_line}
+    # Merge new profile (overwrites only the named profile)
+    config_data["models"][profile_name] = {
+        "api_key": api_key,
+        "endpoint": endpoint,
+        "model": model,
+        "max_context_tokens": max_context_tokens,
+        "tool_calling_type": tool_calling_type,
+    }
 
-# Shared settings
-temperature: 0.2
-top_p: 0.1
-max_context_tokens: {max_context_tokens}
-reserved_for_response: 4096
-request_timeout: 60.0
-debug: false
-"""
-    CONFIG_FILE.write_text(content, encoding="utf-8")
+    config_data["default_model"] = profile_name
+
+    header = "# SuperCoder Configuration\n# Documentation: https://github.com/your-repo/supercoder\n\n"
+    content = header + yaml.dump(config_data, default_flow_style=False, sort_keys=False)
+    AtomicFileWriter.write(CONFIG_FILE, content)
     return CONFIG_FILE
 
 

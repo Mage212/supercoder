@@ -66,6 +66,30 @@ def ensure_config_file() -> Path:
     return CONFIG_FILE
 
 
+def is_first_run() -> bool:
+    """Return True if no real configuration exists (genuine first-run scenario)."""
+    if not CONFIG_FILE.exists():
+        return True
+    try:
+        import yaml
+
+        raw = CONFIG_FILE.read_text(encoding="utf-8")
+        if not raw.strip():
+            return True
+        data = yaml.safe_load(raw)
+        if data is None:
+            return True
+        models = data.get("models", {})
+        if not models:
+            return True
+        for profile in models.values():
+            if isinstance(profile, dict) and profile.get("api_key", ""):
+                return False
+        return True
+    except Exception:
+        return True
+
+
 @dataclass
 class ModelProfile:
     """A named LLM configuration profile."""
