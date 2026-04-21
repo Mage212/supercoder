@@ -45,6 +45,15 @@ class NativeToolCall:
 
 
 @dataclass
+class UsageStats:
+    """Token usage reported by the API response."""
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
+
+@dataclass
 class CompletionResult:
     """Structured response from LLM (non-streaming)."""
 
@@ -54,6 +63,7 @@ class CompletionResult:
     raw_tool_calls: list[dict] | None = field(
         default=None, repr=False
     )  # Raw API tool_calls for context
+    usage: UsageStats | None = None  # Actual token usage from API
 
 
 @dataclass

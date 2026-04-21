@@ -6,7 +6,7 @@ from collections.abc import Iterator
 from openai import OpenAI
 
 from ..config import Config, ModelProfile
-from .base import BaseLLM, CompletionResult, Message, NativeToolCall, StreamChunk
+from .base import BaseLLM, CompletionResult, Message, NativeToolCall, StreamChunk, UsageStats
 
 
 class OpenAIClient(BaseLLM):
@@ -133,11 +133,21 @@ class OpenAIClient(BaseLLM):
         # --- Extract reasoning (GLM / DeepSeek models) ---
         reasoning = getattr(msg, "reasoning_content", None) or ""
 
+        # --- Extract token usage ---
+        usage = None
+        if response.usage:
+            usage = UsageStats(
+                prompt_tokens=response.usage.prompt_tokens or 0,
+                completion_tokens=response.usage.completion_tokens or 0,
+                total_tokens=response.usage.total_tokens or 0,
+            )
+
         return CompletionResult(
             content=msg.content or "",
             tool_calls=native_calls,
             reasoning=reasoning,
             raw_tool_calls=raw_tool_calls,
+            usage=usage,
         )
 
     # ------------------------------------------------------------------

@@ -56,6 +56,7 @@ class ContextWindowManager:
         self.history: list[Message] = []
         self._system_prompt: str = ""
         self._system_tokens: int = 0
+        self._actual_used_tokens: int | None = None
 
     def set_system_prompt(self, prompt: str) -> None:
         """Set the system prompt and calculate its tokens."""
@@ -87,8 +88,11 @@ class ContextWindowManager:
 
     def get_stats(self) -> ContextStats:
         """Get current context utilization statistics."""
-        history_tokens = self.counter.count_messages(self.history)
-        used = self._system_tokens + history_tokens
+        if self._actual_used_tokens is not None:
+            used = self._actual_used_tokens
+        else:
+            history_tokens = self.counter.count_messages(self.history)
+            used = self._system_tokens + history_tokens
         available = self.config.max_tokens - self.config.reserved_for_response
 
         return ContextStats(
@@ -102,10 +106,19 @@ class ContextWindowManager:
     def clear(self) -> None:
         """Clear conversation history."""
         self.history = []
+        self._actual_used_tokens = None
 
     def set_max_tokens(self, max_tokens: int) -> None:
         """Update the maximum context token limit at runtime."""
         self.config.max_tokens = max_tokens
+
+    def update_actual_usage(self, prompt_tokens: int) -> None:
+        """Update token count from actual API-reported usage."""
+        self._actual_used_tokens = prompt_tokens
+
+    def reset_actual_usage(self) -> None:
+        """Reset actual usage, forcing fallback to estimation."""
+        self._actual_used_tokens = None
 
     def set_initial_summary(self, summary: str) -> None:
         """Set a summary as the initial context after clearing history.

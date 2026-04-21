@@ -241,6 +241,10 @@ class CoderAgent:
                 yield {"type": "error", "content": str(e)}
                 return
 
+            # Update context with actual token usage from API
+            if result.usage and result.usage.total_tokens:
+                self.context.update_actual_usage(result.usage.total_tokens)
+
             # 1. Reasoning
             if result.reasoning:
                 yield {"type": "thinking", "content": result.reasoning}
