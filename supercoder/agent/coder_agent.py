@@ -266,6 +266,14 @@ class CoderAgent:
             if result.usage and result.usage.total_tokens:
                 self.context.update_actual_usage(result.usage.total_tokens)
 
+            # Warn about truncated responses
+            if result.truncated:
+                yield {
+                    "type": "warning",
+                    "content": "Response was truncated — tool call arguments may be incomplete. "
+                    "3-level recovery attempted to salvage usable data.",
+                }
+
             # 1. Reasoning
             if result.reasoning:
                 self.context.add_message(

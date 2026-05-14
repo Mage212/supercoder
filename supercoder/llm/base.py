@@ -73,6 +73,7 @@ class CompletionResult:
         default=None, repr=False
     )  # Raw API tool_calls for context
     usage: UsageStats | None = None  # Actual token usage from API
+    truncated: bool = False  # Response was cut off (max_tokens or incomplete tool calls)
 
 
 @dataclass

@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterator
 from openai import OpenAI
 
 from ..abort_controller import AbortController
+from ..agent.streaming_tool_parser import StreamingToolCallParser
 from ..config import Config, ModelProfile
 from .base import BaseLLM, CompletionResult, Message, NativeToolCall, StreamChunk, UsageStats
 
@@ -191,7 +192,7 @@ class OpenAIClient(BaseLLM):
 
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
-        tc_buffers: dict[int, dict] = {}  # index -> {id, name, arguments}
+        tc_parser = StreamingToolCallParser()
         usage: UsageStats | None = None
         truncated = False
         total_chars = 0  # Running character count for token estimation
@@ -227,23 +228,16 @@ class OpenAIClient(BaseLLM):
                     reasoning_parts.append(rc)
                     chunk_chars += len(rc)
 
-                # Accumulate tool calls (arrive in fragments)
+                # Accumulate tool calls via streaming parser
                 if delta.tool_calls:
+                    tc_parser.feed_chunk(delta.tool_calls)
                     for tc_delta in delta.tool_calls:
-                        idx = tc_delta.index
-                        if idx not in tc_buffers:
-                            tc_buffers[idx] = {"id": "", "name": "", "arguments": ""}
-                        buf = tc_buffers[idx]
-                        if tc_delta.id:
-                            buf["id"] = tc_delta.id
                         fn = tc_delta.function
                         if fn:
-                            if fn.name:
-                                buf["name"] += fn.name
-                                chunk_chars += len(fn.name)
                             if fn.arguments:
-                                buf["arguments"] += fn.arguments
                                 chunk_chars += len(fn.arguments)
+                            if fn.name:
+                                chunk_chars += len(fn.name)
 
                 # Update running count and notify
                 if chunk_chars:
@@ -274,34 +268,22 @@ class OpenAIClient(BaseLLM):
                 with contextlib.suppress(Exception):
                     stream.close()
 
-        # Assemble tool calls from buffers
+        # Detect truncated tool calls (provider says 'stop' but JSON incomplete)
+        if not truncated and tc_parser.has_incomplete_tool_calls():
+            truncated = True
+
+        # Assemble tool calls from streaming parser
         native_calls: list[NativeToolCall] = []
         raw_tool_calls: list[dict] | None = None
 
-        if tc_buffers:
-            raw_tool_calls = []
-            for idx in sorted(tc_buffers):
-                buf = tc_buffers[idx]
-                raw_tc = {
-                    "id": buf["id"],
-                    "type": "function",
-                    "function": {
-                        "name": buf["name"],
-                        "arguments": buf["arguments"],
-                    },
-                }
-                raw_tool_calls.append(raw_tc)
-
-                try:
-                    args = json.loads(buf["arguments"])
-                except json.JSONDecodeError:
-                    args = {"_raw": buf["arguments"]}
-
+        native_calls_data, raw_tool_calls = tc_parser.finalize()
+        if native_calls_data:
+            for tc_data in native_calls_data:
                 native_calls.append(
                     NativeToolCall(
-                        id=buf["id"],
-                        name=buf["name"],
-                        arguments=args,
+                        id=tc_data["id"],
+                        name=tc_data["name"],
+                        arguments=tc_data["arguments"],
                     )
                 )
 
@@ -315,6 +297,7 @@ class OpenAIClient(BaseLLM):
             reasoning="".join(reasoning_parts),
             raw_tool_calls=raw_tool_calls or None,
             usage=usage,
+            truncated=truncated,
         )
 
     # ------------------------------------------------------------------

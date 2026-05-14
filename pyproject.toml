@@ -20,6 +20,7 @@ dependencies = [
     "pygments>=2.17.0",
     "tiktoken>=0.12.0",
     "questionary>=2.0.0",
+    "json-repair>=0.30.0",
 ]
 
 [project.urls]
