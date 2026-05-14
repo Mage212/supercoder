@@ -209,10 +209,11 @@ class StreamingToolCallParser:
                 continue
 
             args = self._try_parse_arguments(buf)
+            tool_id = buf.tool_id or f"call_{idx}"
 
             raw_tool_calls.append(
                 {
-                    "id": buf.tool_id,
+                    "id": tool_id,
                     "type": "function",
                     "function": {
                         "name": buf.tool_name,
@@ -223,7 +224,7 @@ class StreamingToolCallParser:
 
             native_calls.append(
                 {
-                    "id": buf.tool_id,
+                    "id": tool_id,
                     "name": buf.tool_name,
                     "arguments": args,
                 }

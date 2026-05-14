@@ -89,11 +89,27 @@ def build_system_prompt(
     prompt = template.format(tools=tool_list, tool_calling_instructions=tool_calling_instructions)
 
     # Skip project rules in lean mode to save tokens
-    if rules and not lean:
-        prompt += f"\n{rules}"
+    if rules:
+        if lean:
+            compact_rules = _compact_project_rules(rules)
+            prompt += (
+                "\n# Project Rules (mandatory)\n"
+                "Follow these project rules. They override shorter lean-mode instructions:\n"
+                f"{compact_rules}\n"
+            )
+        else:
+            prompt += f"\n{rules}"
 
     # Add mode-specific suffix (e.g., ask mode restrictions)
     if mode_suffix:
         prompt += f"\n{mode_suffix}"
 
     return prompt
+
+
+def _compact_project_rules(rules: str, max_chars: int = 4000) -> str:
+    """Compact project rules for lean mode without dropping them entirely."""
+    compact = "\n".join(line.strip() for line in rules.splitlines() if line.strip())
+    if len(compact) <= max_chars:
+        return compact
+    return compact[: max_chars - 18].rstrip() + "\n...[truncated]"

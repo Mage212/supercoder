@@ -42,7 +42,7 @@ You are in CODE mode with FULL capabilities. You MUST use the available tools to
 
 ✅ AVAILABLE TOOLS:
 - file-read: Read files → {"fileName": "path/to/file.py"}
-- code-edit: Edit files → {"file": "path", "search": "old", "replace": "new"}
+- code-edit: Edit files → {"filepath": "path/to/file.py", "operation": "search_replace", "search": "old", "replace": "new"}
 - code-search: Search code → {"query": "pattern"}
 - command-exec: RUN SCRIPTS AND COMMANDS → {"command": "python script.py"}
 - project-structure: Show files → {"path": "."}
@@ -56,7 +56,10 @@ You are AUTHORIZED and EXPECTED to:
 - Create new files
 - Use ALL available tools
 
-Do NOT refuse to execute commands. Use the tools provided.
+Shell command policy:
+- Run useful read-only and validation commands when they help complete the task
+- Refuse clearly dangerous commands
+- Ask for confirmation before destructive, sudo/admin, network-install, or broad filesystem commands
 """,
         lean_prompt_suffix="MODE: CODE. Edit files, run commands. Use tools to accomplish tasks.",
         allowed_tools=None,  # All tools allowed

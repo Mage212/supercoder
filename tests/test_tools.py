@@ -1,6 +1,9 @@
 """Test tools functionality."""
 
+import stat
+
 from supercoder.tools import CodeEditTool, CodeSearchTool, FileReadTool, ProjectStructureTool
+from supercoder.utils.atomic_writer import AtomicFileWriter
 
 
 class TestCodeSearchTool:
@@ -62,6 +65,18 @@ class TestCodeEditTool:
 
         content = test_file.read_text()
         assert "Hello Universe" in content
+
+    def test_atomic_writer_preserves_existing_file_permissions(self, tmp_path):
+        """Atomic replacement preserves mode bits such as executable files."""
+        test_file = tmp_path / "script.sh"
+        test_file.write_text("#!/bin/sh\necho old\n")
+        test_file.chmod(0o755)
+
+        AtomicFileWriter.write(test_file, "#!/bin/sh\necho new\n")
+
+        mode = stat.S_IMODE(test_file.stat().st_mode)
+        assert mode == 0o755
+        assert test_file.read_text() == "#!/bin/sh\necho new\n"
 
 
 class TestFileReadTool:

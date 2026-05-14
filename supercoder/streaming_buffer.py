@@ -15,6 +15,8 @@ opening/closing tag patterns.
 
 from __future__ import annotations
 
+import json
+
 # Tag signatures for each supported tool calling format.
 # 'opener' is the string that marks the START of a tool call block.
 # 'closer' is the string that marks the END (None = consume to end of line).
@@ -104,7 +106,10 @@ class StreamingDisplayBuffer:
 
     def flush(self) -> str:
         """Finalize: return ALL remaining text (end of stream)."""
-        result = self._buffer + self._tag_buffer
+        # If the stream ended while inside a tool-call block, do not leak that
+        # hidden block into the UI. Partial opener suffixes are kept in
+        # _buffer, so normal text such as "look <@" still flushes correctly.
+        result = self._buffer
         self._buffer = ""
         self._tag_buffer = ""
         self._in_tag = False
@@ -141,17 +146,48 @@ class StreamingDisplayBuffer:
                     return self.add("")  # re-enter normal path with empty token
             return None
 
-        # Look for the closing tag
-        close_idx = self._tag_buffer.find(self._closer)
+        # Look for the closing tag. For json blocks the closer token ("```")
+        # is also the opener prefix, so search after the opener.
+        search_start = len(self._opener) if self._tool_calling_type == "json_block" else 0
+        close_idx = self._tag_buffer.find(self._closer, search_start)
         if close_idx >= 0:
+            block_end = close_idx + len(self._closer)
+            full_block = self._tag_buffer[:block_end]
             # Found closer — discard the entire tag block
-            after_close = self._tag_buffer[close_idx + len(self._closer) :]
+            after_close = self._tag_buffer[block_end:]
             self._tag_buffer = ""
             self._in_tag = False
+            if self._tool_calling_type == "json_block" and not self._is_json_tool_block(full_block):
+                self._buffer = after_close
+                post = self.add("") if after_close else None
+                return full_block + (post or "")
             if after_close:
                 self._buffer = after_close
                 return self.add("")  # re-enter normal path
         return None
+
+    def _is_json_tool_block(self, block: str) -> bool:
+        """Return True only for JSON code blocks that encode a tool call."""
+        if self._tool_calling_type != "json_block":
+            return True
+
+        body = block
+        if body.startswith(self._opener):
+            body = body[len(self._opener) :]
+        if self._closer and body.endswith(self._closer):
+            body = body[: -len(self._closer)]
+        body = body.strip()
+
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            return False
+
+        if not isinstance(data, dict):
+            return False
+        has_name = "tool" in data or "name" in data
+        has_args = "arguments" in data or "args" in data
+        return has_name and has_args
 
     def _split_at_potential_tag(self) -> tuple[str, str]:
         """Split buffer into (safe_prefix, held_suffix).

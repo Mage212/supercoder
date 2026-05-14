@@ -98,7 +98,7 @@ def _pick_provider() -> dict:
                 return PROVIDERS[idx]
         except ValueError:
             pass
-        console.print("[red]Please enter a number between 1 and {len(PROVIDERS)}[/]")
+        console.print(f"[red]Please enter a number between 1 and {len(PROVIDERS)}[/]")
 
 
 def _pick_model(provider: dict) -> str:

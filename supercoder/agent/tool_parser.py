@@ -94,18 +94,33 @@ def _repair_json(text: str) -> str:
 
 
 def _safe_json_loads(text: str) -> Any:
-    """Parse JSON with fallback repair for LLM-generated content."""
-    # Fast path: valid JSON
+    """Parse JSON with 3-level fallback recovery for LLM-generated content.
+
+    Level 1: Standard json.loads (fast path)
+    Level 2: _repair_json + json.loads (fix control chars, single quotes)
+    Level 3: json_repair.loads (handles truncated, missing brackets, etc.)
+    """
+    # Level 1: Fast path
     try:
         return json.loads(text, strict=False)
     except json.JSONDecodeError:
         pass
 
-    # Slow path: repair and retry
+    # Level 2: Targeted repairs
     try:
         return json.loads(_repair_json(text))
     except json.JSONDecodeError:
-        raise
+        pass
+
+    # Level 3: Heavy-duty repair
+    try:
+        import json_repair
+
+        return json_repair.loads(text)
+    except Exception:
+        pass
+
+    raise json.JSONDecodeError("Failed to parse JSON after 3-level recovery", text, 0)
 
 
 def _extract_balanced_json(text: str, start: int) -> str | None:
@@ -344,9 +359,13 @@ class JsonBlockParser(BaseToolParser):
             if not name:
                 return None
 
-            args = data.get("arguments") or data.get("args")
-            # Only treat as tool call if 'arguments'/'args' key is explicitly present
-            if args is None:
+            # Only treat as tool call if 'arguments'/'args' key is explicitly present.
+            # Empty dict arguments are valid and must not be rejected as falsey.
+            if "arguments" in data:
+                args = data["arguments"]
+            elif "args" in data:
+                args = data["args"]
+            else:
                 return None
 
             return ToolCall(

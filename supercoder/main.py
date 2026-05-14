@@ -113,7 +113,7 @@ def main(
                 return
 
     # Initialize logger
-    logger = init_logger(config.model)
+    logger = init_logger(config.model, enabled=config.debug)
 
     # Banner is displayed by the REPL (see repl.py run() method)
 

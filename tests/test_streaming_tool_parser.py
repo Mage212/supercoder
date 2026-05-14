@@ -14,7 +14,13 @@ class FakeFunction:
 
 
 class FakeDelta:
-    def __init__(self, index: int, id: str | None = None, name: str | None = None, arguments: str | None = None):
+    def __init__(
+        self,
+        index: int,
+        id: str | None = None,
+        name: str | None = None,
+        arguments: str | None = None,
+    ):
         self.index = index
         self.id = id
         self.function = FakeFunction(name, arguments)
@@ -30,7 +36,7 @@ class TestToolCallBuffer:
 
     def test_single_object_becomes_complete(self):
         buf = _ToolCallBuffer()
-        for ch in '{}':
+        for ch in "{}":
             buf.feed_char(ch)
         assert buf.is_complete()
         assert buf.buffer == "{}"
@@ -105,7 +111,9 @@ class TestStreamingToolCallParser:
 
     def test_has_incomplete_on_truncated_json(self):
         parser = StreamingToolCallParser()
-        parser.feed_chunk([FakeDelta(0, id="call_1", name="edit", arguments='{"file": "a.py", "content": "hel')])
+        parser.feed_chunk(
+            [FakeDelta(0, id="call_1", name="edit", arguments='{"file": "a.py", "content": "hel')]
+        )
 
         assert parser.has_incomplete_tool_calls()
 
@@ -180,6 +188,15 @@ class TestThreeLevelRecovery:
         assert len(native) == 1
         assert native[0]["arguments"] == {}
 
+    def test_missing_provider_id_gets_fallback_id(self):
+        parser = StreamingToolCallParser()
+        parser.feed_chunk([FakeDelta(0, id=None, name="f", arguments="{}")])
+
+        native, raw = parser.finalize()
+        assert native[0]["id"] == "call_0"
+        assert raw is not None
+        assert raw[0]["id"] == "call_0"
+
 
 # --- E2E streaming simulation ---
 
@@ -188,7 +205,7 @@ class TestStreamingSimulation:
     def test_character_by_character_streaming(self):
         """Simulate real token-by-token streaming."""
         parser = StreamingToolCallParser()
-        chunks = ['{"', 'query', '": "', 'What is', ' the weather', ' in Paris', '?"}']
+        chunks = ['{"', "query", '": "', "What is", " the weather", " in Paris", '?"}']
 
         parser.feed_chunk([FakeDelta(0, id="c1", name="search", arguments=chunks[0])])
         for chunk in chunks[1:]:

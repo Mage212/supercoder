@@ -193,6 +193,16 @@ class TestJsonBlockFormat:
         result = feed_text(buf, text)
         assert "Let me try." in result
         assert "```json" not in result
+        assert "file-read" not in result
+        assert "Done." in result
+
+    def test_plain_json_block_displayed(self):
+        """Regular markdown JSON examples are not treated as tool calls."""
+        buf = StreamingDisplayBuffer("json_block")
+        text = 'Example:\n\n```json\n{"key": "value"}\n```\n\nDone.'
+        result = feed_text(buf, text)
+        assert "```json" in result
+        assert '"key": "value"' in result
         assert "Done." in result
 
 
@@ -215,6 +225,15 @@ class TestEdgeCases:
         full = (chunk or "") + result
         assert "held text" in full
         assert "<@" in full
+
+    def test_flush_does_not_leak_unclosed_tool_tag(self):
+        """An actual hidden tag stays hidden if the stream ends mid-call."""
+        buf = StreamingDisplayBuffer("supercoder")
+        chunk = buf.add('Before.\n<@TOOL>{"name": "file-read"')
+        result = (chunk or "") + buf.flush()
+        assert "Before." in result
+        assert "<@TOOL>" not in result
+        assert "file-read" not in result
 
     def test_reset_clears_state(self):
         """reset() clears buffer and tag state."""

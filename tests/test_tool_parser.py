@@ -95,6 +95,15 @@ class TestJsonBlockParser:
         assert result is not None
         assert result.name == "code-edit"
 
+    def test_json_block_accepts_empty_arguments(self):
+        parser = JsonBlockParser()
+        text = '```json\n{"tool": "project-structure", "arguments": {}}\n```'
+        result = parser.try_parse(text)
+
+        assert result is not None
+        assert result.name == "project-structure"
+        assert result.arguments == {}
+
     def test_no_tool_key(self):
         parser = JsonBlockParser()
         text = '```json\n{"key": "value"}\n```'
@@ -270,6 +279,45 @@ class TestSupercoderTagFallbackParser:
 
         assert result is not None
         assert result.name == "file-create"
+
+
+class TestSafeJsonLoads:
+    """Test 3-level JSON recovery in _safe_json_loads."""
+
+    def test_valid_json_passes(self):
+        from supercoder.agent.tool_parser import _safe_json_loads
+
+        assert _safe_json_loads('{"key": "value"}') == {"key": "value"}
+
+    def test_single_quotes_repaired(self):
+        from supercoder.agent.tool_parser import _safe_json_loads
+
+        result = _safe_json_loads("{'key': 'value'}")
+        assert result == {"key": "value"}
+
+    def test_trailing_comma_repaired(self):
+        from supercoder.agent.tool_parser import _safe_json_loads
+
+        result = _safe_json_loads('{"key": "value",}')
+        assert result == {"key": "value"}
+
+    def test_truncated_json_repaired(self):
+        from supercoder.agent.tool_parser import _safe_json_loads
+
+        result = _safe_json_loads('{"key": "value"')
+        assert result == {"key": "value"}
+
+    def test_unquoted_keys_repaired(self):
+        from supercoder.agent.tool_parser import _safe_json_loads
+
+        result = _safe_json_loads('{key: "value"}')
+        assert result == {"key": "value"}
+
+    def test_raw_newlines_in_strings_repaired(self):
+        from supercoder.agent.tool_parser import _safe_json_loads
+
+        result = _safe_json_loads('{"content": "line1\nline2"}')
+        assert result["content"] == "line1\nline2"
 
 
 if __name__ == "__main__":

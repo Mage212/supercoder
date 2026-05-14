@@ -20,20 +20,21 @@ def ensure_log_dir() -> Path:
 class ConversationLogger:
     """Logs user inputs and model responses to files for debugging."""
 
-    def __init__(self, model_name: str = "unknown"):
+    def __init__(self, model_name: str = "unknown", enabled: bool = True):
         self.model_name = model_name
         self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.log_file = ensure_log_dir() / f"session_{self.session_id}.jsonl"
-        self.enabled = True
+        self.log_file = LOG_DIR / f"session_{self.session_id}.jsonl"
+        self.enabled = enabled
 
         # Write session header
-        self._write_entry(
-            {
-                "type": "session_start",
-                "model": self.model_name,
-                "timestamp": datetime.now().isoformat(),
-            }
-        )
+        if self.enabled:
+            self._write_entry(
+                {
+                    "type": "session_start",
+                    "model": self.model_name,
+                    "timestamp": datetime.now().isoformat(),
+                }
+            )
 
     def set_model(self, model_name: str) -> None:
         """Update the current model name (e.g., after switching)."""
@@ -202,7 +203,10 @@ class ConversationLogger:
 
     def _write_entry(self, entry: dict) -> None:
         """Write a log entry to file."""
+        if not self.enabled:
+            return
         try:
+            ensure_log_dir()
             with open(self.log_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         except Exception:
@@ -222,12 +226,12 @@ def get_logger() -> ConversationLogger:
     """Get or create the global logger instance."""
     global _logger
     if _logger is None:
-        _logger = ConversationLogger()
+        _logger = ConversationLogger(enabled=False)
     return _logger
 
 
-def init_logger(model_name: str) -> ConversationLogger:
+def init_logger(model_name: str, enabled: bool = True) -> ConversationLogger:
     """Initialize logger with model name."""
     global _logger
-    _logger = ConversationLogger(model_name)
+    _logger = ConversationLogger(model_name, enabled=enabled)
     return _logger

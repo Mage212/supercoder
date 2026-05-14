@@ -2,6 +2,7 @@
 
 import contextlib
 import os
+import stat
 import tempfile
 from pathlib import Path
 
@@ -28,6 +29,7 @@ class AtomicFileWriter:
         """
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
+        original_mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else None
 
         # Create temp file in the same directory as target
         # This is important for atomic rename (same filesystem)
@@ -38,6 +40,9 @@ class AtomicFileWriter:
                 f.write(content)
                 f.flush()
                 os.fsync(f.fileno())  # Ensure data is written to disk
+
+            if original_mode is not None:
+                os.chmod(tmp_path, original_mode)
 
             # Atomic rename (POSIX guarantee)
             os.replace(tmp_path, path)
@@ -62,6 +67,7 @@ class AtomicFileWriter:
         """
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
+        original_mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else None
 
         fd, tmp_path = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
 
@@ -70,6 +76,9 @@ class AtomicFileWriter:
                 f.write(content)
                 f.flush()
                 os.fsync(f.fileno())
+
+            if original_mode is not None:
+                os.chmod(tmp_path, original_mode)
 
             os.replace(tmp_path, path)
 
