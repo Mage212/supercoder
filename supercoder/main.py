@@ -153,6 +153,7 @@ def main(
             tool_calling_type=tool_calling_type,
             streaming=use_streaming,
             lean=lean,
+            permissions=config.permissions,
         )
         agent.set_debug(debug)
     except Exception as e:

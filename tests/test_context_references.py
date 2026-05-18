@@ -5,6 +5,7 @@ from supercoder.context.references import (
     extract_context_references,
     summarize_context_attachment,
 )
+from supercoder.permissions import PermissionPolicy
 
 
 def test_extract_context_references_skips_escaped_and_email():
@@ -75,6 +76,40 @@ def test_expand_missing_reference_includes_suggestions(tmp_path):
     assert attachment is not None
     assert "Did you mean" in attachment.content
     assert "readable.txt" in attachment.content
+
+
+def test_expand_reference_denies_sensitive_file(tmp_path):
+    target = tmp_path / ".env"
+    target.write_text("TOKEN=secret\n")
+
+    attachment = expand_context_references(
+        "Read @.env",
+        tmp_path,
+        permission_policy=PermissionPolicy(tmp_path),
+    )
+
+    assert attachment is not None
+    assert "<skipped_reference" in attachment.content
+    assert 'reason="permission denied"' in attachment.content
+    assert "TOKEN=secret" not in attachment.content
+
+
+def test_expand_directory_reference_filters_sensitive_files(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("print('ok')\n")
+    (src / "credentials.json").write_text('{"token": "secret"}\n')
+
+    attachment = expand_context_references(
+        "Review @src",
+        tmp_path,
+        permission_policy=PermissionPolicy(tmp_path),
+    )
+
+    assert attachment is not None
+    assert "src/app.py" in attachment.content
+    assert "credentials.json" not in attachment.content
+    assert "secret" not in attachment.content
 
 
 def test_expand_file_reference_respects_total_budget(tmp_path):

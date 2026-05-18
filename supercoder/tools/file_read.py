@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ..logging import get_logger
+from ..permissions import PermissionPolicy
 from .base import BaseTool, ToolDefinition
 from .tool_utils import (
     find_similar_files,
@@ -21,8 +23,13 @@ class FileReadTool(BaseTool):
     HARD_MAX_BYTES = 256_000
     HARD_MAX_LINES = 5000
 
-    def __init__(self, allowed_root: Path | None = None):
+    def __init__(
+        self,
+        allowed_root: Path | None = None,
+        permission_policy: PermissionPolicy | None = None,
+    ):
         self.allowed_root = allowed_root
+        self.permission_policy = permission_policy
 
     @property
     def definition(self) -> ToolDefinition:
@@ -78,6 +85,19 @@ class FileReadTool(BaseTool):
             return error
         if path is None:
             return "Error: Invalid file path"
+
+        if self.permission_policy:
+            decision = self.permission_policy.check_path(path, "read")
+            if decision.denied:
+                get_logger().log_permission_decision(
+                    tool_name=self.definition.name,
+                    subject=self.permission_policy.relative_path(path),
+                    action=decision.action.value,
+                    reason=decision.reason,
+                    source=decision.source,
+                    matched_rule=decision.matched_rule,
+                )
+                return self.permission_policy.format_denial(file_name, decision)
 
         if not path.exists():
             suggestions = find_similar_files(path, self.allowed_root)

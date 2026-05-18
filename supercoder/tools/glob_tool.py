@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ..logging import get_logger
+from ..permissions import PermissionPolicy
 from .base import BaseTool, ToolDefinition
 from .tool_utils import is_ignored_path, relative_display_path, resolve_within_root
 
@@ -13,8 +15,13 @@ class GlobTool(BaseTool):
 
     HARD_MAX_RESULTS = 1000
 
-    def __init__(self, allowed_root: Path | None = None):
+    def __init__(
+        self,
+        allowed_root: Path | None = None,
+        permission_policy: PermissionPolicy | None = None,
+    ):
         self.allowed_root = allowed_root
+        self.permission_policy = permission_policy
 
     @property
     def definition(self) -> ToolDefinition:
@@ -66,6 +73,11 @@ class GlobTool(BaseTool):
             return error
         if root is None:
             return "Error: Invalid search path"
+        if self.permission_policy:
+            decision = self.permission_policy.check_path(root, "list")
+            if decision.denied:
+                self._log_path_denial(root, decision)
+                return self.permission_policy.format_denial(search_path, decision)
         if not root.exists():
             return f"Error: Path '{search_path}' not found"
         if not root.is_dir():
@@ -77,6 +89,8 @@ class GlobTool(BaseTool):
         try:
             for candidate in root.rglob(pattern):
                 if is_ignored_path(candidate, self.allowed_root):
+                    continue
+                if not self._path_allowed(candidate, "list"):
                     continue
                 if candidate.is_dir() and not include_dirs:
                     continue
@@ -104,3 +118,24 @@ class GlobTool(BaseTool):
             return f"{header}\n\nNo matches found."
 
         return f"{header}\n{'-' * 50}\n" + "\n".join(shown)
+
+    def _path_allowed(self, path: Path, operation: str) -> bool:
+        if not self.permission_policy:
+            return True
+        decision = self.permission_policy.check_path(path, operation)
+        if decision.denied:
+            self._log_path_denial(path, decision)
+            return False
+        return True
+
+    def _log_path_denial(self, path: Path, decision) -> None:
+        if not self.permission_policy:
+            return
+        get_logger().log_permission_decision(
+            tool_name=self.definition.name,
+            subject=self.permission_policy.relative_path(path),
+            action=decision.action.value,
+            reason=decision.reason,
+            source=decision.source,
+            matched_rule=decision.matched_rule,
+        )

@@ -8,6 +8,8 @@ from html import escape
 from pathlib import Path
 from typing import Literal
 
+from ..logging import get_logger
+from ..permissions import PermissionPolicy
 from ..tools.tool_utils import (
     find_similar_files,
     format_size,
@@ -113,6 +115,7 @@ def expand_context_references(
     message: str,
     repo_root: Path,
     *,
+    permission_policy: PermissionPolicy | None = None,
     max_file_bytes: int = 64_000,
     max_dir_entries: int = 200,
     max_total_tokens: int = 12_000,
@@ -138,6 +141,19 @@ def expand_context_references(
         path, error = resolve_within_root(ref, root)
         if error or path is None:
             item, block = _skipped(ref, "outside repository")
+        elif (
+            permission_policy and (decision := permission_policy.check_path(path, "attach")).denied
+        ):
+            rel = permission_policy.relative_path(path)
+            get_logger().log_permission_decision(
+                tool_name="context_attachment",
+                subject=rel,
+                action=decision.action.value,
+                reason=decision.reason,
+                source=decision.source,
+                matched_rule=decision.matched_rule,
+            )
+            item, block = _skipped(ref, "permission denied", path=rel)
         elif not path.exists():
             suggestions = find_similar_files(path, root)
             item, block = _skipped(ref, "not found", suggestions=suggestions)
@@ -148,6 +164,7 @@ def expand_context_references(
                 ref,
                 path,
                 root,
+                permission_policy=permission_policy,
                 max_entries=max_dir_entries,
                 max_bytes=remaining_bytes,
             )
@@ -295,6 +312,7 @@ def _attach_directory(
     path: Path,
     root: Path,
     *,
+    permission_policy: PermissionPolicy | None = None,
     max_entries: int,
     max_bytes: int,
 ) -> tuple[ContextReferenceItem, str]:
@@ -307,6 +325,8 @@ def _attach_directory(
     try:
         for candidate in path.rglob("*"):
             if not candidate.is_file() or is_ignored_path(candidate, root):
+                continue
+            if permission_policy and permission_policy.check_path(candidate, "attach").denied:
                 continue
             seen += 1
             rel = relative_display_path(candidate, root)
@@ -354,12 +374,14 @@ def _skipped(
     ref: str,
     reason: str,
     *,
+    path: str | None = None,
     suggestions: list[str] | None = None,
 ) -> tuple[ContextReferenceItem, str]:
     item = ContextReferenceItem(
         ref=ref,
         kind="skipped",
         status="skipped",
+        path=path,
         reason=reason,
         suggestions=suggestions or [],
     )

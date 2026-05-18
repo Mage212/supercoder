@@ -5,8 +5,11 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
+from ..logging import get_logger
+from ..permissions import PermissionPolicy
 from ..utils.atomic_writer import AtomicFileWriter
 from .base import BaseTool, ToolDefinition
+from .tool_utils import resolve_within_root
 
 if TYPE_CHECKING:
     from ..checkpoint import CheckpointManager
@@ -19,6 +22,7 @@ class CodeEditTool(BaseTool):
         self,
         checkpoint_manager: Optional["CheckpointManager"] = None,
         allowed_root: Path | None = None,
+        permission_policy: PermissionPolicy | None = None,
     ):
         """Initialize with optional checkpoint manager and allowed root directory.
 
@@ -28,6 +32,7 @@ class CodeEditTool(BaseTool):
         """
         self.checkpoint = checkpoint_manager
         self.allowed_root = allowed_root
+        self.permission_policy = permission_policy
 
     def _safe_write(self, path: Path, content: str) -> None:
         """Write file with backup and atomic write.
@@ -118,14 +123,24 @@ class CodeEditTool(BaseTool):
         if not filepath:
             return "Error: filepath is required"
 
-        path = Path(filepath)
+        path, error = resolve_within_root(filepath, self.allowed_root)
+        if error:
+            return error
+        if path is None:
+            return "Error: Invalid file path"
 
-        # Validate path stays within the allowed root (when configured)
-        if self.allowed_root is not None:
-            try:
-                path.resolve().relative_to(self.allowed_root)
-            except ValueError:
-                return f"Error: Path '{filepath}' is outside the project directory"
+        if self.permission_policy:
+            decision = self.permission_policy.check_path(path, "write")
+            if decision.denied:
+                get_logger().log_permission_decision(
+                    tool_name=self.definition.name,
+                    subject=self.permission_policy.relative_path(path),
+                    action=decision.action.value,
+                    reason=decision.reason,
+                    source=decision.source,
+                    matched_rule=decision.matched_rule,
+                )
+                return self.permission_policy.format_denial(filepath, decision)
 
         # Handle create operation separately
         if operation == "create":

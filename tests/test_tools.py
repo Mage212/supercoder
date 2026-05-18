@@ -2,6 +2,7 @@
 
 import stat
 
+from supercoder.permissions import PermissionPolicy
 from supercoder.tools import (
     CodeEditTool,
     CodeSearchTool,
@@ -62,6 +63,35 @@ class TestCodeSearchTool:
         assert "fallback.py" in result
         assert "Engine: python" in result
 
+    def test_code_search_filters_sensitive_paths_with_python_fallback(self, tmp_path, monkeypatch):
+        """Python fallback never returns matches from sensitive files."""
+        monkeypatch.setattr("supercoder.tools.code_search.shutil.which", lambda _name: None)
+        (tmp_path / "visible.py").write_text("TOKEN = 'needle'\n")
+        (tmp_path / "credentials.json").write_text('{"token": "needle"}\n')
+
+        tool = CodeSearchTool(
+            allowed_root=tmp_path,
+            permission_policy=PermissionPolicy(tmp_path),
+        )
+        result = tool.execute('{"query": "needle", "path": "."}')
+
+        assert "visible.py" in result
+        assert "credentials.json" not in result
+
+    def test_code_search_filters_sensitive_paths_with_rg(self, tmp_path):
+        """rg results are filtered before they reach the model."""
+        (tmp_path / "visible.py").write_text("TOKEN = 'needle'\n")
+        (tmp_path / "credentials.json").write_text('{"token": "needle"}\n')
+
+        tool = CodeSearchTool(
+            allowed_root=tmp_path,
+            permission_policy=PermissionPolicy(tmp_path),
+        )
+        result = tool.execute('{"query": "needle", "path": "."}')
+
+        assert "visible.py" in result
+        assert "credentials.json" not in result
+
 
 class TestCodeEditTool:
     """Tests for CodeEditTool."""
@@ -101,6 +131,23 @@ class TestCodeEditTool:
 
         content = test_file.read_text()
         assert "Hello Universe" in content
+
+    def test_code_edit_denies_sensitive_path(self, tmp_path):
+        """Sensitive files cannot be created or edited."""
+        tool = CodeEditTool(
+            allowed_root=tmp_path,
+            permission_policy=PermissionPolicy(tmp_path),
+        )
+        target = tmp_path / ".env"
+
+        result = tool.execute(f'''{{
+            "filepath": "{target}",
+            "operation": "create",
+            "content": "TOKEN=secret"
+        }}''')
+
+        assert "Permission denied" in result
+        assert not target.exists()
 
     def test_atomic_writer_preserves_existing_file_permissions(self, tmp_path):
         """Atomic replacement preserves mode bits such as executable files."""
@@ -174,6 +221,33 @@ class TestFileReadTool:
         assert "Did you mean" in result
         assert "readable.txt" in result
 
+    def test_file_read_denies_sensitive_path(self, tmp_path):
+        """Sensitive files are blocked before content is read."""
+        secret = tmp_path / ".env"
+        secret.write_text("TOKEN=secret\n")
+        tool = FileReadTool(
+            allowed_root=tmp_path,
+            permission_policy=PermissionPolicy(tmp_path),
+        )
+
+        result = tool.execute('{"fileName": ".env"}')
+
+        assert "Permission denied" in result
+        assert "TOKEN=secret" not in result
+
+    def test_file_read_allows_env_example(self, tmp_path):
+        """.env.example is safe documentation and remains readable."""
+        sample = tmp_path / ".env.example"
+        sample.write_text("TOKEN=\n")
+        tool = FileReadTool(
+            allowed_root=tmp_path,
+            permission_policy=PermissionPolicy(tmp_path),
+        )
+
+        result = tool.execute('{"fileName": ".env.example"}')
+
+        assert "TOKEN=" in result
+
 
 class TestProjectStructureTool:
     """Tests for ProjectStructureTool."""
@@ -228,3 +302,31 @@ class TestGlobTool:
         result = tool.execute('{"pattern": "*.py", "path": "/"}')
 
         assert "outside the project directory" in result
+
+    def test_glob_filters_sensitive_paths(self, tmp_path):
+        """Glob returns paths only, but still hides sensitive path names."""
+        (tmp_path / "visible.txt").write_text("ok\n")
+        (tmp_path / "credentials.json").write_text("{}\n")
+
+        tool = GlobTool(
+            allowed_root=tmp_path,
+            permission_policy=PermissionPolicy(tmp_path),
+        )
+        result = tool.execute('{"pattern": "*"}')
+
+        assert "visible.txt" in result
+        assert "credentials.json" not in result
+
+    def test_project_structure_filters_sensitive_paths(self, tmp_path):
+        """Project tree output should not reveal sensitive path names."""
+        (tmp_path / "README.md").write_text("# ok\n")
+        (tmp_path / "credentials.json").write_text("{}\n")
+
+        tool = ProjectStructureTool(
+            allowed_root=tmp_path,
+            permission_policy=PermissionPolicy(tmp_path),
+        )
+        result = tool.execute('{"path": ".", "maxDepth": 2, "maxFiles": 10}')
+
+        assert "README.md" in result
+        assert "credentials.json" not in result

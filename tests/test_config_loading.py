@@ -103,6 +103,37 @@ def test_model_profile_with_context_limit(tmp_path):
         os.getcwd = original_getcwd
 
 
+def test_permissions_config_loads_from_yaml(tmp_path):
+    """Permission rules are loaded as shared configuration."""
+    config_data = {
+        "api_key": "test-key",
+        "permissions": {
+            "command-exec": {"allow": ["uv run pytest*"]},
+            "paths": {"deny": ["private/*"]},
+        },
+    }
+
+    config_file = tmp_path / ".supercoder.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(config_data, f)
+
+    original_getcwd = os.getcwd
+
+    try:
+        os.getcwd = lambda: str(tmp_path)
+        with patch(
+            "os.path.exists",
+            side_effect=lambda p: p == str(config_file) or p == str(tmp_path / ".supercoder.yaml"),
+        ):
+            config = Config.load()
+
+        assert config.permissions["command-exec"]["allow"] == ["uv run pytest*"]
+        assert config.permissions["paths"]["deny"] == ["private/*"]
+
+    finally:
+        os.getcwd = original_getcwd
+
+
 def test_switch_model_applies_context_limit(tmp_path):
     """Test that switch_to_model updates max_context_tokens."""
     config_data = {

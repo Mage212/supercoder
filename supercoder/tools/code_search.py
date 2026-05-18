@@ -7,6 +7,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from ..logging import get_logger
+from ..permissions import PermissionPolicy
 from .base import BaseTool, ToolDefinition
 from .tool_utils import (
     is_binary_file,
@@ -34,8 +36,13 @@ class CodeSearchTool(BaseTool):
     MAX_CONTEXT_LINES = 3
     MAX_FILE_BYTES = 1024 * 1024
 
-    def __init__(self, allowed_root: Path | None = None):
+    def __init__(
+        self,
+        allowed_root: Path | None = None,
+        permission_policy: PermissionPolicy | None = None,
+    ):
         self.allowed_root = allowed_root
+        self.permission_policy = permission_policy
 
     @property
     def definition(self) -> ToolDefinition:
@@ -88,6 +95,11 @@ class CodeSearchTool(BaseTool):
             return error
         if root is None:
             return "Error: Invalid search path"
+        if self.permission_policy:
+            decision = self.permission_policy.check_path(root, "search")
+            if decision.denied:
+                self._log_path_denial(root, decision)
+                return self.permission_policy.format_denial(search_path, decision)
         if not root.exists():
             return f"Error: Path '{search_path}' not found"
 
@@ -147,6 +159,8 @@ class CodeSearchTool(BaseTool):
             parsed = self._parse_rg_line(raw_line, cwd)
             if parsed is None:
                 continue
+            if not self._path_allowed(parsed.path, "search"):
+                continue
             total += 1
             if len(matches) < max_results:
                 matches.append(parsed)
@@ -170,6 +184,8 @@ class CodeSearchTool(BaseTool):
             if not path.is_file():
                 continue
             if is_ignored_path(path, self.allowed_root):
+                continue
+            if not self._path_allowed(path, "search"):
                 continue
             if not matches_file_pattern(path, file_pattern, self.allowed_root):
                 continue
@@ -253,3 +269,24 @@ class CodeSearchTool(BaseTool):
             context.append(f"> {match.line:4d}: {match.text}")
 
         return f"{rel}:{match.line}:{match.column}\n" + "\n".join(context)
+
+    def _path_allowed(self, path: Path, operation: str) -> bool:
+        if not self.permission_policy:
+            return True
+        decision = self.permission_policy.check_path(path, operation)
+        if decision.denied:
+            self._log_path_denial(path, decision)
+            return False
+        return True
+
+    def _log_path_denial(self, path: Path, decision) -> None:
+        if not self.permission_policy:
+            return
+        get_logger().log_permission_decision(
+            tool_name=self.definition.name,
+            subject=self.permission_policy.relative_path(path),
+            action=decision.action.value,
+            reason=decision.reason,
+            source=decision.source,
+            matched_rule=decision.matched_rule,
+        )

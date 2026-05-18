@@ -18,12 +18,15 @@ DANGEROUS_PATTERNS = [
     "rm -rf ~",
     "rm -rf *",
     "> /dev/",
+    "sudo ",
     "mkfs",
     "dd if=",
     ":(){:|:&};:",  # fork bomb
     "chmod -R 777 /",
     "curl | sh",
+    "curl | bash",
     "wget | sh",
+    "wget | bash",
 ]
 
 # Commands that need confirmation (but are allowed)

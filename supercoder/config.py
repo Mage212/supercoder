@@ -52,6 +52,40 @@ compression_threshold: 0.95  # Emergency fallback trimming threshold
 request_timeout: 300.0
 debug: false
 streaming: false  # DEPRECATED — native tool calls used by default. Set to true for legacy streaming mode.
+
+# Host-side permissions. Unknown shell commands ask by default.
+permissions:
+  command-exec:
+    allow:
+      - "uv run pytest*"
+      - "uv run ruff*"
+      - "uv run pyright*"
+      - "git status*"
+      - "git diff*"
+    ask:
+      - "git commit*"
+      - "git push*"
+    deny:
+      - "sudo *"
+      - "rm -rf *"
+      - "curl * | sh"
+      - "curl * | bash"
+      - "wget * | sh"
+      - "wget * | bash"
+  paths:
+    deny:
+      - ".env"
+      - ".env.*"
+      - "**/.env"
+      - "**/.env.*"
+      - "**/*.pem"
+      - "**/*.key"
+      - "**/credentials.json"
+      - "**/.aws/credentials"
+      - "**/.ssh/id_*"
+    allow:
+      - ".env.example"
+      - "**/.env.example"
 """
 
 
@@ -138,6 +172,7 @@ class Config:
     compression_threshold: float = 0.95
     request_timeout: float = 300.0
     streaming: bool = False  # DEPRECATED — native tool calls by default
+    permissions: dict = field(default_factory=dict)
 
     # Multi-model support
     default_model: str = "default"
@@ -209,7 +244,10 @@ class Config:
                 )
 
         # Create instance with shared settings
-        valid_fields = {k: v for k, v in config_data.items() if hasattr(cls, k) and k != "models"}
+        valid_field_names = set(cls.__dataclass_fields__)
+        valid_fields = {
+            k: v for k, v in config_data.items() if k in valid_field_names and k != "models"
+        }
         config = cls(**valid_fields)
         config.models = models
 

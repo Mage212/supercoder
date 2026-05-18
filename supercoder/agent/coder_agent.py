@@ -12,6 +12,7 @@ from ..context.session_manager import ChatSession, SessionManager
 from ..context.window_manager import ContextConfig, ContextStats, ContextWindowManager
 from ..llm.base import BaseLLM, Message
 from ..logging import get_logger
+from ..permissions import PermissionAction, PermissionDecision, PermissionPolicy
 from ..repomap import RepoMap
 from ..rules_loader import SupercoderRulesLoader
 from ..tools.base import BaseTool
@@ -41,12 +42,14 @@ class CoderAgent:
         tool_calling_type: str = "supercoder",
         streaming: bool = False,
         lean: bool = False,
+        permissions: dict | None = None,
     ):
         self.llm = llm
         self.repo_root = Path(repo_root).resolve()
         self.streaming = streaming  # False = native API (default), True = deprecated streaming
         self.lean = lean  # Shorter prompts for weak/local models
         self.output_masker = ToolOutputMasker(self.repo_root)
+        self.permission_policy = PermissionPolicy(self.repo_root, permissions)
 
         # Abort controller for graceful interruption
         self.abort_controller = AbortController()
@@ -61,9 +64,11 @@ class CoderAgent:
             if isinstance(t, CodeEditTool):
                 t.checkpoint = self.checkpoint_manager
                 t.allowed_root = self.repo_root
+                t.permission_policy = self.permission_policy
             # Inject allowed_root into read-only path tools
             elif isinstance(t, (FileReadTool, CodeSearchTool, GlobTool, ProjectStructureTool)):
                 t.allowed_root = self.repo_root
+                t.permission_policy = self.permission_policy
             self.tools[t.definition.name] = t
 
         # Agent mode (code or ask)
@@ -126,8 +131,31 @@ class CoderAgent:
         return expand_context_references(
             user_message,
             self.repo_root,
+            permission_policy=self.permission_policy,
             max_total_tokens=max_total_tokens,
         )
+
+    def _log_permission_decision(
+        self,
+        tool_name: str,
+        subject: str,
+        decision: PermissionDecision,
+    ) -> None:
+        """Log a host-side permission decision."""
+        get_logger().log_permission_decision(
+            tool_name=tool_name,
+            subject=subject,
+            action=decision.action.value,
+            reason=decision.reason,
+            source=decision.source,
+            matched_rule=decision.matched_rule,
+        )
+
+    def _check_command_permission(self, command: str) -> PermissionDecision:
+        """Evaluate and log command-exec permission."""
+        decision = self.permission_policy.check_command(command)
+        self._log_permission_decision("command-exec", command, decision)
+        return decision
 
     def _add_context_attachment(self, attachment: ContextAttachment) -> dict:
         """Add expanded @path context to history and return an event payload."""
@@ -395,14 +423,11 @@ class CoderAgent:
                     # Confirm shell commands
                     if name == "command-exec":
                         _cmd_str = tc.arguments.get("command", args_str)
-                        confirm_result: dict = {}
-                        yield {
-                            "type": "command_confirm",
-                            "content": {"command": _cmd_str},
-                            "result": confirm_result,
-                        }
-                        if not confirm_result.get("approved", False):
-                            tool_result = "Command execution cancelled by user."
+                        decision = self._check_command_permission(_cmd_str)
+                        if decision.action == PermissionAction.DENY:
+                            tool_result = self.permission_policy.format_denial(
+                                f"command '{_cmd_str}'", decision
+                            )
                             yield {
                                 "type": "tool_result",
                                 "content": {"name": name, "result": tool_result},
@@ -417,6 +442,29 @@ class CoderAgent:
                                 )
                             )
                             continue
+                        if decision.action == PermissionAction.ASK:
+                            confirm_result: dict = {}
+                            yield {
+                                "type": "command_confirm",
+                                "content": {"command": _cmd_str},
+                                "result": confirm_result,
+                            }
+                            if not confirm_result.get("approved", False):
+                                tool_result = "Command execution cancelled by user."
+                                yield {
+                                    "type": "tool_result",
+                                    "content": {"name": name, "result": tool_result},
+                                }
+                                self.context.add_message(
+                                    Message(
+                                        role="tool",
+                                        content=tool_result,
+                                        tool_call_id=tc.id,
+                                        name=name,
+                                        display_type="tool_result",
+                                    )
+                                )
+                                continue
 
                     # Execute tool (streaming for command-exec)
                     if name == "command-exec" and hasattr(tool, "execute_streaming"):
@@ -651,20 +699,32 @@ class CoderAgent:
                                 _cmd_str = _cmd_args.get("command", str(args))
                             except Exception:
                                 _cmd_str = str(args)
-                            confirm_result: dict = {}
-                            yield {
-                                "type": "command_confirm",
-                                "content": {"command": _cmd_str},
-                                "result": confirm_result,
-                            }
-                            if not confirm_result.get("approved", False):
-                                result = "Command execution cancelled by user."
+                            decision = self._check_command_permission(_cmd_str)
+                            if decision.action == PermissionAction.DENY:
+                                result = self.permission_policy.format_denial(
+                                    f"command '{_cmd_str}'", decision
+                                )
                                 yield {
                                     "type": "tool_result",
                                     "content": {"name": name, "result": result},
                                 }
                                 all_results.append(f"[{name}]: {result}")
                                 continue
+                            if decision.action == PermissionAction.ASK:
+                                confirm_result: dict = {}
+                                yield {
+                                    "type": "command_confirm",
+                                    "content": {"command": _cmd_str},
+                                    "result": confirm_result,
+                                }
+                                if not confirm_result.get("approved", False):
+                                    result = "Command execution cancelled by user."
+                                    yield {
+                                        "type": "tool_result",
+                                        "content": {"name": name, "result": result},
+                                    }
+                                    all_results.append(f"[{name}]: {result}")
+                                    continue
 
                         # Use streaming for command-exec to handle interactive commands
                         if name == "command-exec" and hasattr(tool, "execute_streaming"):

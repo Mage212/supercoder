@@ -406,6 +406,152 @@ class TestChatTurnEventFlow:
         assert tool_msg.tool_call_id == "call_42"
         assert tool_msg.name == "file-read"
 
+    def test_command_deny_skips_confirmation_and_execution(self, tmp_path):
+        """Denied commands return a tool result without asking the user."""
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+        from supercoder.tools.command_exec import CommandExecutionTool
+
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+        mock_llm.chat_with_tools_interruptible.side_effect = [
+            CompletionResult(
+                content="",
+                tool_calls=[
+                    NativeToolCall(
+                        id="call_cmd",
+                        name="command-exec",
+                        arguments={"command": "sudo echo blocked"},
+                    )
+                ],
+                raw_tool_calls=[
+                    {
+                        "id": "call_cmd",
+                        "type": "function",
+                        "function": {
+                            "name": "command-exec",
+                            "arguments": '{"command": "sudo echo blocked"}',
+                        },
+                    }
+                ],
+            ),
+            CompletionResult(content="Done.", tool_calls=[]),
+        ]
+        agent = CoderAgent(
+            llm=mock_llm,
+            tools=[CommandExecutionTool()],
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+        )
+
+        events = list(agent.chat_turn("Run risky command"))
+        types = [event["type"] for event in events]
+        tool_result = next(event for event in events if event["type"] == "tool_result")
+
+        assert "command_confirm" not in types
+        assert "Permission denied" in tool_result["content"]["result"]
+
+    def test_command_allow_skips_confirmation(self, tmp_path):
+        """Allowed commands execute without a confirmation event."""
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+        from supercoder.tools.command_exec import CommandExecutionTool
+
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+        mock_llm.chat_with_tools_interruptible.side_effect = [
+            CompletionResult(
+                content="",
+                tool_calls=[
+                    NativeToolCall(
+                        id="call_cmd",
+                        name="command-exec",
+                        arguments={"command": "printf allowed"},
+                    )
+                ],
+                raw_tool_calls=[
+                    {
+                        "id": "call_cmd",
+                        "type": "function",
+                        "function": {
+                            "name": "command-exec",
+                            "arguments": '{"command": "printf allowed"}',
+                        },
+                    }
+                ],
+            ),
+            CompletionResult(content="Done.", tool_calls=[]),
+        ]
+        agent = CoderAgent(
+            llm=mock_llm,
+            tools=[CommandExecutionTool()],
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+            permissions={"command-exec": {"allow": ["printf allowed"]}},
+        )
+
+        events = list(agent.chat_turn("Run allowed command"))
+        types = [event["type"] for event in events]
+        tool_result = next(event for event in events if event["type"] == "tool_result")
+
+        assert "command_confirm" not in types
+        assert "allowed" in tool_result["content"]["result"]
+
+    def test_command_default_ask_yields_confirmation(self, tmp_path):
+        """Unknown commands still ask for approval by default."""
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+        from supercoder.tools.command_exec import CommandExecutionTool
+
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+        mock_llm.chat_with_tools_interruptible.side_effect = [
+            CompletionResult(
+                content="",
+                tool_calls=[
+                    NativeToolCall(
+                        id="call_cmd",
+                        name="command-exec",
+                        arguments={"command": "echo ask"},
+                    )
+                ],
+                raw_tool_calls=[
+                    {
+                        "id": "call_cmd",
+                        "type": "function",
+                        "function": {
+                            "name": "command-exec",
+                            "arguments": '{"command": "echo ask"}',
+                        },
+                    }
+                ],
+            ),
+            CompletionResult(content="Done.", tool_calls=[]),
+        ]
+        agent = CoderAgent(
+            llm=mock_llm,
+            tools=[CommandExecutionTool()],
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+        )
+
+        events = list(agent.chat_turn("Run unknown command"))
+        types = [event["type"] for event in events]
+
+        assert "command_confirm" in types
+
     def test_large_tool_result_is_masked_in_context(self, tmp_path):
         """Large tool outputs are offloaded and only compact text reaches context."""
         from supercoder.agent.coder_agent import CoderAgent

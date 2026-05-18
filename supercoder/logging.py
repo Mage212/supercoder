@@ -203,6 +203,32 @@ class ConversationLogger:
             }
         )
 
+    def log_permission_decision(
+        self,
+        *,
+        tool_name: str,
+        subject: str,
+        action: str,
+        reason: str,
+        source: str,
+        matched_rule: str | None = None,
+    ) -> None:
+        """Log host-side permission decisions without exposing file contents."""
+        if not self.enabled:
+            return
+        self._write_entry(
+            {
+                "type": "permission_decision",
+                "tool": tool_name,
+                "subject": subject[:300],
+                "action": action,
+                "reason": reason,
+                "source": source,
+                "matched_rule": matched_rule,
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
+
     def log_error(self, error: str | Exception, *, include_traceback: bool = True) -> None:
         """Log error with optional full traceback.
 
