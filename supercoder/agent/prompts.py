@@ -52,6 +52,34 @@ Create a summary in this format:
 """
 
 
+# Cache-aware compact request appended as the next user message in the current chat.
+# This preserves the existing prompt prefix so llama.cpp-like backends can reuse KV cache.
+CACHE_AWARE_COMPACT_REQUEST = """[Context maintenance request]
+
+Create a concise continuation summary of the conversation so far.
+
+Rules:
+- Return only the summary, no preamble.
+- Do not call tools.
+- Do not continue the user's task.
+- Preserve current goal, key decisions, files touched/read, commands/results, errors, and next step.
+
+Format:
+
+## Working Context
+[Task goal and current state]
+
+## Key Decisions
+[Important choices and constraints]
+
+## Files and Commands
+[Relevant paths, tools, commands, and results]
+
+## Current Focus
+[The exact next step to continue from]
+"""
+
+
 def build_system_prompt(
     tools: list,
     rules: str = "",

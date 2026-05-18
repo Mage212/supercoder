@@ -104,12 +104,14 @@ class BaseLLM(ABC):
         self,
         messages: list[Message],
         tools: list[dict] | None = None,
+        tool_choice: str | dict | None = None,
     ) -> CompletionResult:
         """Send messages with native tool support (non-streaming).
 
         Args:
             messages: Conversation history.
             tools: OpenAI-compatible tool schemas (from ToolDefinition.to_openai_schema()).
+            tool_choice: Optional OpenAI-compatible tool choice override.
 
         Returns:
             CompletionResult with content, tool_calls, and reasoning.
@@ -123,12 +125,13 @@ class BaseLLM(ABC):
         abort_controller: AbortController | None = None,
         on_chunk: Callable[[int], None] | None = None,
         max_completion_tokens: int = 16000,
+        tool_choice: str | dict | None = None,
     ) -> CompletionResult:
         """Interruptible variant of chat_with_tools using streaming internally.
 
         Falls back to ``chat_with_tools()`` if not overridden.
         """
-        return self.chat_with_tools(messages, tools)
+        return self.chat_with_tools(messages, tools, tool_choice=tool_choice)
 
     @abstractmethod
     def chat_stream(self, messages: list[Message]) -> Iterator[StreamChunk]:

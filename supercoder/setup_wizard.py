@@ -277,6 +277,10 @@ def _write_config(
     config_data.setdefault("top_p", 0.1)
     config_data.setdefault("max_context_tokens", max_context_tokens)
     config_data.setdefault("reserved_for_response", 4096)
+    config_data.setdefault("auto_compact", True)
+    config_data.setdefault("auto_compact_threshold", 0.75)
+    config_data.setdefault("protected_recent_steps", 6)
+    config_data.setdefault("compression_threshold", 0.95)
     config_data.setdefault("request_timeout", 300.0)
     config_data.setdefault("debug", False)
 

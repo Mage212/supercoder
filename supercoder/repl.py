@@ -315,6 +315,23 @@ class SuperCoderREPL:
                 elif event_type == "error":
                     errors.append(content)
 
+                elif event_type == "warning":
+                    spinner.stop()
+                    self._print_block(f"[yellow]{content}[/]", "Warning", "yellow", "!")
+                    spinner.update("[bold blue]SuperCoder is thinking...[/]")
+                    spinner.start()
+
+                elif event_type == "auto_compact":
+                    spinner.stop()
+                    before = content.get("stats_before")
+                    after = content.get("stats_after")
+                    self.console.print(
+                        "[dim]Context auto-compacted: "
+                        f"{before.used_tokens:,} -> {after.used_tokens:,} tokens[/]"
+                    )
+                    spinner.update("[bold blue]SuperCoder is thinking...[/]")
+                    spinner.start()
+
                 elif event_type == "rollback":
                     rollback_info = content
 
@@ -1118,6 +1135,10 @@ class SuperCoderREPL:
         # Show spinner while compacting
         with self.console.status("[bold blue]Compacting context...[/]", spinner="dots"):
             summary, stats_before, stats_after = self.agent.compact_context()
+
+        if summary.startswith("Error generating summary:"):
+            self._print_block(f"[red]{summary}[/]", "Compact Failed", "red", "❌")
+            return False
 
         # Display results
         tokens_saved = stats_before.used_tokens - stats_after.used_tokens

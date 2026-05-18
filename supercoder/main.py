@@ -120,8 +120,11 @@ def main(
     # Context configuration
     context_config = ContextConfig(
         max_tokens=config.max_context_tokens,
-        reserved_for_response=4096,
-        compression_threshold=0.7,
+        reserved_for_response=config.reserved_for_response,
+        auto_compact=config.auto_compact,
+        auto_compact_threshold=config.auto_compact_threshold,
+        protected_recent_steps=config.protected_recent_steps,
+        compression_threshold=config.compression_threshold,
         compression_strategy="smart",
     )
 

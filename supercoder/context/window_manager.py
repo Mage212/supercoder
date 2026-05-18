@@ -18,7 +18,10 @@ class ContextConfig:
     max_tokens: int = 32000  # Total context window size
     reserved_for_response: int = 4096  # Reserved for model response
     system_prompt_tokens: int = 500  # Estimated system prompt size
-    compression_threshold: float = 0.7  # Start compression at this utilization
+    compression_threshold: float = 0.95  # Emergency fallback trimming threshold
+    auto_compact: bool = True  # Prefer LLM summarization before trimming
+    auto_compact_threshold: float = 0.75  # Trigger auto-compact at this usable utilization
+    protected_recent_steps: int = 6  # Exact recent messages to keep after compact
     min_messages_to_keep: int = 4  # Always keep at least this many messages
     compression_strategy: Literal["sliding", "summarize", "smart"] = "sliding"
 
@@ -64,14 +67,11 @@ class ContextWindowManager:
         self._system_tokens = self.counter.count(prompt)
 
     def add_message(self, message: Message) -> None:
-        """Add a message to history, compressing if needed."""
+        """Add a message to history, trimming only as an emergency fallback."""
         self.history.append(message)
+        self._actual_used_tokens = None
 
-        # Check if we need to compress
-        stats = self.get_stats()
-        threshold = self.config.max_tokens * self.config.compression_threshold
-
-        if stats.used_tokens > threshold:
+        if self.should_emergency_compress():
             self._compress()
 
     def get_messages(self) -> list[Message]:
@@ -124,11 +124,95 @@ class ContextWindowManager:
         """Reset actual usage, forcing fallback to estimation."""
         self._actual_used_tokens = None
 
-    def set_initial_summary(self, summary: str) -> None:
+    def usable_tokens(self) -> int:
+        """Return the context budget available before the reserved response space."""
+        return max(1, self.config.max_tokens - self.config.reserved_for_response)
+
+    def should_auto_compact(self) -> bool:
+        """Return True when history should be compacted at the next safe boundary."""
+        if not self.config.auto_compact:
+            return False
+
+        compactable_count = sum(
+            1
+            for msg in self.history
+            if msg.display_type != "thinking" and not self._is_compact_summary(msg)
+        )
+        if compactable_count <= self.config.protected_recent_steps:
+            return False
+
+        stats = self.get_stats()
+        return stats.used_tokens > self.usable_tokens() * self.config.auto_compact_threshold
+
+    def should_emergency_compress(self) -> bool:
+        """Return True when hard trimming is needed to avoid overflowing the context."""
+        stats = self.get_stats()
+        return stats.used_tokens > self.usable_tokens() * self.config.compression_threshold
+
+    def force_compress(self) -> None:
+        """Run the configured compression strategy immediately."""
+        self._compress()
+
+    def get_protected_recent_messages(self, steps: int | None = None) -> list[Message]:
+        """Return the recent exact messages to keep after compaction.
+
+        The count is based on API-visible messages, excluding thinking and old compact
+        summaries. If a selected message is part of a native tool-call exchange, the
+        corresponding assistant/tool messages are kept together so replay remains valid.
+        """
+        limit = self.config.protected_recent_steps if steps is None else steps
+        if limit <= 0:
+            return []
+
+        eligible_indices = [
+            idx
+            for idx, msg in enumerate(self.history)
+            if msg.display_type != "thinking" and not self._is_compact_summary(msg)
+        ]
+        selected = set(eligible_indices[-limit:])
+        if not selected:
+            return []
+
+        call_owner: dict[str, int] = {}
+        call_results: dict[str, list[int]] = {}
+        for idx, msg in enumerate(self.history):
+            if msg.role == "assistant" and msg.tool_calls:
+                for raw_call in msg.tool_calls:
+                    call_id = raw_call.get("id")
+                    if call_id:
+                        call_owner[call_id] = idx
+            elif msg.role == "tool" and msg.tool_call_id:
+                call_results.setdefault(msg.tool_call_id, []).append(idx)
+
+        changed = True
+        while changed:
+            changed = False
+            for idx in list(selected):
+                msg = self.history[idx]
+                if msg.role == "tool" and msg.tool_call_id:
+                    owner_idx = call_owner.get(msg.tool_call_id)
+                    if owner_idx is not None and owner_idx not in selected:
+                        selected.add(owner_idx)
+                        changed = True
+                if msg.role == "assistant" and msg.tool_calls:
+                    for raw_call in msg.tool_calls:
+                        call_id = raw_call.get("id")
+                        if isinstance(call_id, str):
+                            for result_idx in call_results.get(call_id, []):
+                                if result_idx not in selected:
+                                    selected.add(result_idx)
+                                    changed = True
+
+        return [self.history[idx] for idx in sorted(selected)]
+
+    def set_initial_summary(
+        self, summary: str, recent_messages: list[Message] | None = None
+    ) -> None:
         """Set a summary as the initial context after clearing history.
 
         This is used by the /compact command to preserve key context
-        after clearing the conversation history.
+        after clearing the conversation history. Recent messages can be kept
+        verbatim after the summary to preserve the exact current working state.
 
         Note: We use 'user' role so the model treats this as input context
         to remember, not as its own previous response.
@@ -141,9 +225,20 @@ class ContextWindowManager:
                 display_type="compact_summary",
             )
         ]
+        if recent_messages:
+            self.history.extend(
+                msg
+                for msg in recent_messages
+                if msg.display_type != "thinking" and not self._is_compact_summary(msg)
+            )
+
+    def _is_compact_summary(self, msg: Message) -> bool:
+        """Return True for compact summary messages, including older saved sessions."""
+        return msg.display_type == "compact_summary" or msg.content.startswith("[Previous Context")
 
     def _compress(self) -> None:
         """Compress history to free up context space."""
+        self._actual_used_tokens = None
         if self.config.compression_strategy == "sliding":
             self._sliding_window_compress()
         elif self.config.compression_strategy == "summarize":

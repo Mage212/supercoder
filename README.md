@@ -1,6 +1,6 @@
 # 🤖 SuperCoder
 
-[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/Mage212/supercoder)
+[![Version](https://img.shields.io/badge/version-0.3.2-blue.svg)](https://github.com/Mage212/supercoder)
 [![Python](https://img.shields.io/badge/python-3.11+-green.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -8,7 +8,23 @@
 
 ---
 
-## 🆕 What's New in v0.3.0
+## 🆕 What's New in v0.3.2
+
+- **Cache-Aware Compact for Local Models**: `/compact` now runs as an in-band chat turn instead of a separate summarization prompt, allowing llama.cpp/Ollama/LM Studio-style backends to reuse prompt cache.
+- **Automatic Context Compaction**: SuperCoder can auto-compact around 75% of usable context before the emergency trimming fallback is needed.
+- **Protected Recent Steps**: Compact keeps the summary plus the last 6 exact conversation steps, preserving the current working state without relying only on abstraction.
+
+### v0.3.1
+
+- **Streaming Tool Call Parser**: Native tool calls that arrive as streamed fragments are now assembled by a dedicated bracket-depth parser instead of a raw string buffer.
+- **Truncated Tool Call Detection**: SuperCoder now detects incomplete streamed tool-call JSON and warns when a response was cut off before execution.
+- **3-Level JSON Recovery**: Tool argument parsing now tries exact JSON, targeted repair, then `json-repair` for malformed local-model output.
+- **Lean Mode Keeps Project Rules**: Lean prompts still stay compact, but project rules are now preserved in a shortened mandatory section instead of being dropped.
+- **Debug-Only Conversation Logging**: JSONL logging and full tracebacks are enabled through debug mode, so normal runs avoid unnecessary log files.
+- **Safer Atomic Writes**: Atomic rewrites now preserve existing file permissions.
+- **Safer Command Guidance**: CODE mode now distinguishes useful validation commands from destructive, sudo/admin, network-install, and broad filesystem operations that require extra care.
+
+### v0.3.0
 
 - **Native API Tool Calling**: Migrated from text-based streaming parsing to native OpenAI-compatible `tools` parameter. More reliable, no format-dependent parsing. Streaming mode still available via `--stream`.
 - **Interactive Session Picker**: `/continue` now shows an arrow-key navigable session list with relative timestamps ("5m ago") and message counts. No more typing numbers.
@@ -22,7 +38,7 @@
 - **Inline Auto-suggest**: Gray-text suggestions for slash commands while typing. Enter to accept.
 - **Command Approval Menu**: Instant key-press approval (`[y]`/`[a]`/`[n]`) for shell commands instead of typing.
 - **Interactive Setup Wizard**: On first launch, a guided TUI wizard configures provider, model, context size, and API key.
-- **Full Traceback Logging**: All exceptions logged with complete Python tracebacks to `~/.supercoder/logs/` (JSONL format).
+- **Full Traceback Logging**: Debug logging can capture complete Python tracebacks to `~/.supercoder/logs/` (JSONL format).
 
 ### v0.2.9
 
@@ -79,14 +95,16 @@ Modifies your codebase seamlessly using diff-based operations. Every edit is **a
 - **Operations**: `search_replace`, `insert_after`, `replace_lines`, and `create`.
 
 ### 📜 Supercoder Rules (Custom rules)
-Leverage project-specific rules to guide the agent. Place `.md` files in `.supercoder/rules/` and they will be automatically loaded into the agent's context.
+Leverage project-specific rules to guide the agent. Place `.md` files in `.supercoder/rules/` and they will be automatically loaded into the agent's context. In lean mode, rules are compacted but still included.
 
 ### 🗺️ RepoMap Support
 Uses `tree-sitter` and `networkx` to generate a high-level map of your repository, helping the LLM understand relationships between files and symbols.
 
 ### 🧠 Context Management
 - **Token Counter**: Real-time monitoring of context usage.
-- **Smart Compaction**: Use `/compact` to summarize conversation history and free up token space without losing key context.
+- **Cache-Aware Compaction**: Use `/compact` to summarize conversation history without switching to a separate summarization prompt, which keeps local-model prompt cache useful.
+- **Auto-Compact**: Long sessions compact automatically around 75% of usable context, with emergency trimming left as a fallback.
+- **Protected Recent Steps**: After compacting, SuperCoder keeps the summary plus the last 6 exact conversation steps.
 
 ### 💾 Session Persistence
 - **Auto-Save**: Your conversation is automatically saved after each message exchange.
@@ -183,17 +201,24 @@ models:
     endpoint: "http://localhost:11434/v1"
     model: "qwen2.5-coder:7b"
     tool_calling_type: "supercoder"
+    lean: true
 
 # Shared settings (applied to all models)
 temperature: 0.2
 max_context_tokens: 32000
-request_timeout: 60.0
+reserved_for_response: 4096
+auto_compact: true
+auto_compact_threshold: 0.75
+protected_recent_steps: 6
+compression_threshold: 0.95
+request_timeout: 300.0
 debug: false
+streaming: false
 ```
 
 ### Tool Calling Types
 
-Different models expect tools to be called in different formats. Use `tool_calling_type` to specify the format:
+Native API tool calling is the default path and passes schemas through the OpenAI-compatible `tools` parameter. `tool_calling_type` is mainly used by the deprecated streaming mode for models that emit tool calls as text:
 
 | Type | Format | Best for |
 |------|--------|----------|
@@ -223,6 +248,7 @@ supercoder --temperature 0.5           # Override temperature
 supercoder --debug                     # Enable debug mode
 supercoder --no-repo-map               # Disable RepoMap
 supercoder --max-context 16000         # Override context token limit
+supercoder --stream                    # Enable deprecated text-streaming mode
 ```
 
 ### Slash Commands
@@ -236,7 +262,7 @@ supercoder --max-context 16000         # Override context token limit
 | `/undo` | Revert changes to a specific checkpoint |
 | `/help` | Show available commands |
 | `/continue` | Resume a previous session (interactive picker) |
-| `/compact` | Summarize history to save context tokens |
+| `/compact` | Cache-aware summary compaction that keeps recent steps |
 | `/stats` | View current token usage and context status |
 | `/clear` | Clear conversation history |
 | `/config` | Show current active configuration |
@@ -250,7 +276,7 @@ supercoder --max-context 16000         # Override context token limit
 ## 🛡️ Safety & Integrity
 
 ### Atomic File Writes
-SuperCoder uses an `AtomicFileWriter` to ensure that files are never left in a corrupted state if a write operation is interrupted. This uses the `tempfile` + `os.replace` pattern, which is standard for safe filesystem operations.
+SuperCoder uses an `AtomicFileWriter` to ensure that files are never left in a corrupted state if a write operation is interrupted. This uses the `tempfile` + `os.replace` pattern, preserves existing file permissions on rewrite, and is standard for safe filesystem operations.
 
 ### Checkpoint System
 Every user message that leads to a file modification creates a new **Checkpoint**. 
@@ -308,6 +334,7 @@ supercoder/
 - `tiktoken` — Token counting
 - `pyyaml` — Configuration files
 - `questionary` — Interactive terminal prompts
+- `json-repair` — Recovery for malformed JSON tool arguments
 
 ---
 

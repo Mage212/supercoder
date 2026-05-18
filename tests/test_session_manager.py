@@ -206,6 +206,21 @@ class TestSessionManager:
         assert len(loaded.messages) == 1
         assert summary in loaded.messages[0].content
 
+    def test_update_session_after_compact_keeps_recent_messages(self, tmp_path):
+        """Compact persistence keeps the protected tail after the summary."""
+        manager = SessionManager(tmp_path)
+        session = manager.create_new_session()
+        recent = [Message("user", "Recent exact step", display_type="user_input")]
+
+        manager.update_session_after_compact(session, "Summary", recent)
+        loaded = manager.load_session(session.id)
+
+        assert loaded is not None
+        assert loaded.is_compacted is True
+        assert len(loaded.messages) == 2
+        assert loaded.messages[0].display_type == "compact_summary"
+        assert loaded.messages[1].content == "Recent exact step"
+
     def test_display_type_roundtrip(self, tmp_path):
         """Test that display_type survives save/load cycle."""
         manager = SessionManager(tmp_path)

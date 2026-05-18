@@ -115,3 +115,63 @@ class TestContextWindowManager:
 
         api_msgs = cm.get_messages_for_api()
         assert len(api_msgs) == 3  # all pass through
+
+    def test_should_auto_compact_uses_protected_step_floor(self):
+        """Auto-compact should wait until there is older history to summarize."""
+        config = ContextConfig(
+            max_tokens=200,
+            reserved_for_response=0,
+            auto_compact_threshold=0.1,
+            protected_recent_steps=2,
+            compression_threshold=1.0,
+        )
+        cm = ContextWindowManager(config)
+        cm.set_system_prompt("System")
+
+        cm.add_message(Message("user", "x" * 80))
+        cm.add_message(Message("assistant", "y" * 80))
+        assert cm.should_auto_compact() is False
+
+        cm.add_message(Message("user", "z" * 80))
+        assert cm.should_auto_compact() is True
+
+    def test_protected_recent_messages_keep_tool_call_pairs(self):
+        """Protected tail keeps native tool-call exchanges API-valid."""
+        config = ContextConfig(protected_recent_steps=1)
+        cm = ContextWindowManager(config)
+        tool_calls = [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "file-read", "arguments": "{}"},
+            }
+        ]
+
+        cm.add_message(Message("user", "old"))
+        cm.add_message(Message("assistant", "", tool_calls=tool_calls, display_type="tool_call"))
+        cm.add_message(
+            Message(
+                "tool",
+                "result",
+                tool_call_id="call_1",
+                name="file-read",
+                display_type="tool_result",
+            )
+        )
+
+        protected = cm.get_protected_recent_messages()
+
+        assert [m.role for m in protected] == ["assistant", "tool"]
+        assert protected[0].tool_calls == tool_calls
+
+    def test_set_initial_summary_keeps_recent_messages(self):
+        """Compact summary is followed by exact recent working context."""
+        cm = ContextWindowManager(ContextConfig())
+        recent = [Message("user", "latest", display_type="user_input")]
+
+        cm.set_initial_summary("summary", recent)
+
+        messages = cm.get_messages()
+        assert len(messages) == 2
+        assert messages[0].display_type == "compact_summary"
+        assert messages[1].content == "latest"

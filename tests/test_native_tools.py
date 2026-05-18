@@ -372,6 +372,55 @@ class TestChatTurnEventFlow:
         assert tool_msg.tool_call_id == "call_42"
         assert tool_msg.name == "file-read"
 
+    def test_compact_context_uses_cache_aware_chat_path(self):
+        """Manual compact should append a maintenance request to the current chat."""
+        agent, mock_llm = self._make_agent()
+        for i in range(8):
+            agent.context.add_message(Message("user", f"Message {i}", display_type="user_input"))
+        mock_llm.chat_with_tools_interruptible.return_value = CompletionResult(
+            content="Compact summary",
+            tool_calls=[],
+        )
+
+        summary, _before, _after = agent.compact_context()
+
+        assert summary == "Compact summary"
+        mock_llm.chat_with_tools_interruptible.assert_called_once()
+        args, kwargs = mock_llm.chat_with_tools_interruptible.call_args
+        assert args[0][-1].role == "user"
+        assert "Context maintenance request" in args[0][-1].content
+        assert kwargs["tool_choice"] == "none"
+
+        messages = agent.context.get_messages()
+        assert messages[0].display_type == "compact_summary"
+        assert len(messages) == 7  # summary + protected_recent_steps default
+
+    def test_auto_compact_runs_before_large_turn(self):
+        """Auto-compact should run at a safe boundary before the next user turn."""
+        agent, mock_llm = self._make_agent()
+        agent.context.config.max_tokens = 2000
+        agent.context.config.reserved_for_response = 0
+        agent.context.config.auto_compact_threshold = 0.5
+        agent.context.config.compression_threshold = 10.0
+        agent.context.config.protected_recent_steps = 6
+
+        agent.context.add_message(Message("user", "x" * 1200, display_type="user_input"))
+        for i in range(6):
+            agent.context.add_message(Message("assistant", f"short {i}", display_type="response"))
+        agent.context.update_actual_usage(1200)
+
+        mock_llm.chat_with_tools_interruptible.side_effect = [
+            CompletionResult(content="Compact summary", tool_calls=[]),
+            CompletionResult(content="Done.", tool_calls=[]),
+        ]
+
+        events = list(agent.chat_turn("Continue"))
+        types = [e["type"] for e in events]
+
+        assert "auto_compact" in types
+        assert "response" in types
+        assert mock_llm.chat_with_tools_interruptible.call_count == 2
+
 
 # ──────────────────────────────────────────────
 # Session serialization with new fields

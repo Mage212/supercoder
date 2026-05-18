@@ -82,6 +82,7 @@ class OpenAIClient(BaseLLM):
         self,
         messages: list[Message],
         tools: list[dict] | None = None,
+        tool_choice: str | dict | None = None,
     ) -> CompletionResult:
         """Non-streaming call with native tool support.
 
@@ -97,6 +98,8 @@ class OpenAIClient(BaseLLM):
         }
         if tools:
             kwargs["tools"] = tools
+        if tool_choice is not None:
+            kwargs["tool_choice"] = tool_choice
 
         response = self.client.chat.completions.create(**kwargs)
         msg = response.choices[0].message
@@ -164,6 +167,7 @@ class OpenAIClient(BaseLLM):
         abort_controller: AbortController | None = None,
         on_chunk: Callable[[int], None] | None = None,
         max_completion_tokens: int = 16000,
+        tool_choice: str | dict | None = None,
     ) -> CompletionResult:
         """Streaming variant of chat_with_tools that checks abort between chunks.
 
@@ -187,6 +191,8 @@ class OpenAIClient(BaseLLM):
         }
         if tools:
             kwargs["tools"] = tools
+        if tool_choice is not None:
+            kwargs["tool_choice"] = tool_choice
 
         stream = self.client.chat.completions.create(**kwargs)
 

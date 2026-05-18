@@ -206,10 +206,12 @@ class SessionManager:
             return True
         return False
 
-    def update_session_after_compact(self, session: ChatSession, summary: str) -> None:
+    def update_session_after_compact(
+        self, session: ChatSession, summary: str, recent_messages: list[Message] | None = None
+    ) -> None:
         """Update session after context compaction.
 
-        Replaces all messages with the summary and marks as compacted.
+        Replaces old history with the summary plus any protected recent messages.
         """
         session.is_compacted = True
         session.messages = [
@@ -217,6 +219,8 @@ class SessionManager:
                 "user", f"[Previous Context Summary]\n\n{summary}", display_type="compact_summary"
             )
         ]
+        if recent_messages:
+            session.messages.extend(recent_messages)
         session.last_modified = datetime.now().isoformat()
 
         # Save updated session

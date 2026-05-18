@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 ## Git Commits
 
@@ -48,7 +48,7 @@ SuperCoder is a terminal REPL that wraps an agentic LLM loop with tool-calling t
 
 `supercoder/agent/coder_agent.py` — The core agentic loop. Two modes:
 
-- **Native mode (default, `chat_turn`)**: User-visible non-streaming mode. Sends tool schemas via the OpenAI `tools` parameter and assembles structured `tool_calls`. The interruptible path uses streaming internally only so double-ESC can abort active generation.
+- **Native mode (default, `chat_turn`)**: Non-streaming. Sends tool schemas via the OpenAI `tools` parameter. The API returns structured `tool_calls` — no text parsing needed. This is the primary path.
 - **Streaming mode (deprecated, `chat_stream`)**: Text-based tool parsing via `ToolCallParser`. Retained for backward compatibility but should not be used for new work.
 
 Both modes iterate up to 50 tool-call rounds per user message. Each iteration: call LLM → execute tools → append results → loop.
@@ -57,9 +57,7 @@ Events are yielded as dicts (`{"type": "response", ...}`, `{"type": "tool_call",
 
 ### Tool call parsing
 
-`supercoder/agent/streaming_tool_parser.py` — Used by the interruptible native path to assemble streamed API tool-call fragments. Tracks bracket depth, string state, per-index buffers, index collisions, truncated tool calls, and 3-level JSON recovery.
-
-`supercoder/agent/tool_parser.py` — **Only used in legacy streaming mode.** A waterfall parser that tries 6 parsers in order. Supports: `supercoder` tags, `qwen_like`, `json_block`, `xml_function`, `glm_tool_call`. Includes 3-level JSON recovery for malformed output from small/local models.
+`supercoder/agent/tool_parser.py` — **Only used in legacy streaming mode.** A waterfall parser that tries 6 parsers in order. Supports: `supercoder` tags, `qwen_like`, `json_block`, `xml_function`, `glm_tool_call`. Includes JSON repair (`_repair_json`) for malformed output from small/local models.
 
 ### Tools
 
@@ -75,13 +73,13 @@ Tools are registered in `supercoder/tools/__init__.py` as `ALL_TOOLS`. The agent
 
 ### LLM client
 
-`supercoder/llm/openai_client.py` — Single client class `OpenAIClient` (extends `BaseLLM`). Works with any OpenAI-compatible endpoint (OpenAI, OpenRouter, Ollama, LM Studio). Key methods: `chat_with_tools()` for direct native tool calls and `chat_with_tools_interruptible()` for abortable generation with the same `CompletionResult` shape.
+`supercoder/llm/openai_client.py` — Single client class `OpenAIClient` (extends `BaseLLM`). Works with any OpenAI-compatible endpoint (OpenAI, OpenRouter, Ollama, LM Studio). Key method: `chat_with_tools()` returns a `CompletionResult` with content, parsed `NativeToolCall` list, and reasoning content (for GLM/DeepSeek models).
 
 ### Safe editing
 
 - `CheckpointManager` (`checkpoint.py`) backs up files before every edit. On success, checkpoint is committed; on error/abort, files are rolled back automatically.
 - `AbortController` (`abort_controller.py`) handles double-ESC interruption. Raises `AgentAbortedError` which triggers checkpoint rollback.
-- All file writes go through `AtomicWriter` (`utils/atomic_writer.py`) — write to temp, preserve existing mode bits, then `os.replace`.
+- All file writes go through `AtomicWriter` (`utils/atomic_writer.py`) — write to temp, then `os.replace`.
 
 ### Context management
 
@@ -93,7 +91,7 @@ Tools are registered in `supercoder/tools/__init__.py` as `ALL_TOOLS`. The agent
 
 ### System prompts
 
-`supercoder/agent/prompts.py` — Builds the system prompt dynamically. When `native_tools=True` (default), minimal tool instructions are included (tools are passed via API). When `native_tools=False` (streaming mode), verbose format-specific instructions are injected via `tool_calling_prompts.py`. Lean mode keeps project rules by compacting them instead of dropping them.
+`supercoder/agent/prompts.py` — Builds the system prompt dynamically. When `native_tools=True` (default), minimal tool instructions are included (tools are passed via API). When `native_tools=False` (streaming mode), verbose format-specific instructions are injected via `tool_calling_prompts.py`.
 
 ### RepoMap
 
@@ -113,7 +111,7 @@ Tools are registered in `supercoder/tools/__init__.py` as `ALL_TOOLS`. The agent
 - Tool results are appended as `role="tool"` messages with `tool_call_id` before the next LLM call (native mode).
 - Shell commands require explicit user confirmation before execution.
 - The REPL uses prompt_toolkit for input; history stored in `.supercoder/history`.
-- Debug logs (JSONL) go to `~/.supercoder/logs/` (outside the project tree) when debug mode is enabled. Each debug session creates `session_YYYYMMDD_HHMMSS.jsonl`. Log writes are non-blocking.
+- Logs (JSONL) go to `~/.supercoder/logs/` (outside the project tree). Each session creates `session_YYYYMMDD_HHMMSS.jsonl`. Log writes are non-blocking.
 - Streaming mode (`chat_stream`) is deprecated — all new work should target native tool calling (`chat_turn`).
 
 

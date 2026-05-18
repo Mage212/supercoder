@@ -18,7 +18,7 @@ from ..tools.code_edit import CodeEditTool
 from ..tools.file_read import FileReadTool
 from ..tools.project_structure import ProjectStructureTool
 from .agent_modes import MODE_CONFIGS, AgentMode
-from .prompts import CONTEXT_SUMMARY_PROMPT, build_system_prompt
+from .prompts import CACHE_AWARE_COMPACT_REQUEST, build_system_prompt
 from .tool_parser import ToolCallParser
 
 console = Console()
@@ -219,6 +219,11 @@ class CoderAgent:
         # Reset abort controller
         self.abort_controller.reset()
 
+        if user_message:
+            auto_compact_event = self._auto_compact_if_needed()
+            if auto_compact_event:
+                yield auto_compact_event
+
         # Create checkpoint for this interaction
         checkpoint_active = False
         if user_message:
@@ -226,6 +231,9 @@ class CoderAgent:
             checkpoint_active = True
             self.context.add_message(Message("user", user_message, display_type="user_input"))
             get_logger().log_user_input(user_message)
+            auto_compact_event = self._auto_compact_if_needed()
+            if auto_compact_event:
+                yield auto_compact_event
 
         # Update RepoMap if enabled
         if self.repo_map:
@@ -242,6 +250,11 @@ class CoderAgent:
                     "content": f"Tool call limit ({MAX_TOOL_ITERATIONS}) reached. Stopping to prevent infinite loop.",
                 }
                 return
+
+            if tool_iterations > 0:
+                auto_compact_event = self._auto_compact_if_needed()
+                if auto_compact_event:
+                    yield auto_compact_event
 
             messages = self.context.get_messages_for_api()
             get_logger().log_messages(messages)
@@ -263,8 +276,8 @@ class CoderAgent:
                 return
 
             # Update context with actual token usage from API
-            if result.usage and result.usage.total_tokens:
-                self.context.update_actual_usage(result.usage.total_tokens)
+            if result.usage and result.usage.prompt_tokens:
+                self.context.update_actual_usage(result.usage.prompt_tokens)
 
             # Warn about truncated responses
             if result.truncated:
@@ -313,6 +326,9 @@ class CoderAgent:
                 # No tool calls — conversation turn is done
                 if checkpoint_active:
                     self.checkpoint_manager.rollback()
+                auto_compact_event = self._auto_compact_if_needed()
+                if auto_compact_event:
+                    yield auto_compact_event
                 yield {"type": "done", "content": ""}
                 return
 
@@ -771,14 +787,34 @@ class CoderAgent:
             self.current_session.messages = self.context.get_messages()
             self.session_manager.save_session(self.current_session)
 
+    def _auto_compact_if_needed(self) -> dict | None:
+        """Run cache-aware compact at safe boundaries when the context is large."""
+        if not self.context.should_auto_compact():
+            return None
+
+        summary, stats_before, stats_after = self.compact_context()
+        if summary.startswith("Error generating summary:"):
+            if self.context.should_emergency_compress():
+                self.context.force_compress()
+                self._save_current_session()
+            return {"type": "warning", "content": summary}
+
+        return {
+            "type": "auto_compact",
+            "content": {
+                "summary": summary,
+                "stats_before": stats_before,
+                "stats_after": stats_after,
+            },
+        }
+
     def compact_context(self) -> tuple[str, ContextStats, ContextStats]:
-        """Compact the current context by summarizing it.
+        """Compact the current context with a cache-aware in-band summary request.
 
         This method:
-        1. Gets all messages from history
-        2. Asks the LLM to create a summary (emphasizing recent messages)
-        3. Clears the history
-        4. Injects the summary as the new starting context
+        1. Appends a temporary maintenance request to the existing API message prefix
+        2. Asks the LLM to create a summary without calling tools
+        3. Replaces old history with the summary and protected recent messages
 
         Returns:
             tuple: (summary_text, stats_before, stats_after)
@@ -792,29 +828,63 @@ class CoderAgent:
         if not messages:
             return ("No context to compact.", stats_before, stats_before)
 
-        # Format conversation for summarization
-        conversation_text = "\n\n".join(
-            [f"[{msg.role.upper()}]: {msg.content}" for msg in messages]
-        )
-
-        # Build summarization prompt
-        summary_prompt = CONTEXT_SUMMARY_PROMPT.format(conversation_history=conversation_text)
-
-        # Call LLM synchronously to get summary
-        summary_messages = [Message("user", summary_prompt)]
+        recent_messages = self.context.get_protected_recent_messages()
+        summary_messages = self.context.get_messages_for_api()
+        summary_messages.append(Message("user", CACHE_AWARE_COMPACT_REQUEST))
 
         try:
-            summary = self.llm.chat(summary_messages)
+            result = self.llm.chat_with_tools_interruptible(
+                summary_messages,
+                self._tools_schema,
+                self.abort_controller,
+                on_chunk=self._chunk_callback,
+                max_completion_tokens=2048,
+                tool_choice="none",
+            )
+        except AgentAbortedError:
+            raise
         except Exception as e:
             get_logger().log_error(e)
-            return (f"Error generating summary: {e}", stats_before, stats_before)
+            try:
+                result = self.llm.chat_with_tools_interruptible(
+                    summary_messages,
+                    None,
+                    self.abort_controller,
+                    on_chunk=self._chunk_callback,
+                    max_completion_tokens=2048,
+                )
+            except AgentAbortedError:
+                raise
+            except Exception as fallback_error:
+                get_logger().log_error(fallback_error)
+                return (
+                    f"Error generating summary: {fallback_error}",
+                    stats_before,
+                    stats_before,
+                )
 
-        # Clear history and set summary as initial context
-        self.context.set_initial_summary(summary)
+        summary = result.content.strip()
+        if result.truncated:
+            return (
+                "Error generating summary: compact summary was truncated",
+                stats_before,
+                stats_before,
+            )
+        if result.tool_calls or not summary:
+            return (
+                "Error generating summary: compact request did not return plain summary text",
+                stats_before,
+                stats_before,
+            )
+
+        # Clear old history and keep an exact protected tail after the summary.
+        self.context.set_initial_summary(summary, recent_messages)
 
         # Update session with compacted state
         if self.current_session:
-            self.session_manager.update_session_after_compact(self.current_session, summary)
+            self.session_manager.update_session_after_compact(
+                self.current_session, summary, recent_messages
+            )
 
         # Get stats after compaction
         stats_after = self.context.get_stats()

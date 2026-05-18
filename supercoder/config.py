@@ -45,6 +45,10 @@ temperature: 0.2
 top_p: 0.1
 max_context_tokens: 32000  # Default context limit (used if model doesn't specify one)
 reserved_for_response: 4096
+auto_compact: true
+auto_compact_threshold: 0.75
+protected_recent_steps: 6
+compression_threshold: 0.95  # Emergency fallback trimming threshold
 request_timeout: 300.0
 debug: false
 streaming: false  # DEPRECATED — native tool calls used by default. Set to true for legacy streaming mode.
@@ -128,6 +132,10 @@ class Config:
     debug: bool = False
     max_context_tokens: int = 32000
     reserved_for_response: int = 4096
+    auto_compact: bool = True
+    auto_compact_threshold: float = 0.75
+    protected_recent_steps: int = 6
+    compression_threshold: float = 0.95
     request_timeout: float = 300.0
     streaming: bool = False  # DEPRECATED — native tool calls by default
 
