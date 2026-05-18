@@ -21,6 +21,7 @@ from rich.text import Text
 from . import __version__
 from .abort_controller import InterruptHandler, KeyboardListener
 from .agent.agent_modes import AgentMode
+from .context.references import summarize_attachment_content, summarize_context_attachment
 from .utils import format_relative_time
 
 
@@ -124,6 +125,7 @@ class SuperCoderREPL:
             completer=completer,
             auto_suggest=auto_suggest,
             key_bindings=kb,
+            complete_while_typing=True,
             multiline=False,  # We handle multiline via { } or Alt+Enter
         )
 
@@ -309,6 +311,12 @@ class SuperCoderREPL:
                     _gen_tokens[0] = 0
                     _gen_start = time.monotonic()
                     _gen_phase[0] = "tool call"
+                    spinner.update("[bold blue]SuperCoder is thinking...[/]")
+                    spinner.start()
+
+                elif event_type == "context_attachment":
+                    spinner.stop()
+                    self._display_context_attachment(content)
                     spinner.update("[bold blue]SuperCoder is thinking...[/]")
                     spinner.start()
 
@@ -515,6 +523,12 @@ class SuperCoderREPL:
                     spinner.stop()
                     self._display_tool_result(content)
                     # Back to waiting spinner for next LLM turn
+                    spinner.update("[bold blue]SuperCoder is thinking...[/]")
+                    spinner.start()
+
+                elif event_type == "context_attachment":
+                    stop_streaming()
+                    self._display_context_attachment(content)
                     spinner.update("[bold blue]SuperCoder is thinking...[/]")
                     spinner.start()
 
@@ -747,6 +761,14 @@ class SuperCoderREPL:
                 text = msg.content[:200]
                 self._print_block(f"[dim]{text}...[/]", "Context Summary", "dim", "📋")
 
+            elif dt == "context_attachment":
+                self._print_block(
+                    f"[dim]{summarize_attachment_content(msg.content)}[/]",
+                    "Attached Context",
+                    "cyan",
+                    "@",
+                )
+
             else:
                 # Fallback for old sessions without display_type
                 if msg.role == "user" and msg.content:
@@ -771,6 +793,10 @@ class SuperCoderREPL:
         self.console.print(
             Panel(content, title=full_title, border_style=color, box=box.HORIZONTALS)
         )
+
+    def _display_context_attachment(self, summary: dict):
+        """Display a compact summary of host-attached @path context."""
+        self.console.print(f"[dim]{summarize_context_attachment(summary)}[/]")
 
     def _handle_command_confirm(self, command: str) -> bool:
         """Ask user to approve or deny a shell command before it runs.
@@ -1288,6 +1314,7 @@ class SuperCoderREPL:
         table.add_row("/compact", "Summarize and compress context")
         table.add_row("/stats", "Show context window stats")
         table.add_row("/clear", "Clear conversation history")
+        table.add_row("@path", "Attach a file or directory listing to the next prompt")
 
         # Session
         table.add_section()

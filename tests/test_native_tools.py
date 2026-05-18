@@ -225,6 +225,40 @@ class TestChatTurnEventFlow:
         response_event = next(e for e in events if e["type"] == "response")
         assert response_event["content"] == "Hello, how can I help?"
 
+    def test_context_reference_is_attached_before_user_prompt(self, tmp_path):
+        """@path references are expanded as separate user context before the prompt."""
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+        from supercoder.tools.file_read import FileReadTool
+
+        (tmp_path / "main.py").write_text("def main():\n    return 1\n")
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+        mock_llm.chat_with_tools_interruptible.return_value = CompletionResult(
+            content="Done.",
+            tool_calls=[],
+        )
+        agent = CoderAgent(
+            llm=mock_llm,
+            tools=[FileReadTool()],
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+        )
+
+        events = list(agent.chat_turn("Review @main.py"))
+        messages = agent.context.get_messages()
+        api_messages = mock_llm.chat_with_tools_interruptible.call_args[0][0]
+
+        assert events[0]["type"] == "context_attachment"
+        assert [m.display_type for m in messages[:2]] == ["context_attachment", "user_input"]
+        assert '<attached_file path="main.py"' in messages[0].content
+        assert api_messages[1].display_type == "context_attachment"
+        assert api_messages[2].content == "Review @main.py"
+
     def test_response_with_reasoning(self):
         """LLM returns reasoning + text → thinking + response + done."""
         agent, mock_llm = self._make_agent()

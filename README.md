@@ -95,6 +95,9 @@ Performs code searches across your project using `ripgrep` (`rg`) when available
 ### 🧭 File Discovery
 Use the `glob` tool to find matching files by pattern (for example `**/*.py`) without reading their contents. This is useful before targeted `file-read` calls and keeps context small.
 
+### 📎 Explicit Context References
+Mention files or directories directly in a prompt with `@path`, for example `Review @supercoder/repl.py`. SuperCoder attaches bounded file content or a directory file listing before the model call, with autocomplete suggestions while typing (`@ma` → matching files and folders).
+
 ### 📁 Project Structure Exploration
 Provides an organized, tree-based view of your project's folders and files, intelligently ignoring build artifacts and junk files (`.git`, `node_modules`, etc.).
 

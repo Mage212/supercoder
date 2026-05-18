@@ -123,6 +123,23 @@ class TestSessionManager:
         loaded = manager.load_session(session.id)
         assert loaded.title == "How do I create a Python function?"
 
+    def test_save_session_title_ignores_context_attachment(self, tmp_path):
+        """Attached @path context should not replace the human session title."""
+        manager = SessionManager(tmp_path)
+
+        session = manager.create_new_session()
+        session.messages = [
+            Message(
+                "user", "[Attached context from @ references]", display_type="context_attachment"
+            ),
+            Message("user", "Review @main.py", display_type="user_input"),
+        ]
+        manager.save_session(session)
+
+        loaded = manager.load_session(session.id)
+        assert loaded is not None
+        assert loaded.title == "Review @main.py"
+
     def test_list_sessions(self, tmp_path):
         """Test listing all sessions."""
         manager = SessionManager(tmp_path)
@@ -230,6 +247,7 @@ class TestSessionManager:
             Message("user", "Hello", display_type="user_input"),
             Message("assistant", "Let me think...", display_type="thinking"),
             Message("assistant", "Hi!", display_type="response"),
+            Message("user", "Attached", display_type="context_attachment"),
             Message("assistant", "", display_type="tool_call"),
             Message(
                 "tool", "result", tool_call_id="tc1", name="file-read", display_type="tool_result"
@@ -241,7 +259,15 @@ class TestSessionManager:
         loaded = manager.load_session(session.id)
         assert loaded is not None
         types = [m.display_type for m in loaded.messages]
-        assert types == ["user_input", "thinking", "response", "tool_call", "tool_result", "error"]
+        assert types == [
+            "user_input",
+            "thinking",
+            "response",
+            "context_attachment",
+            "tool_call",
+            "tool_result",
+            "error",
+        ]
 
     def test_display_type_backward_compat(self, tmp_path):
         """Test loading old session without display_type."""

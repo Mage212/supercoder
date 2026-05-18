@@ -189,6 +189,25 @@ class ContextWindowManager:
             changed = False
             for idx in list(selected):
                 msg = self.history[idx]
+                if msg.display_type == "user_input":
+                    prev_idx = idx - 1
+                    while (
+                        prev_idx >= 0
+                        and self.history[prev_idx].display_type == "context_attachment"
+                    ):
+                        if prev_idx not in selected:
+                            selected.add(prev_idx)
+                            changed = True
+                        prev_idx -= 1
+                if msg.display_type == "context_attachment":
+                    next_idx = idx + 1
+                    if (
+                        next_idx < len(self.history)
+                        and self.history[next_idx].display_type == "user_input"
+                        and next_idx not in selected
+                    ):
+                        selected.add(next_idx)
+                        changed = True
                 if msg.role == "tool" and msg.tool_call_id:
                     owner_idx = call_owner.get(msg.tool_call_id)
                     if owner_idx is not None and owner_idx not in selected:

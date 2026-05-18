@@ -83,3 +83,26 @@ def test_log_tool_output_masked_event(tmp_path, monkeypatch):
     assert event["original_chars"] == 12000
     assert event["model_chars"] == 5200
     assert event["offload_path"] == ".supercoder/tool-outputs/output.txt"
+
+
+def test_log_context_attachment_event(tmp_path, monkeypatch):
+    monkeypatch.setattr(logging_mod, "LOG_DIR", tmp_path)
+
+    logger = logging_mod.ConversationLogger("model", enabled=True)
+    logger.log_context_attachment(
+        {
+            "files": 1,
+            "directories": 0,
+            "skipped": 1,
+            "model_bytes": 1200,
+            "estimated_tokens": 300,
+            "items": [{"ref": "main.py", "status": "attached"}],
+        }
+    )
+
+    entries = [json.loads(line) for line in next(tmp_path.glob("*.jsonl")).read_text().splitlines()]
+    event = next(entry for entry in entries if entry["type"] == "context_attachment")
+
+    assert event["summary"]["files"] == 1
+    assert event["summary"]["skipped"] == 1
+    assert "content" not in event

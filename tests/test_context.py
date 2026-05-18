@@ -164,6 +164,19 @@ class TestContextWindowManager:
         assert [m.role for m in protected] == ["assistant", "tool"]
         assert protected[0].tool_calls == tool_calls
 
+    def test_protected_recent_messages_keep_context_attachment_with_user_input(self):
+        """Protected tail keeps @path context together with its user prompt."""
+        config = ContextConfig(protected_recent_steps=1)
+        cm = ContextWindowManager(config)
+
+        cm.add_message(Message("user", "old"))
+        cm.add_message(Message("user", "attached file body", display_type="context_attachment"))
+        cm.add_message(Message("user", "review @main.py", display_type="user_input"))
+
+        protected = cm.get_protected_recent_messages()
+
+        assert [m.display_type for m in protected] == ["context_attachment", "user_input"]
+
     def test_set_initial_summary_keeps_recent_messages(self):
         """Compact summary is followed by exact recent working context."""
         cm = ContextWindowManager(ContextConfig())

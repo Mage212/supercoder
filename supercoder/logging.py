@@ -191,6 +191,18 @@ class ConversationLogger:
             }
         )
 
+    def log_context_attachment(self, summary: dict[str, Any]) -> None:
+        """Log metadata for @path context attachment expansion."""
+        if not self.enabled:
+            return
+        self._write_entry(
+            {
+                "type": "context_attachment",
+                "summary": summary,
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
+
     def log_error(self, error: str | Exception, *, include_traceback: bool = True) -> None:
         """Log error with optional full traceback.
 

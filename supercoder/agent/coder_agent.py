@@ -7,6 +7,7 @@ from rich.console import Console
 
 from ..abort_controller import AbortController, AgentAbortedError
 from ..checkpoint import CheckpointManager
+from ..context.references import ContextAttachment, expand_context_references
 from ..context.session_manager import ChatSession, SessionManager
 from ..context.window_manager import ContextConfig, ContextStats, ContextWindowManager
 from ..llm.base import BaseLLM, Message
@@ -118,6 +119,24 @@ class CoderAgent:
     def set_chunk_callback(self, callback):
         """Set a callback invoked with approx token count during generation."""
         self._chunk_callback = callback
+
+    def _expand_context_references(self, user_message: str) -> ContextAttachment | None:
+        """Expand @path references into a bounded attachment message."""
+        max_total_tokens = min(12_000, max(1_000, int(self.context.usable_tokens() * 0.30)))
+        return expand_context_references(
+            user_message,
+            self.repo_root,
+            max_total_tokens=max_total_tokens,
+        )
+
+    def _add_context_attachment(self, attachment: ContextAttachment) -> dict:
+        """Add expanded @path context to history and return an event payload."""
+        self.context.add_message(
+            Message("user", attachment.content, display_type="context_attachment")
+        )
+        payload = attachment.to_log_dict()
+        get_logger().log_context_attachment(payload)
+        return payload
 
     def _update_system_prompt(self):
         """Update system prompt with latest RepoMap if enabled."""
@@ -233,6 +252,12 @@ class CoderAgent:
         if user_message:
             self.checkpoint_manager.create(description=user_message[:100])
             checkpoint_active = True
+            attachment = self._expand_context_references(user_message)
+            if attachment:
+                yield {
+                    "type": "context_attachment",
+                    "content": self._add_context_attachment(attachment),
+                }
             self.context.add_message(Message("user", user_message, display_type="user_input"))
             get_logger().log_user_input(user_message)
             auto_compact_event = self._auto_compact_if_needed()
@@ -500,6 +525,12 @@ class CoderAgent:
 
         # Add user message to context (only once, before the loop)
         if user_message:
+            attachment = self._expand_context_references(user_message)
+            if attachment:
+                yield {
+                    "type": "context_attachment",
+                    "content": self._add_context_attachment(attachment),
+                }
             self.context.add_message(Message("user", user_message, display_type="user_input"))
             get_logger().log_user_input(user_message)
 
