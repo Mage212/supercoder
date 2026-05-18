@@ -3,28 +3,7 @@
 from pathlib import Path
 
 from .base import BaseTool, ToolDefinition
-
-# Directories to ignore
-IGNORE_DIRS = {
-    ".git",
-    "node_modules",
-    "__pycache__",
-    ".venv",
-    "venv",
-    "target",
-    "build",
-    "dist",
-    ".idea",
-    ".vscode",
-    ".pytest_cache",
-    "egg-info",
-    ".eggs",
-    ".mypy_cache",
-    ".ruff_cache",
-}
-
-# File patterns to ignore
-IGNORE_PATTERNS = {".pyc", ".pyo", ".so", ".dylib", ".class", ".DS_Store"}
+from .tool_utils import IGNORE_DIRS, IGNORE_NAMES, IGNORE_SUFFIXES, format_size
 
 
 class ProjectStructureTool(BaseTool):
@@ -104,7 +83,9 @@ class ProjectStructureTool(BaseTool):
             # Skip ignored items
             if item.name in IGNORE_DIRS:
                 continue
-            if item.suffix in IGNORE_PATTERNS:
+            if item.suffix in IGNORE_SUFFIXES:
+                continue
+            if item.name in IGNORE_NAMES:
                 continue
             if item.name.startswith(".") and item.name != ".env.example":
                 continue
@@ -117,15 +98,6 @@ class ProjectStructureTool(BaseTool):
                 self._build_tree(item, output, depth + 1, max_depth, max_files, counter)
             else:
                 if counter["files"] < max_files:
-                    size = self._format_size(item.stat().st_size)
+                    size = format_size(item.stat().st_size)
                     output.append(f"{prefix}📄 {item.name} ({size})")
                     counter["files"] += 1
-
-    def _format_size(self, size: int) -> str:
-        """Format file size in human readable format."""
-        if size < 1024:
-            return f"{size}B"
-        elif size < 1024 * 1024:
-            return f"{size // 1024}KB"
-        else:
-            return f"{size // (1024 * 1024)}MB"

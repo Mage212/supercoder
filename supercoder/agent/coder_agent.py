@@ -15,10 +15,13 @@ from ..repomap import RepoMap
 from ..rules_loader import SupercoderRulesLoader
 from ..tools.base import BaseTool
 from ..tools.code_edit import CodeEditTool
+from ..tools.code_search import CodeSearchTool
 from ..tools.file_read import FileReadTool
+from ..tools.glob_tool import GlobTool
 from ..tools.project_structure import ProjectStructureTool
 from .agent_modes import MODE_CONFIGS, AgentMode
 from .prompts import CACHE_AWARE_COMPACT_REQUEST, build_system_prompt
+from .tool_output import ToolOutputMasker
 from .tool_parser import ToolCallParser
 
 console = Console()
@@ -42,6 +45,7 @@ class CoderAgent:
         self.repo_root = Path(repo_root).resolve()
         self.streaming = streaming  # False = native API (default), True = deprecated streaming
         self.lean = lean  # Shorter prompts for weak/local models
+        self.output_masker = ToolOutputMasker(self.repo_root)
 
         # Abort controller for graceful interruption
         self.abort_controller = AbortController()
@@ -56,8 +60,8 @@ class CoderAgent:
             if isinstance(t, CodeEditTool):
                 t.checkpoint = self.checkpoint_manager
                 t.allowed_root = self.repo_root
-            # Inject allowed_root into file-read and project-structure tools
-            elif isinstance(t, (FileReadTool, ProjectStructureTool)):
+            # Inject allowed_root into read-only path tools
+            elif isinstance(t, (FileReadTool, CodeSearchTool, GlobTool, ProjectStructureTool)):
                 t.allowed_root = self.repo_root
             self.tools[t.definition.name] = t
 
@@ -414,7 +418,11 @@ class CoderAgent:
                     else:
                         tool_result = tool.execute(args_str)
 
-                    yield {"type": "tool_result", "content": {"name": name, "result": tool_result}}
+                    masked_result = self.output_masker.mask(name, tc.id, tool_result)
+                    yield {
+                        "type": "tool_result",
+                        "content": {"name": name, "result": masked_result.model_text},
+                    }
                     get_logger().log_tool_call(name, args_str)
                     get_logger().log_tool_result(name, tool_result)
 
@@ -422,7 +430,7 @@ class CoderAgent:
                     self.context.add_message(
                         Message(
                             role="tool",
-                            content=tool_result,
+                            content=masked_result.model_text,
                             tool_call_id=tc.id,
                             name=name,
                             display_type="tool_result",
@@ -660,10 +668,14 @@ class CoderAgent:
                         else:
                             result = tool.execute(args)
 
-                        yield {"type": "tool_result", "content": {"name": name, "result": result}}
+                        masked_result = self.output_masker.mask(name or "", None, result)
+                        yield {
+                            "type": "tool_result",
+                            "content": {"name": name, "result": masked_result.model_text},
+                        }
                         get_logger().log_tool_call(name or "", args)
                         get_logger().log_tool_result(name or "", result)
-                        all_results.append(f"[{name}]: {result}")
+                        all_results.append(f"[{name}]: {masked_result.model_text}")
                     except Exception as e:
                         get_logger().log_error(e)
                         result = f"Error executing tool: {e}"

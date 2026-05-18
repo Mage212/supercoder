@@ -2,7 +2,13 @@
 
 import stat
 
-from supercoder.tools import CodeEditTool, CodeSearchTool, FileReadTool, ProjectStructureTool
+from supercoder.tools import (
+    CodeEditTool,
+    CodeSearchTool,
+    FileReadTool,
+    GlobTool,
+    ProjectStructureTool,
+)
 from supercoder.utils.atomic_writer import AtomicFileWriter
 
 
@@ -25,6 +31,36 @@ class TestCodeSearchTool:
         result = tool.execute(f'{{"query": "hello_world", "path": "{tmp_path}"}}')
 
         assert "hello_world" in result or "Error" in result  # May need git
+
+    def test_code_search_path_pattern_and_context(self, tmp_path):
+        """Search respects path, file pattern, result cap, and context lines."""
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "app.py").write_text("def alpha():\n    return 'needle'\n")
+        (src / "app.txt").write_text("needle in text\n")
+
+        tool = CodeSearchTool(allowed_root=tmp_path)
+        result = tool.execute(
+            f'{{"query": "needle", "path": "{src}", "filePattern": "*.py", '
+            '"maxResults": 5, "contextLines": 1}'
+        )
+
+        assert "src/app.py" in result
+        assert "src/app.txt" not in result
+        assert "return 'needle'" in result
+        assert "Engine:" in result
+
+    def test_code_search_python_fallback(self, tmp_path, monkeypatch):
+        """Python fallback works when ripgrep is unavailable."""
+        monkeypatch.setattr("supercoder.tools.code_search.shutil.which", lambda _name: None)
+        test_file = tmp_path / "fallback.py"
+        test_file.write_text("class Fallback:\n    pass\n")
+
+        tool = CodeSearchTool(allowed_root=tmp_path)
+        result = tool.execute(f'{{"query": "Fallback", "path": "{tmp_path}"}}')
+
+        assert "fallback.py" in result
+        assert "Engine: python" in result
 
 
 class TestCodeEditTool:
@@ -106,6 +142,38 @@ class TestFileReadTool:
 
         assert "Error" in result or "not found" in result.lower()
 
+    def test_file_read_binary_guard(self, tmp_path):
+        """Binary files are not read as replacement-character text."""
+        tool = FileReadTool(allowed_root=tmp_path)
+        test_file = tmp_path / "image.bin"
+        test_file.write_bytes(b"abc\x00def")
+
+        result = tool.execute(f'{{"fileName": "{test_file}"}}')
+
+        assert "binary" in result
+        assert "refusing" in result
+
+    def test_file_read_max_bytes(self, tmp_path):
+        """Large text output is capped by maxBytes."""
+        tool = FileReadTool(allowed_root=tmp_path)
+        test_file = tmp_path / "large.txt"
+        test_file.write_text(("a" * 100) + "\nsecond line\n")
+
+        result = tool.execute(f'{{"fileName": "{test_file}", "maxBytes": 20}}')
+
+        assert "maxBytes=20" in result
+        assert "second line" not in result
+
+    def test_file_read_missing_file_suggestions(self, tmp_path):
+        """Missing files include nearby path suggestions."""
+        tool = FileReadTool(allowed_root=tmp_path)
+        (tmp_path / "readable.txt").write_text("ok\n")
+
+        result = tool.execute(f'{{"fileName": "{tmp_path}/readble.txt"}}')
+
+        assert "Did you mean" in result
+        assert "readable.txt" in result
+
 
 class TestProjectStructureTool:
     """Tests for ProjectStructureTool."""
@@ -126,3 +194,37 @@ class TestProjectStructureTool:
         result = tool.execute(f'{{"path": "{tmp_path}"}}')
 
         assert "src" in result or "main.py" in result
+
+
+class TestGlobTool:
+    """Tests for GlobTool."""
+
+    def test_glob_initialization(self):
+        """Test GlobTool initializes correctly."""
+        tool = GlobTool()
+        assert tool.definition.name == "glob"
+
+    def test_glob_finds_files_without_hidden_junk(self, tmp_path):
+        """Glob returns matching paths and skips hidden/cache directories."""
+        src = tmp_path / "src"
+        src.mkdir()
+        hidden = tmp_path / ".hidden"
+        hidden.mkdir()
+        (src / "app.py").write_text("print('ok')\n")
+        (src / "note.txt").write_text("content mentions app.py but should not matter\n")
+        (hidden / "secret.py").write_text("print('hidden')\n")
+
+        tool = GlobTool(allowed_root=tmp_path)
+        result = tool.execute('{"pattern": "**/*.py"}')
+
+        assert "src/app.py" in result
+        assert "secret.py" not in result
+        assert "content mentions" not in result
+
+    def test_glob_rejects_outside_root(self, tmp_path):
+        """Glob path validation uses allowed_root."""
+        tool = GlobTool(allowed_root=tmp_path)
+
+        result = tool.execute('{"pattern": "*.py", "path": "/"}')
+
+        assert "outside the project directory" in result

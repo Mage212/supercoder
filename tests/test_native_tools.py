@@ -372,6 +372,88 @@ class TestChatTurnEventFlow:
         assert tool_msg.tool_call_id == "call_42"
         assert tool_msg.name == "file-read"
 
+    def test_large_tool_result_is_masked_in_context(self, tmp_path):
+        """Large tool outputs are offloaded and only compact text reaches context."""
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+        from supercoder.tools.base import BaseTool, ToolDefinition
+
+        class BigOutputTool(BaseTool):
+            @property
+            def definition(self):
+                return ToolDefinition(name="big-output", description="Return large output")
+
+            def execute(self, arguments):
+                return ("H" * 3500) + "MIDDLE_ONLY_SECRET" + ("T" * 5000)
+
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+        mock_llm.chat_with_tools_interruptible.side_effect = [
+            CompletionResult(
+                content="",
+                tool_calls=[NativeToolCall(id="call_big", name="big-output", arguments={})],
+                raw_tool_calls=[
+                    {
+                        "id": "call_big",
+                        "type": "function",
+                        "function": {"name": "big-output", "arguments": "{}"},
+                    }
+                ],
+            ),
+            CompletionResult(content="Done.", tool_calls=[]),
+        ]
+
+        agent = CoderAgent(
+            llm=mock_llm,
+            tools=[BigOutputTool()],
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+        )
+
+        events = list(agent.chat_turn("Run big output"))
+        tool_event = next(e for e in events if e["type"] == "tool_result")
+        tool_text = tool_event["content"]["result"]
+
+        assert "[Tool output compacted]" in tool_text
+        assert "MIDDLE_ONLY_SECRET" not in tool_text
+
+        tool_msgs = [m for m in agent.context.get_messages() if m.role == "tool"]
+        assert "[Tool output compacted]" in tool_msgs[0].content
+        assert "MIDDLE_ONLY_SECRET" not in tool_msgs[0].content
+
+        offloaded = list((tmp_path / ".supercoder" / "tool-outputs").glob("*.txt"))
+        assert len(offloaded) == 1
+        assert "MIDDLE_ONLY_SECRET" in offloaded[0].read_text()
+
+    def test_glob_is_available_in_ask_mode(self, tmp_path):
+        """glob is a read-only discovery tool, so ASK mode includes it."""
+        from supercoder.agent.agent_modes import AgentMode
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+
+        agent = CoderAgent(
+            llm=mock_llm,
+            tools=ALL_TOOLS,
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+        )
+
+        agent.set_mode(AgentMode.ASK)
+        ask_tools = [tool.definition.name for tool in agent._get_tools_for_mode()]
+        assert "glob" in ask_tools
+        assert "code-edit" not in ask_tools
+
     def test_compact_context_uses_cache_aware_chat_path(self):
         """Manual compact should append a maintenance request to the current chat."""
         agent, mock_llm = self._make_agent()

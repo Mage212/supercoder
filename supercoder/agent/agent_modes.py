@@ -28,6 +28,7 @@ class ModeConfig:
 ASK_MODE_TOOLS = [
     "file-read",  # Read file contents
     "code-search",  # Search code patterns
+    "glob",  # Find files by pattern
     "project-structure",  # Show directory structure
 ]
 
@@ -44,6 +45,7 @@ You are in CODE mode with FULL capabilities. You MUST use the available tools to
 - file-read: Read files → {"fileName": "path/to/file.py"}
 - code-edit: Edit files → {"filepath": "path/to/file.py", "operation": "search_replace", "search": "old", "replace": "new"}
 - code-search: Search code → {"query": "pattern"}
+- glob: Find files → {"pattern": "**/*.py"}
 - command-exec: RUN SCRIPTS AND COMMANDS → {"command": "python script.py"}
 - project-structure: Show files → {"path": "."}
 
