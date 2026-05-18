@@ -157,6 +157,12 @@ class CoderAgent:
         self._log_permission_decision("command-exec", command, decision)
         return decision
 
+    def _log_early_tool_outcome(self, tool_name: str, arguments: str, result: str) -> None:
+        """Log a tool request that resolved before normal tool execution."""
+        logger = get_logger()
+        logger.log_tool_call(tool_name, arguments)
+        logger.log_tool_result(tool_name, result)
+
     def _add_context_attachment(self, attachment: ContextAttachment) -> dict:
         """Add expanded @path context to history and return an event payload."""
         self.context.add_message(
@@ -428,6 +434,7 @@ class CoderAgent:
                             tool_result = self.permission_policy.format_denial(
                                 f"command '{_cmd_str}'", decision
                             )
+                            self._log_early_tool_outcome(name, args_str, tool_result)
                             yield {
                                 "type": "tool_result",
                                 "content": {"name": name, "result": tool_result},
@@ -451,6 +458,7 @@ class CoderAgent:
                             }
                             if not confirm_result.get("approved", False):
                                 tool_result = "Command execution cancelled by user."
+                                self._log_early_tool_outcome(name, args_str, tool_result)
                                 yield {
                                     "type": "tool_result",
                                     "content": {"name": name, "result": tool_result},
@@ -704,6 +712,7 @@ class CoderAgent:
                                 result = self.permission_policy.format_denial(
                                     f"command '{_cmd_str}'", decision
                                 )
+                                self._log_early_tool_outcome(name, args, result)
                                 yield {
                                     "type": "tool_result",
                                     "content": {"name": name, "result": result},
@@ -719,6 +728,7 @@ class CoderAgent:
                                 }
                                 if not confirm_result.get("approved", False):
                                     result = "Command execution cancelled by user."
+                                    self._log_early_tool_outcome(name, args, result)
                                     yield {
                                         "type": "tool_result",
                                         "content": {"name": name, "result": result},

@@ -406,12 +406,14 @@ class TestChatTurnEventFlow:
         assert tool_msg.tool_call_id == "call_42"
         assert tool_msg.name == "file-read"
 
-    def test_command_deny_skips_confirmation_and_execution(self, tmp_path):
+    def test_command_deny_skips_confirmation_and_execution(self, tmp_path, monkeypatch):
         """Denied commands return a tool result without asking the user."""
         from supercoder.agent.coder_agent import CoderAgent
         from supercoder.context import ContextConfig
         from supercoder.tools.command_exec import CommandExecutionTool
 
+        fake_logger = MagicMock()
+        monkeypatch.setattr("supercoder.agent.coder_agent.get_logger", lambda: fake_logger)
         mock_llm = MagicMock()
         mock_llm.model = "test-model"
         mock_llm.config = MagicMock()
@@ -454,13 +456,21 @@ class TestChatTurnEventFlow:
 
         assert "command_confirm" not in types
         assert "Permission denied" in tool_result["content"]["result"]
+        fake_logger.log_tool_call.assert_any_call(
+            "command-exec", '{"command": "sudo echo blocked"}'
+        )
+        fake_logger.log_tool_result.assert_any_call(
+            "command-exec", tool_result["content"]["result"]
+        )
 
-    def test_command_allow_skips_confirmation(self, tmp_path):
+    def test_command_allow_skips_confirmation(self, tmp_path, monkeypatch):
         """Allowed commands execute without a confirmation event."""
         from supercoder.agent.coder_agent import CoderAgent
         from supercoder.context import ContextConfig
         from supercoder.tools.command_exec import CommandExecutionTool
 
+        fake_logger = MagicMock()
+        monkeypatch.setattr("supercoder.agent.coder_agent.get_logger", lambda: fake_logger)
         mock_llm = MagicMock()
         mock_llm.model = "test-model"
         mock_llm.config = MagicMock()
@@ -504,13 +514,17 @@ class TestChatTurnEventFlow:
 
         assert "command_confirm" not in types
         assert "allowed" in tool_result["content"]["result"]
+        assert fake_logger.log_tool_call.call_count == 1
+        assert fake_logger.log_tool_result.call_count == 1
 
-    def test_command_default_ask_yields_confirmation(self, tmp_path):
+    def test_command_default_ask_yields_confirmation(self, tmp_path, monkeypatch):
         """Unknown commands still ask for approval by default."""
         from supercoder.agent.coder_agent import CoderAgent
         from supercoder.context import ContextConfig
         from supercoder.tools.command_exec import CommandExecutionTool
 
+        fake_logger = MagicMock()
+        monkeypatch.setattr("supercoder.agent.coder_agent.get_logger", lambda: fake_logger)
         mock_llm = MagicMock()
         mock_llm.model = "test-model"
         mock_llm.config = MagicMock()
@@ -551,6 +565,10 @@ class TestChatTurnEventFlow:
         types = [event["type"] for event in events]
 
         assert "command_confirm" in types
+        fake_logger.log_tool_call.assert_any_call("command-exec", '{"command": "echo ask"}')
+        fake_logger.log_tool_result.assert_any_call(
+            "command-exec", "Command execution cancelled by user."
+        )
 
     def test_large_tool_result_is_masked_in_context(self, tmp_path):
         """Large tool outputs are offloaded and only compact text reaches context."""

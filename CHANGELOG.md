@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.3.5
+
+- **Host-Side Permission Policy**: Added deterministic `allow` / `ask` / `deny` command decisions before shell commands are confirmed or executed.
+- **Sensitive Path Protection**: Built-in deny rules now protect `.env`, private keys, credentials, AWS credentials, and SSH private-key patterns across file-read, code-edit, code-search, glob, project-structure, and \@path attachments.
+- **Configurable Safety Rules**: Added a `permissions` config section for command and path policies, with safe defaults in the generated config template.
+- **Audit-Friendly Debug Logs**: Denied and cancelled `command-exec` requests now emit `permission_decision`, `tool_call`, and `tool_result` events for easier session auditing.
+
 ## v0.3.4
 
 - **Explicit Context References**: Mention files or directories with \@path to attach bounded context before the model call.

@@ -1,6 +1,6 @@
 # 🤖 SuperCoder
 
-[![Version](https://img.shields.io/badge/version-0.3.4-blue.svg)](https://github.com/Mage212/supercoder)
+[![Version](https://img.shields.io/badge/version-0.3.5-blue.svg)](https://github.com/Mage212/supercoder)
 [![Python](https://img.shields.io/badge/python-3.11+-green.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -8,12 +8,12 @@
 
 ---
 
-## 🆕 What's New in v0.3.4
+## 🆕 What's New in v0.3.5
 
-- **Explicit Context References**: Mention files or directories with \@path to attach bounded context before the model call.
-- **Path Autocomplete**: Typing \@ma now suggests matching files and folders, while ignoring runtime/cache directories.
-- **Compact-Safe Attachments**: Attached context is stored as `context_attachment` and kept with the related user prompt during compaction.
-- **Debug Visibility**: Debug JSONL logs include `context_attachment` metadata without dumping full attached file contents into the event.
+- **Host-Side Permission Policy**: Shell commands now pass through deterministic `allow` / `ask` / `deny` rules before confirmation or execution.
+- **Sensitive Path Protection**: `.env`, private keys, credentials, and similar files are blocked across read, edit, search, glob, project tree, and \@path attachments.
+- **Safe Config Defaults**: The config template now includes a `permissions` section for command and path policies.
+- **Audit-Friendly Debug Logs**: Denied and cancelled `command-exec` requests now log `permission_decision`, `tool_call`, and `tool_result` events.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
@@ -26,6 +26,9 @@ Performs code searches across your project using `ripgrep` (`rg`) when available
 
 ### 🧭 File Discovery
 Use the `glob` tool to find matching files by pattern (for example `**/*.py`) without reading their contents. This is useful before targeted `file-read` calls and keeps context small.
+
+### 🛡️ Host-Side Permissions
+SuperCoder enforces command and path safety in application code instead of relying only on model instructions. Shell commands are checked against `allow` / `ask` / `deny` rules, while sensitive files such as `.env`, private keys, credentials, and SSH/AWS secrets are blocked before they can be read, edited, searched, listed, or attached with \@path. `.env.example` remains allowed as a safe template.
 
 ### 📎 Explicit Context References
 Mention files or directories directly in a prompt with \@path, for example `Review @supercoder/repl.py`. SuperCoder attaches bounded file content or a directory file listing before the model call, with autocomplete suggestions while typing \@ma.
@@ -164,6 +167,39 @@ compression_threshold: 0.95
 request_timeout: 300.0
 debug: false
 streaming: false
+
+permissions:
+  command-exec:
+    allow:
+      - "uv run pytest*"
+      - "uv run ruff*"
+      - "uv run pyright*"
+      - "git status*"
+      - "git diff*"
+    ask:
+      - "git commit*"
+      - "git push*"
+    deny:
+      - "sudo *"
+      - "rm -rf *"
+      - "curl * | sh"
+      - "curl * | bash"
+      - "wget * | sh"
+      - "wget * | bash"
+  paths:
+    deny:
+      - ".env"
+      - ".env.*"
+      - "**/.env"
+      - "**/.env.*"
+      - "**/*.pem"
+      - "**/*.key"
+      - "**/credentials.json"
+      - "**/.aws/credentials"
+      - "**/.ssh/id_*"
+    allow:
+      - ".env.example"
+      - "**/.env.example"
 ```
 
 ### Tool Calling Types
