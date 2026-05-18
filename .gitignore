@@ -37,6 +37,7 @@ ENV/
 
 # Project specific
 .env
+docs/
 .supercoder/
 ! .supercoder/rules/
 ! .supercoder/repomap/
