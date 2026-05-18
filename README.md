@@ -1,6 +1,6 @@
 # 🤖 SuperCoder
 
-[![Version](https://img.shields.io/badge/version-0.3.3-blue.svg)](https://github.com/Mage212/supercoder)
+[![Version](https://img.shields.io/badge/version-0.3.4-blue.svg)](https://github.com/Mage212/supercoder)
 [![Python](https://img.shields.io/badge/python-3.11+-green.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -8,7 +8,14 @@
 
 ---
 
-## 🆕 What's New in v0.3.3
+## 🆕 What's New in v0.3.4
+
+- **Explicit Context References**: Mention files or directories with `@path` to attach bounded context before the model call.
+- **`@path` Autocomplete**: Typing `@ma` now suggests matching files and folders, while ignoring runtime/cache directories.
+- **Compact-Safe Attachments**: Attached context is stored as `context_attachment` and kept with the related user prompt during compaction.
+- **Debug Visibility**: Debug JSONL logs include `context_attachment` metadata without dumping full attached file contents into the event.
+
+### v0.3.3
 
 - **Context-Efficient Tool Results**: Large tool outputs are compacted before they enter model context, with full output offloaded to `.supercoder/tool-outputs/` for inspection.
 - **Improved `file-read`**: File reads now include byte metadata, binary-file protection, `maxBytes` caps, and nearby path suggestions for typos.
