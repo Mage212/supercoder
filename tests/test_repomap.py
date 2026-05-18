@@ -61,3 +61,25 @@ def main():
         # Hidden content should not appear
         if content:
             assert ".hidden" not in content
+
+    def test_repomap_ignores_runtime_and_environment_dirs(self, tmp_path):
+        """RepoMap should not inject runtime artifacts or virtualenv files."""
+        source_file = tmp_path / "app.py"
+        source_file.write_text("def visible_app(): pass")
+
+        checkpoint_dir = tmp_path / ".supercoder" / "checkpoints" / "old"
+        checkpoint_dir.mkdir(parents=True)
+        checkpoint_file = checkpoint_dir / "snapshot.py"
+        checkpoint_file.write_text("def checkpoint_noise(): pass")
+
+        venv_dir = tmp_path / ".venv" / "lib"
+        venv_dir.mkdir(parents=True)
+        venv_file = venv_dir / "dependency.py"
+        venv_file.write_text("def dependency_noise(): pass")
+
+        repo_map = RepoMap(tmp_path)
+        files = repo_map._get_files()
+
+        assert source_file in files
+        assert checkpoint_file not in files
+        assert venv_file not in files

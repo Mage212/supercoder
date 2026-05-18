@@ -419,6 +419,7 @@ class CoderAgent:
                         tool_result = tool.execute(args_str)
 
                     masked_result = self.output_masker.mask(name, tc.id, tool_result)
+                    self._log_tool_output_masking(name, tc.id, masked_result)
                     yield {
                         "type": "tool_result",
                         "content": {"name": name, "result": masked_result.model_text},
@@ -669,6 +670,7 @@ class CoderAgent:
                             result = tool.execute(args)
 
                         masked_result = self.output_masker.mask(name or "", None, result)
+                        self._log_tool_output_masking(name or "", None, masked_result)
                         yield {
                             "type": "tool_result",
                             "content": {"name": name, "result": masked_result.model_text},
@@ -729,6 +731,18 @@ class CoderAgent:
 
                 yield {"type": "done", "content": ""}
                 return
+
+    def _log_tool_output_masking(self, tool_name: str, tool_call_id: str | None, masked_result):
+        """Log structured metadata for tool output context preparation."""
+        offload_path = masked_result.offload_path.as_posix() if masked_result.offload_path else None
+        get_logger().log_tool_output_masked(
+            tool_name,
+            tool_call_id,
+            masked_result.masked,
+            len(masked_result.full_text),
+            len(masked_result.model_text),
+            offload_path,
+        )
 
     def _extract_tool_call(self, text: str) -> dict | None:
         """Extract tool call from response text using multi-format parser."""

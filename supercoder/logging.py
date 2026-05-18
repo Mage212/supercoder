@@ -118,8 +118,10 @@ class ConversationLogger:
         # Convert Message objects to dicts if needed
         serializable_messages = []
         for msg in messages:
-            if hasattr(msg, "to_dict"):
-                serializable_messages.append(msg.to_dict())
+            if hasattr(msg, "to_api_dict"):
+                serializable_messages.append(msg.to_api_dict())
+            elif isinstance(msg, dict):
+                serializable_messages.append(msg)
             else:
                 serializable_messages.append(
                     {
@@ -160,6 +162,31 @@ class ConversationLogger:
                 "type": "tool_result",
                 "tool": tool_name,
                 "result": truncated,
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
+
+    def log_tool_output_masked(
+        self,
+        tool_name: str,
+        tool_call_id: str | None,
+        masked: bool,
+        original_chars: int,
+        model_chars: int,
+        offload_path: str | None = None,
+    ) -> None:
+        """Log how tool output was prepared for model context."""
+        if not self.enabled:
+            return
+        self._write_entry(
+            {
+                "type": "tool_output_masked",
+                "tool": tool_name,
+                "tool_call_id": tool_call_id,
+                "masked": masked,
+                "original_chars": original_chars,
+                "model_chars": model_chars,
+                "offload_path": offload_path,
                 "timestamp": datetime.now().isoformat(),
             }
         )

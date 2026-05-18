@@ -4,6 +4,7 @@ from pathlib import Path
 
 import networkx as nx
 
+from ..tools.tool_utils import is_ignored_path
 from .tag_extractor import TagExtractor
 
 
@@ -54,9 +55,9 @@ class RepoMap:
         files = []
 
         for path in self.root.rglob("*"):
+            if is_ignored_path(path, self.root):
+                continue
             if path.is_file() and path.suffix in source_extensions:
-                if any(p in path.parts for p in [".git", "venv", "__pycache__", "node_modules"]):
-                    continue
                 files.append(path)
 
         # Limit total files for performance
