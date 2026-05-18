@@ -1,6 +1,6 @@
 # 🤖 SuperCoder
 
-[![Version](https://img.shields.io/badge/version-0.3.2-blue.svg)](https://github.com/Mage212/supercoder)
+[![Version](https://img.shields.io/badge/version-0.3.3-blue.svg)](https://github.com/Mage212/supercoder)
 [![Python](https://img.shields.io/badge/python-3.11+-green.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -8,7 +8,15 @@
 
 ---
 
-## 🆕 What's New in v0.3.2
+## 🆕 What's New in v0.3.3
+
+- **Context-Efficient Tool Results**: Large tool outputs are compacted before they enter model context, with full output offloaded to `.supercoder/tool-outputs/` for inspection.
+- **Improved `file-read`**: File reads now include byte metadata, binary-file protection, `maxBytes` caps, and nearby path suggestions for typos.
+- **Faster Search + `glob`**: `code-search` now prefers `ripgrep` (`rg`) with a Python fallback, and the new `glob` tool lists matching paths without reading file contents.
+- **Structured Debug Diagnostics**: Debug JSONL logs now preserve native tool-call metadata and include `tool_output_masked` events with size/offload details.
+- **Cleaner RepoMap Context**: RepoMap ignores runtime and environment directories such as `.supercoder`, `.venv`, cache folders, and dependency trees.
+
+### v0.3.2
 
 - **Cache-Aware Compact for Local Models**: `/compact` now runs as an in-band chat turn instead of a separate summarization prompt, allowing llama.cpp/Ollama/LM Studio-style backends to reuse prompt cache.
 - **Automatic Context Compaction**: SuperCoder can auto-compact around 75% of usable context before the emergency trimming fallback is needed.
@@ -82,7 +90,10 @@
 ## ✨ Core Features
 
 ### 🔍 Code Search
-Performs complex code searches across your project to quickly locate specific patterns using `git grep` with context-aware output and fallback to standard `grep`.
+Performs code searches across your project using `ripgrep` (`rg`) when available, with a Python fallback. Results are capped and include compact metadata so local models get precise context without being flooded by search output.
+
+### 🧭 File Discovery
+Use the `glob` tool to find matching files by pattern (for example `**/*.py`) without reading their contents. This is useful before targeted `file-read` calls and keeps context small.
 
 ### 📁 Project Structure Exploration
 Provides an organized, tree-based view of your project's folders and files, intelligently ignoring build artifacts and junk files (`.git`, `node_modules`, etc.).
@@ -98,13 +109,17 @@ Modifies your codebase seamlessly using diff-based operations. Every edit is **a
 Leverage project-specific rules to guide the agent. Place `.md` files in `.supercoder/rules/` and they will be automatically loaded into the agent's context. In lean mode, rules are compacted but still included.
 
 ### 🗺️ RepoMap Support
-Uses `tree-sitter` and `networkx` to generate a high-level map of your repository, helping the LLM understand relationships between files and symbols.
+Uses `tree-sitter` and `networkx` to generate a high-level map of your repository, helping the LLM understand relationships between files and symbols. Runtime artifacts, virtual environments, cache folders, and `.supercoder` internals are ignored to avoid prompt pollution.
 
 ### 🧠 Context Management
 - **Token Counter**: Real-time monitoring of context usage.
 - **Cache-Aware Compaction**: Use `/compact` to summarize conversation history without switching to a separate summarization prompt, which keeps local-model prompt cache useful.
 - **Auto-Compact**: Long sessions compact automatically around 75% of usable context, with emergency trimming left as a fallback.
 - **Protected Recent Steps**: After compacting, SuperCoder keeps the summary plus the last 6 exact conversation steps.
+- **Tool Output Compaction**: Large tool outputs are summarized for the model and stored in full under `.supercoder/tool-outputs/`.
+
+### 🧪 Debug Diagnostics
+Run with `--debug` to write JSONL logs to `~/.supercoder/logs/`. Logs include native tool-call metadata, tool result masking events, offload paths, API request messages, reasoning, responses, and errors.
 
 ### 💾 Session Persistence
 - **Auto-Save**: Your conversation is automatically saved after each message exchange.
