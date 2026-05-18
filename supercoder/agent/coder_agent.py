@@ -7,6 +7,7 @@ from rich.console import Console
 
 from ..abort_controller import AbortController, AgentAbortedError
 from ..checkpoint import CheckpointManager
+from ..context.freshness import FileFreshnessTracker
 from ..context.references import ContextAttachment, expand_context_references
 from ..context.session_manager import ChatSession, SessionManager
 from ..context.window_manager import ContextConfig, ContextStats, ContextWindowManager
@@ -50,6 +51,7 @@ class CoderAgent:
         self.lean = lean  # Shorter prompts for weak/local models
         self.output_masker = ToolOutputMasker(self.repo_root)
         self.permission_policy = PermissionPolicy(self.repo_root, permissions)
+        self.freshness_tracker = FileFreshnessTracker(self.repo_root)
 
         # Abort controller for graceful interruption
         self.abort_controller = AbortController()
@@ -65,10 +67,13 @@ class CoderAgent:
                 t.checkpoint = self.checkpoint_manager
                 t.allowed_root = self.repo_root
                 t.permission_policy = self.permission_policy
+                t.freshness_tracker = self.freshness_tracker
             # Inject allowed_root into read-only path tools
             elif isinstance(t, (FileReadTool, CodeSearchTool, GlobTool, ProjectStructureTool)):
                 t.allowed_root = self.repo_root
                 t.permission_policy = self.permission_policy
+                if isinstance(t, FileReadTool):
+                    t.freshness_tracker = self.freshness_tracker
             self.tools[t.definition.name] = t
 
         # Agent mode (code or ask)
@@ -132,6 +137,7 @@ class CoderAgent:
             user_message,
             self.repo_root,
             permission_policy=self.permission_policy,
+            freshness_tracker=self.freshness_tracker,
             max_total_tokens=max_total_tokens,
         )
 

@@ -229,6 +229,34 @@ class ConversationLogger:
             }
         )
 
+    def log_freshness_check(
+        self,
+        *,
+        path: str,
+        source: str,
+        action: str,
+        status: str,
+        reason: str,
+        size: int | None = None,
+        hash_present: bool = False,
+    ) -> None:
+        """Log read-before-edit freshness decisions without file contents."""
+        if not self.enabled:
+            return
+        self._write_entry(
+            {
+                "type": "freshness_check",
+                "path": path[:300],
+                "source": source,
+                "action": action,
+                "status": status,
+                "reason": reason,
+                "size": size,
+                "hash_present": hash_present,
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
+
     def log_error(self, error: str | Exception, *, include_traceback: bool = True) -> None:
         """Log error with optional full traceback.
 

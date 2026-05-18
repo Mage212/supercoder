@@ -1,6 +1,6 @@
 # 🤖 SuperCoder
 
-[![Version](https://img.shields.io/badge/version-0.3.5-blue.svg)](https://github.com/Mage212/supercoder)
+[![Version](https://img.shields.io/badge/version-0.3.6-blue.svg)](https://github.com/Mage212/supercoder)
 [![Python](https://img.shields.io/badge/python-3.11+-green.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -8,12 +8,12 @@
 
 ---
 
-## 🆕 What's New in v0.3.5
+## 🆕 What's New in v0.3.6
 
-- **Host-Side Permission Policy**: Shell commands now pass through deterministic `allow` / `ask` / `deny` rules before confirmation or execution.
-- **Sensitive Path Protection**: `.env`, private keys, credentials, and similar files are blocked across read, edit, search, glob, project tree, and \@path attachments.
-- **Safe Config Defaults**: The config template now includes a `permissions` section for command and path policies.
-- **Audit-Friendly Debug Logs**: Denied and cancelled `command-exec` requests now log `permission_decision`, `tool_call`, and `tool_result` events.
+- **Read-Before-Edit Enforcement**: `code-edit` now requires fresh file context before modifying existing files.
+- **Stale Edit Protection**: If a file changes after `file-read` or \@file attachment, edits are blocked until the file is read again.
+- **Attachment-Aware Editing**: Successful \@file attachments count as fresh context, while directory listings, `glob`, and search results do not.
+- **Freshness Debug Logs**: Debug JSONL logs now include `freshness_check` events without exposing file contents.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
@@ -29,6 +29,9 @@ Use the `glob` tool to find matching files by pattern (for example `**/*.py`) wi
 
 ### 🛡️ Host-Side Permissions
 SuperCoder enforces command and path safety in application code instead of relying only on model instructions. Shell commands are checked against `allow` / `ask` / `deny` rules, while sensitive files such as `.env`, private keys, credentials, and SSH/AWS secrets are blocked before they can be read, edited, searched, listed, or attached with \@path. `.env.example` remains allowed as a safe template.
+
+### 🧷 Read-Before-Edit Freshness
+Before editing an existing file, SuperCoder verifies that the model has fresh file context from `file-read` or an explicit \@file attachment. If the file was never read, or changed externally after it was read, `code-edit` is blocked and the model is asked to read the file again.
 
 ### 📎 Explicit Context References
 Mention files or directories directly in a prompt with \@path, for example `Review @supercoder/repl.py`. SuperCoder attaches bounded file content or a directory file listing before the model call, with autocomplete suggestions while typing \@ma.
@@ -57,7 +60,7 @@ Uses `tree-sitter` and `networkx` to generate a high-level map of your repositor
 - **Tool Output Compaction**: Large tool outputs are summarized for the model and stored in full under `.supercoder/tool-outputs/`.
 
 ### 🧪 Debug Diagnostics
-Run with `--debug` to write JSONL logs to `~/.supercoder/logs/`. Logs include native tool-call metadata, tool result masking events, offload paths, API request messages, reasoning, responses, and errors.
+Run with `--debug` to write JSONL logs to `~/.supercoder/logs/`. Logs include native tool-call metadata, tool result masking events, freshness checks, offload paths, API request messages, reasoning, responses, and errors.
 
 ### 💾 Session Persistence
 - **Auto-Save**: Your conversation is automatically saved after each message exchange.

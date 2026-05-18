@@ -1,5 +1,6 @@
 """Tests for host-side @path context attachment."""
 
+from supercoder.context.freshness import FileFreshnessTracker
 from supercoder.context.references import (
     expand_context_references,
     extract_context_references,
@@ -29,6 +30,21 @@ def test_expand_file_reference_with_line_numbers(tmp_path):
     assert attachment.files == 1
 
 
+def test_expand_file_reference_marks_file_fresh(tmp_path):
+    target = tmp_path / "main.py"
+    target.write_text("def main():\n    return 1\n")
+    tracker = FileFreshnessTracker(tmp_path)
+
+    attachment = expand_context_references(
+        "Review @main.py",
+        tmp_path,
+        freshness_tracker=tracker,
+    )
+
+    assert attachment is not None
+    assert tracker.check_edit(target).allowed is True
+
+
 def test_expand_directory_reference_lists_files_without_contents(tmp_path):
     src = tmp_path / "src"
     src.mkdir()
@@ -43,6 +59,23 @@ def test_expand_directory_reference_lists_files_without_contents(tmp_path):
     assert "src/notes.txt" in attachment.content
     assert "SECRET_CONTENT" not in attachment.content
     assert attachment.directories == 1
+
+
+def test_expand_directory_reference_does_not_mark_files_fresh(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    target = src / "app.py"
+    target.write_text("print('ok')\n")
+    tracker = FileFreshnessTracker(tmp_path)
+
+    attachment = expand_context_references(
+        "Review @src",
+        tmp_path,
+        freshness_tracker=tracker,
+    )
+
+    assert attachment is not None
+    assert tracker.check_edit(target).allowed is False
 
 
 def test_expand_reference_skips_outside_root(tmp_path):
@@ -81,17 +114,20 @@ def test_expand_missing_reference_includes_suggestions(tmp_path):
 def test_expand_reference_denies_sensitive_file(tmp_path):
     target = tmp_path / ".env"
     target.write_text("TOKEN=secret\n")
+    tracker = FileFreshnessTracker(tmp_path)
 
     attachment = expand_context_references(
         "Read @.env",
         tmp_path,
         permission_policy=PermissionPolicy(tmp_path),
+        freshness_tracker=tracker,
     )
 
     assert attachment is not None
     assert "<skipped_reference" in attachment.content
     assert 'reason="permission denied"' in attachment.content
     assert "TOKEN=secret" not in attachment.content
+    assert tracker.check_edit(target).allowed is False
 
 
 def test_expand_directory_reference_filters_sensitive_files(tmp_path):

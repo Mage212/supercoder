@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.3.6
+
+- **Read-Before-Edit Enforcement**: Added host-side freshness tracking so `code-edit` blocks edits to files that were not first shown to the model through `file-read` or \@file attachment.
+- **Stale Edit Protection**: Files changed externally after the last read now require another read before editing, reducing edits based on outdated context.
+- **Sequential Edit Support**: Successful SuperCoder edits refresh the file snapshot, so follow-up edits to the same file can continue safely.
+- **Freshness Debug Logs**: Debug JSONL logs now emit `freshness_check` events with path, source, action, status, reason, size, and hash presence without logging file contents or raw hashes.
+
 ## v0.3.5
 
 - **Host-Side Permission Policy**: Added deterministic `allow` / `ask` / `deny` command decisions before shell commands are confirmed or executed.

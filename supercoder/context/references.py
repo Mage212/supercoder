@@ -18,6 +18,7 @@ from ..tools.tool_utils import (
     relative_display_path,
     resolve_within_root,
 )
+from .freshness import FileFreshnessTracker
 
 REFERENCE_RE = re.compile(
     r"(?<!\\)(?:^|(?<=[\s([{<,;:]))@([A-Za-z0-9_./-]+)",
@@ -116,6 +117,7 @@ def expand_context_references(
     repo_root: Path,
     *,
     permission_policy: PermissionPolicy | None = None,
+    freshness_tracker: FileFreshnessTracker | None = None,
     max_file_bytes: int = 64_000,
     max_dir_entries: int = 200,
     max_total_tokens: int = 12_000,
@@ -173,6 +175,7 @@ def expand_context_references(
                 ref,
                 path,
                 root,
+                freshness_tracker=freshness_tracker,
                 max_bytes=min(max_file_bytes, remaining_bytes),
             )
         else:
@@ -229,6 +232,7 @@ def _attach_file(
     path: Path,
     root: Path,
     *,
+    freshness_tracker: FileFreshnessTracker | None = None,
     max_bytes: int,
 ) -> tuple[ContextReferenceItem, str]:
     display_path = relative_display_path(path, root)
@@ -293,6 +297,8 @@ def _attach_file(
         lines_returned=lines_returned,
         truncated=truncated,
     )
+    if freshness_tracker:
+        freshness_tracker.mark_read(path, source="context_attachment")
     body = "\n".join(f"{number:4d}: {text}" for number, text in selected)
     lines_label = f"1-{selected[-1][0]}" if selected else "0"
     block = (

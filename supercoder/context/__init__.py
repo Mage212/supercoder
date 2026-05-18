@@ -1,5 +1,6 @@
 """Context management module."""
 
+from .freshness import FileFreshnessTracker, FileSnapshot, FreshnessResult
 from .references import (
     ContextAttachment,
     ContextReferenceItem,
@@ -19,6 +20,9 @@ __all__ = [
     "ContextReferenceItem",
     "ContextStats",
     "ContextWindowManager",
+    "FileFreshnessTracker",
+    "FileSnapshot",
+    "FreshnessResult",
     "SessionManager",
     "TokenCounter",
     "count_tokens",

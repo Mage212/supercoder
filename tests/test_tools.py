@@ -2,6 +2,7 @@
 
 import stat
 
+from supercoder.context.freshness import FileFreshnessTracker
 from supercoder.permissions import PermissionPolicy
 from supercoder.tools import (
     CodeEditTool,
@@ -131,6 +132,103 @@ class TestCodeEditTool:
 
         content = test_file.read_text()
         assert "Hello Universe" in content
+
+    def test_code_edit_requires_prior_read_with_freshness_tracker(self, tmp_path):
+        """Freshness tracker blocks edits to files the model has not seen."""
+        test_file = tmp_path / "guarded.txt"
+        test_file.write_text("Hello World\n")
+        tracker = FileFreshnessTracker(tmp_path)
+        tool = CodeEditTool(freshness_tracker=tracker)
+
+        result = tool.execute(f'''{{
+            "filepath": "{test_file}",
+            "operation": "search_replace",
+            "search": "Hello World",
+            "replace": "Hello Universe"
+        }}''')
+
+        assert "not read before edit" in result
+        assert test_file.read_text() == "Hello World\n"
+
+    def test_file_read_marks_file_fresh_for_code_edit(self, tmp_path):
+        """A successful file-read allows a subsequent edit."""
+        test_file = tmp_path / "fresh.txt"
+        test_file.write_text("Hello World\n")
+        tracker = FileFreshnessTracker(tmp_path)
+        read_tool = FileReadTool(freshness_tracker=tracker)
+        edit_tool = CodeEditTool(freshness_tracker=tracker)
+
+        read_tool.execute(f'{{"fileName": "{test_file}"}}')
+        result = edit_tool.execute(f'''{{
+            "filepath": "{test_file}",
+            "operation": "search_replace",
+            "search": "Hello World",
+            "replace": "Hello Universe"
+        }}''')
+
+        assert "Replaced" in result
+        assert test_file.read_text() == "Hello Universe\n"
+
+    def test_code_edit_blocks_file_changed_after_read(self, tmp_path):
+        """External file changes invalidate a prior read snapshot."""
+        test_file = tmp_path / "stale.txt"
+        test_file.write_text("VALUE = 1\n")
+        tracker = FileFreshnessTracker(tmp_path)
+        read_tool = FileReadTool(freshness_tracker=tracker)
+        edit_tool = CodeEditTool(freshness_tracker=tracker)
+
+        read_tool.execute(f'{{"fileName": "{test_file}"}}')
+        test_file.write_text("VALUE = 2\n")
+        result = edit_tool.execute(f'''{{
+            "filepath": "{test_file}",
+            "operation": "search_replace",
+            "search": "VALUE = 2",
+            "replace": "VALUE = 3"
+        }}''')
+
+        assert "changed since last read" in result
+        assert test_file.read_text() == "VALUE = 2\n"
+
+    def test_successful_code_edit_keeps_file_fresh_for_next_edit(self, tmp_path):
+        """SuperCoder's own writes refresh the snapshot for follow-up edits."""
+        test_file = tmp_path / "sequence.txt"
+        test_file.write_text("first\nsecond\n")
+        tracker = FileFreshnessTracker(tmp_path)
+        read_tool = FileReadTool(freshness_tracker=tracker)
+        edit_tool = CodeEditTool(freshness_tracker=tracker)
+
+        read_tool.execute(f'{{"fileName": "{test_file}"}}')
+        first = edit_tool.execute(f'''{{
+            "filepath": "{test_file}",
+            "operation": "search_replace",
+            "search": "first",
+            "replace": "updated"
+        }}''')
+        second = edit_tool.execute(f'''{{
+            "filepath": "{test_file}",
+            "operation": "search_replace",
+            "search": "second",
+            "replace": "done"
+        }}''')
+
+        assert "Replaced" in first
+        assert "Replaced" in second
+        assert test_file.read_text() == "updated\ndone\n"
+
+    def test_code_edit_create_existing_file_is_blocked(self, tmp_path):
+        """Create does not overwrite existing files."""
+        test_file = tmp_path / "existing.txt"
+        test_file.write_text("original\n")
+        tool = CodeEditTool()
+
+        result = tool.execute(f'''{{
+            "filepath": "{test_file}",
+            "operation": "create",
+            "content": "replacement"
+        }}''')
+
+        assert "already exists" in result
+        assert test_file.read_text() == "original\n"
 
     def test_code_edit_denies_sensitive_path(self, tmp_path):
         """Sensitive files cannot be created or edited."""

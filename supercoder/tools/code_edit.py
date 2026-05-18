@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
+from ..context.freshness import FileFreshnessTracker
 from ..logging import get_logger
 from ..permissions import PermissionPolicy
 from ..utils.atomic_writer import AtomicFileWriter
@@ -23,6 +24,7 @@ class CodeEditTool(BaseTool):
         checkpoint_manager: Optional["CheckpointManager"] = None,
         allowed_root: Path | None = None,
         permission_policy: PermissionPolicy | None = None,
+        freshness_tracker: FileFreshnessTracker | None = None,
     ):
         """Initialize with optional checkpoint manager and allowed root directory.
 
@@ -33,6 +35,7 @@ class CodeEditTool(BaseTool):
         self.checkpoint = checkpoint_manager
         self.allowed_root = allowed_root
         self.permission_policy = permission_policy
+        self.freshness_tracker = freshness_tracker
 
     def _safe_write(self, path: Path, content: str) -> None:
         """Write file with backup and atomic write.
@@ -47,6 +50,8 @@ class CodeEditTool(BaseTool):
 
         # Atomic write
         AtomicFileWriter.write(path, content)
+        if self.freshness_tracker:
+            self.freshness_tracker.mark_written(path, source=self.definition.name)
 
     @property
     def definition(self) -> ToolDefinition:
@@ -144,11 +149,21 @@ class CodeEditTool(BaseTool):
 
         # Handle create operation separately
         if operation == "create":
+            if path.exists():
+                return (
+                    f"Error: File '{filepath}' already exists. "
+                    "Use an edit operation after reading the file with file-read or @file."
+                )
             return self._create_file(path, args.get("content", ""))
 
         # For other operations, file must exist
         if not path.exists():
             return f"Error: File '{filepath}' not found"
+
+        if self.freshness_tracker:
+            freshness = self.freshness_tracker.check_edit(path, source=self.definition.name)
+            if not freshness.allowed:
+                return f"Error: {freshness.reason}"
 
         try:
             if operation == "search_replace":
@@ -364,6 +379,8 @@ class CodeEditTool(BaseTool):
                 self.checkpoint.track_created_file(path)
 
             AtomicFileWriter.write(path, content)
+            if self.freshness_tracker:
+                self.freshness_tracker.mark_written(path, source=self.definition.name)
             # For new files, show the content as all additions
             diff = self._generate_diff("", content, path)
             return f"✅ Created file: {path}\n\n{diff}" if diff else f"✅ Created file: {path}"

@@ -106,3 +106,29 @@ def test_log_context_attachment_event(tmp_path, monkeypatch):
     assert event["summary"]["files"] == 1
     assert event["summary"]["skipped"] == 1
     assert "content" not in event
+
+
+def test_log_freshness_check_event_without_file_content_or_hash(tmp_path, monkeypatch):
+    monkeypatch.setattr(logging_mod, "LOG_DIR", tmp_path)
+
+    logger = logging_mod.ConversationLogger("model", enabled=True)
+    logger.log_freshness_check(
+        path="main.py",
+        source="file-read",
+        action="mark_read",
+        status="recorded",
+        reason="file content exposed to model",
+        size=42,
+        hash_present=True,
+    )
+
+    entries = [json.loads(line) for line in next(tmp_path.glob("*.jsonl")).read_text().splitlines()]
+    event = next(entry for entry in entries if entry["type"] == "freshness_check")
+
+    assert event["path"] == "main.py"
+    assert event["source"] == "file-read"
+    assert event["status"] == "recorded"
+    assert event["size"] == 42
+    assert event["hash_present"] is True
+    assert "content" not in event
+    assert "sha256" not in event

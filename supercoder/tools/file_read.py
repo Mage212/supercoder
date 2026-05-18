@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ..context.freshness import FileFreshnessTracker
 from ..logging import get_logger
 from ..permissions import PermissionPolicy
 from .base import BaseTool, ToolDefinition
@@ -27,9 +28,11 @@ class FileReadTool(BaseTool):
         self,
         allowed_root: Path | None = None,
         permission_policy: PermissionPolicy | None = None,
+        freshness_tracker: FileFreshnessTracker | None = None,
     ):
         self.allowed_root = allowed_root
         self.permission_policy = permission_policy
+        self.freshness_tracker = freshness_tracker
 
     @property
     def definition(self) -> ToolDefinition:
@@ -148,9 +151,12 @@ class FileReadTool(BaseTool):
                         break
 
             display_name = relative_display_path(path, self.allowed_root)
-            file_size = format_size(path.stat().st_size)
+            size_bytes = path.stat().st_size
+            file_size = format_size(size_bytes)
 
             if not selected:
+                if size_bytes == 0 and self.freshness_tracker:
+                    self.freshness_tracker.mark_read(path, source=self.definition.name)
                 return (
                     f"File: {display_name}\n"
                     f"Size: {file_size}\n"
@@ -166,6 +172,9 @@ class FileReadTool(BaseTool):
                 info += f" (truncated by {stop_reason}; use startLine/endLine to see more)"
             elif end_line is None and last_seen >= last_line:
                 info += " (use startLine/endLine to see more if needed)"
+
+            if self.freshness_tracker:
+                self.freshness_tracker.mark_read(path, source=self.definition.name)
 
             return f"File: {display_name}\n{info}\n{'-' * 50}\n{formatted}"
 
