@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Persistent Command Approvals**: Added project-local command approval rules in `.supercoder/permissions.yaml`, with one-time, session, always-allow, and always-deny choices in the shell confirmation prompt.
+- **Permission Management**: Added `/permissions` to inspect, remove, or clear saved project command rules.
+- **Approval Debug Logs**: Debug JSONL logs now include `permission_rule_change` events when session or persistent command rules are added, removed, or cleared.
+- **CODE Edit Approval**: `code` mode now asks before applying file edits instead of blocking them outright; `accept-edits` remains the low-friction editing mode.
+
 ## v0.3.7
 
 - **Host-Enforced Agent Modes**: Added `ask`, `plan`, `code`, and `accept-edits` modes enforced by SuperCoder before tool execution instead of relying only on model instructions.

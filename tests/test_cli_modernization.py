@@ -4,6 +4,7 @@ import pytest
 
 from supercoder.agent.agent_modes import AgentMode
 from supercoder.agent.coder_agent import CoderAgent
+from supercoder.permissions import PermissionAction, PermissionPolicy
 from supercoder.repl import SuperCoderREPL
 
 
@@ -103,6 +104,53 @@ def test_repl_bottom_toolbar_shows_current_mode():
 
     assert "accept-edits" in toolbar
     assert "Shift+Tab" in toolbar
+
+
+def test_repl_edit_preview_omits_full_long_content():
+    agent = MagicMock()
+    agent.llm.model = "test"
+    agent.llm.config.model = "test"
+    agent.mode = AgentMode.CODE
+    repl = SuperCoderREPL(agent)
+
+    preview = repl._format_edit_preview(
+        {
+            "filepath": "main.py",
+            "operation": "create",
+            "content": "x" * 1300,
+        }
+    )
+
+    text = preview.plain
+    assert "main.py" in text
+    assert "create" in text
+    assert "truncated" in text
+    assert len(text) < 1400
+
+
+def test_repl_permissions_remove_and_clear(tmp_path):
+    agent = MagicMock()
+    agent.llm.model = "test"
+    agent.llm.config.model = "test"
+    agent.mode = AgentMode.CODE
+    agent.permission_policy = PermissionPolicy(tmp_path)
+    first = agent.permission_policy.add_command_rule(
+        PermissionAction.ALLOW,
+        "printf first",
+        scope="persistent",
+    )
+    agent.permission_policy.add_command_rule(
+        PermissionAction.DENY,
+        "printf second",
+        scope="persistent",
+    )
+    repl = SuperCoderREPL(agent)
+
+    assert repl.cmd_permissions(f"/permissions remove {first.id}") is False
+    assert agent.permission_policy.check_command("printf first").action == PermissionAction.ASK
+
+    assert repl.cmd_permissions("/permissions clear") is False
+    assert agent.permission_policy.list_command_rules("persistent") == []
 
 
 def test_tool_call_stream(mock_agent):

@@ -576,6 +576,112 @@ class TestChatTurnEventFlow:
             "command-exec", "Command execution cancelled by user."
         )
 
+    def test_command_session_approval_skips_next_confirmation(self, tmp_path, monkeypatch):
+        """Session approvals are stored in memory and reused during the process."""
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+        from supercoder.tools.command_exec import CommandExecutionTool
+
+        fake_logger = MagicMock()
+        monkeypatch.setattr("supercoder.agent.coder_agent.get_logger", lambda: fake_logger)
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+        raw_tool_call = {
+            "id": "call_cmd",
+            "type": "function",
+            "function": {
+                "name": "command-exec",
+                "arguments": '{"command": "printf session"}',
+            },
+        }
+        tool_call = NativeToolCall(
+            id="call_cmd",
+            name="command-exec",
+            arguments={"command": "printf session"},
+        )
+        mock_llm.chat_with_tools_interruptible.side_effect = [
+            CompletionResult(content="", tool_calls=[tool_call], raw_tool_calls=[raw_tool_call]),
+            CompletionResult(content="Done.", tool_calls=[]),
+            CompletionResult(content="", tool_calls=[tool_call], raw_tool_calls=[raw_tool_call]),
+            CompletionResult(content="Done.", tool_calls=[]),
+        ]
+        agent = CoderAgent(
+            llm=mock_llm,
+            tools=[CommandExecutionTool()],
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+        )
+
+        first_events = []
+        for event in agent.chat_turn("Run command"):
+            if event["type"] == "command_confirm":
+                event["result"].update({"approved": True, "decision": "allow_session"})
+            first_events.append(event)
+        second_events = list(agent.chat_turn("Run command again"))
+
+        assert "command_confirm" in [event["type"] for event in first_events]
+        assert "command_confirm" not in [event["type"] for event in second_events]
+        assert agent.permission_policy.check_command("printf session").source == "session"
+
+    def test_command_persistent_approval_writes_project_rule(self, tmp_path, monkeypatch):
+        """Persistent approvals are written to .supercoder/permissions.yaml."""
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+        from supercoder.tools.command_exec import CommandExecutionTool
+
+        fake_logger = MagicMock()
+        monkeypatch.setattr("supercoder.agent.coder_agent.get_logger", lambda: fake_logger)
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+        mock_llm.chat_with_tools_interruptible.side_effect = [
+            CompletionResult(
+                content="",
+                tool_calls=[
+                    NativeToolCall(
+                        id="call_cmd",
+                        name="command-exec",
+                        arguments={"command": "printf persistent"},
+                    )
+                ],
+                raw_tool_calls=[
+                    {
+                        "id": "call_cmd",
+                        "type": "function",
+                        "function": {
+                            "name": "command-exec",
+                            "arguments": '{"command": "printf persistent"}',
+                        },
+                    }
+                ],
+            ),
+            CompletionResult(content="Done.", tool_calls=[]),
+        ]
+        agent = CoderAgent(
+            llm=mock_llm,
+            tools=[CommandExecutionTool()],
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+        )
+
+        events = []
+        for event in agent.chat_turn("Run persistent command"):
+            if event["type"] == "command_confirm":
+                event["result"].update({"approved": True, "decision": "allow_persistent"})
+            events.append(event)
+
+        assert "command_confirm" in [event["type"] for event in events]
+        assert (tmp_path / ".supercoder" / "permissions.yaml").exists()
+        assert agent.permission_policy.check_command("printf persistent").source == "persistent"
+        fake_logger.log_permission_rule_change.assert_called()
+
     def test_large_tool_result_is_masked_in_context(self, tmp_path):
         """Large tool outputs are offloaded and only compact text reaches context."""
         from supercoder.agent.coder_agent import CoderAgent
@@ -657,6 +763,28 @@ class TestChatTurnEventFlow:
         ask_tools = [tool.definition.name for tool in agent._get_tools_for_mode()]
         assert "glob" in ask_tools
         assert "code-edit" not in ask_tools
+
+    def test_code_mode_keeps_code_edit_available_for_host_approval(self, tmp_path):
+        """CODE mode keeps edit tools available so the host can ask before execution."""
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+
+        agent = CoderAgent(
+            llm=mock_llm,
+            tools=ALL_TOOLS,
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+        )
+
+        code_tools = [tool.definition.name for tool in agent._get_tools_for_mode()]
+        assert "code-edit" in code_tools
 
     def test_set_mode_does_not_change_system_prompt(self, tmp_path):
         """Mode switches must not invalidate the stable system prompt prefix."""
@@ -1004,8 +1132,8 @@ class TestChatTurnEventFlow:
         assert (plan_dir / f"{today}-plan.md").read_text() == "old"
         assert (plan_dir / f"{today}-plan-2.md").read_text() == "new"
 
-    def test_code_mode_blocks_code_edit(self, tmp_path):
-        """CODE mode allows work but requires /accept-edits for file edits."""
+    def test_code_mode_cancelled_code_edit_does_not_write(self, tmp_path):
+        """CODE mode asks before file edits and respects cancellation."""
         from supercoder.agent.coder_agent import CoderAgent
         from supercoder.context import ContextConfig
 
@@ -1046,11 +1174,70 @@ class TestChatTurnEventFlow:
             repo_root=str(tmp_path),
         )
 
-        events = list(agent.chat_turn("Create a file"))
+        events = []
+        for event in agent.chat_turn("Create a file"):
+            if event["type"] == "edit_confirm":
+                event["result"].update({"approved": False})
+            events.append(event)
+
         result = next(e for e in events if e["type"] == "tool_result")["content"]["result"]
 
-        assert "Switch to /accept-edits" in result
+        assert "edit_confirm" in [event["type"] for event in events]
+        assert "File edit cancelled by user" in result
         assert not (tmp_path / "blocked.txt").exists()
+
+    def test_code_mode_approved_code_edit_writes_file(self, tmp_path):
+        """CODE mode applies file edits only after host approval."""
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+        mock_llm.chat_with_tools_interruptible.side_effect = [
+            CompletionResult(
+                content="",
+                tool_calls=[
+                    NativeToolCall(
+                        id="call_edit",
+                        name="code-edit",
+                        arguments={
+                            "filepath": "approved.txt",
+                            "operation": "create",
+                            "content": "ok",
+                        },
+                    )
+                ],
+                raw_tool_calls=[
+                    {
+                        "id": "call_edit",
+                        "type": "function",
+                        "function": {"name": "code-edit", "arguments": "{}"},
+                    }
+                ],
+            ),
+            CompletionResult(content="Done.", tool_calls=[]),
+        ]
+        agent = CoderAgent(
+            llm=mock_llm,
+            tools=ALL_TOOLS,
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+        )
+
+        events = []
+        for event in agent.chat_turn("Create a file"):
+            if event["type"] == "edit_confirm":
+                event["result"].update({"approved": True})
+            events.append(event)
+
+        result = next(e for e in events if e["type"] == "tool_result")["content"]["result"]
+        assert "edit_confirm" in [event["type"] for event in events]
+        assert "Created file" in result
+        assert (tmp_path / "approved.txt").read_text() == "ok"
 
     def test_accept_edits_mode_allows_code_edit_create(self, tmp_path):
         """ACCEPT_EDITS preserves the current low-friction edit behavior."""
@@ -1099,6 +1286,7 @@ class TestChatTurnEventFlow:
         events = list(agent.chat_turn("Create a file"))
         result = next(e for e in events if e["type"] == "tool_result")["content"]["result"]
 
+        assert "edit_confirm" not in [event["type"] for event in events]
         assert "Created file" in result
         assert (tmp_path / "created.txt").read_text() == "ok"
 

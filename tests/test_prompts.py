@@ -24,7 +24,7 @@ def test_code_mode_instruction_uses_cautious_command_policy():
 
     assert "Do NOT refuse to execute commands" not in instruction
     assert "host permission flow" in instruction
-    assert "File edits are blocked" in instruction
+    assert "File edits require host approval" in instruction
 
 
 def test_accept_edits_instruction_enables_file_edits():

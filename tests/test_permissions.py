@@ -45,6 +45,84 @@ def test_command_config_deny_precedes_allow(tmp_path):
     assert decision.source == "config"
 
 
+def test_persistent_allow_is_loaded_from_project_file(tmp_path):
+    policy = PermissionPolicy(tmp_path)
+
+    rule = policy.add_command_rule(
+        PermissionAction.ALLOW,
+        "  printf   allowed  ",
+        scope="persistent",
+    )
+    reloaded = PermissionPolicy(tmp_path)
+    decision = reloaded.check_command("printf allowed")
+
+    assert rule.pattern == "printf allowed"
+    assert decision.action == PermissionAction.ALLOW
+    assert decision.source == "persistent"
+    assert (tmp_path / ".supercoder" / "permissions.yaml").exists()
+
+
+def test_persistent_allow_can_resolve_config_ask(tmp_path):
+    policy = PermissionPolicy(tmp_path, {"command-exec": {"ask": ["git push*"]}})
+
+    policy.add_command_rule(PermissionAction.ALLOW, "git push origin main", scope="persistent")
+
+    decision = policy.check_command("git push origin main")
+    assert decision.action == PermissionAction.ALLOW
+    assert decision.source == "persistent"
+
+
+def test_session_allow_is_not_persisted(tmp_path):
+    policy = PermissionPolicy(tmp_path)
+
+    policy.add_command_rule(PermissionAction.ALLOW, "printf session", scope="session")
+
+    assert policy.check_command("printf session").source == "session"
+    assert PermissionPolicy(tmp_path).check_command("printf session").action == PermissionAction.ASK
+
+
+def test_persistent_deny_blocks_command(tmp_path):
+    policy = PermissionPolicy(tmp_path)
+
+    policy.add_command_rule(PermissionAction.DENY, "printf blocked", scope="persistent")
+
+    decision = PermissionPolicy(tmp_path).check_command("printf blocked")
+    assert decision.action == PermissionAction.DENY
+    assert decision.source == "persistent"
+
+
+def test_builtin_deny_precedes_persistent_allow(tmp_path):
+    policy = PermissionPolicy(tmp_path)
+
+    policy.add_command_rule(PermissionAction.ALLOW, "sudo echo nope", scope="persistent")
+
+    decision = policy.check_command("sudo echo nope")
+    assert decision.action == PermissionAction.DENY
+    assert decision.source == "builtin"
+
+
+def test_persistent_command_rules_do_not_duplicate(tmp_path):
+    policy = PermissionPolicy(tmp_path)
+
+    policy.add_command_rule(PermissionAction.ALLOW, "printf once", scope="persistent")
+    policy.add_command_rule(PermissionAction.ALLOW, "printf once", scope="persistent")
+
+    assert len(policy.list_command_rules("persistent")) == 1
+
+
+def test_remove_and_clear_persistent_command_rules(tmp_path):
+    policy = PermissionPolicy(tmp_path)
+    first = policy.add_command_rule(PermissionAction.ALLOW, "printf first", scope="persistent")
+    policy.add_command_rule(PermissionAction.DENY, "printf second", scope="persistent")
+
+    removed = policy.remove_persistent_command_rule(first.id)
+
+    assert removed == first
+    assert policy.check_command("printf first").action == PermissionAction.ASK
+    assert policy.clear_persistent_command_rules() == 1
+    assert policy.list_command_rules("persistent") == []
+
+
 def test_sensitive_paths_denied_by_default(tmp_path):
     policy = PermissionPolicy(tmp_path)
 

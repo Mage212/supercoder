@@ -34,7 +34,7 @@ SuperCoder enforces command and path safety in application code instead of relyi
 Before editing an existing file, SuperCoder verifies that the model has fresh file context from `file-read` or an explicit \@file attachment. If the file was never read, or changed externally after it was read, `code-edit` is blocked and the model is asked to read the file again.
 
 ### 🧭 Host-Enforced Modes
-Switch between `ask`, `plan`, `code`, and `accept-edits` with slash commands or `Shift+Tab`. `code` now blocks file edits by default, while `accept-edits` enables them; `plan` can persist dated plans only under `.supercoder/plans/`. Mode changes are enforced by SuperCoder itself and announced without rebuilding the system prompt, preserving prompt-cache locality for local models.
+Switch between `ask`, `plan`, `code`, and `accept-edits` with slash commands or `Shift+Tab`. `code` reads and searches freely, then asks before shell commands or file edits; `accept-edits` enables file edits without per-edit prompts. `plan` can persist dated plans only under `.supercoder/plans/`. Mode changes are enforced by SuperCoder itself and announced without rebuilding the system prompt, preserving prompt-cache locality for local models.
 
 ### 📎 Explicit Context References
 Mention files or directories directly in a prompt with \@path, for example `Review @supercoder/repl.py`. SuperCoder attaches bounded file content or a directory file listing before the model call, with autocomplete suggestions while typing \@ma.
@@ -46,6 +46,7 @@ Provides an organized, tree-based view of your project's folders and files, inte
 Modifies your codebase seamlessly using diff-based operations. Every edit is **atomic** and protected by a **checkpoint system**:
 - **Atomic Writes**: Changes are written to temporary files first, then moved to the original path.
 - **Auto-Backups**: Original file state is saved before any modification.
+- **Host Approval**: In `code` mode, every file edit asks for manual approval before execution. Use `accept-edits` when you want edits applied without per-edit prompts.
 - **Smart Undo**: Revert any number of changes with the `/undo` command.
 - **Operations**: `search_replace`, `insert_after`, `replace_lines`, and `create`.
 
@@ -63,7 +64,7 @@ Uses `tree-sitter` and `networkx` to generate a high-level map of your repositor
 - **Tool Output Compaction**: Large tool outputs are summarized for the model and stored in full under `.supercoder/tool-outputs/`.
 
 ### 🧪 Debug Diagnostics
-Run with `--debug` to write JSONL logs to `~/.supercoder/logs/`. Logs include native tool-call metadata, tool result masking events, freshness checks, offload paths, API request messages, reasoning, responses, and errors.
+Run with `--debug` to write JSONL logs to `~/.supercoder/logs/`. Logs include native tool-call metadata, tool result masking events, permission decisions, edit confirmations, freshness checks, offload paths, API request messages, reasoning, responses, and errors.
 
 ### 💾 Session Persistence
 - **Auto-Save**: Your conversation is automatically saved after each message exchange.
@@ -249,8 +250,10 @@ supercoder --stream                    # Enable deprecated text-streaming mode
 |---------|-------------|
 | `/ask` | Switch to Ask mode (Q&A without edits) |
 | `/ask <question>` | Ask one question without editing, then return to previous mode |
-| `/code` | Switch to Code mode (full editing) |
+| `/plan` | Switch to Plan mode (read/search, dated plans only) |
+| `/code` | Switch to Code mode (edits require approval) |
 | `/code <request>` | Execute one request in code mode, then return to previous mode |
+| `/accept-edits` | Switch to editing mode (file edits apply without per-edit prompts) |
 | `/undo` | Revert changes to a specific checkpoint |
 | `/help` | Show available commands |
 | `/continue` | Resume a previous session (interactive picker) |
@@ -283,9 +286,15 @@ Before running any shell command, SuperCoder pauses and asks for explicit approv
 ⚡ Run Command?
 Command:
   <the command to execute>
-  [y] Yes   [a] Always allow   [n] No
+  [y] Once   [s] Session   [a] Always   [d] Always deny   [n] No
 ```
-Single keypress response — `[a]` remembers approval for the rest of the session.
+Single keypress response:
+- `[y]` approves once.
+- `[s]` allows the exact command for the current process.
+- `[a]` saves a project-local allow rule in `.supercoder/permissions.yaml`.
+- `[d]` saves a project-local deny rule in `.supercoder/permissions.yaml`.
+
+Use `/permissions` to inspect, remove, or clear project-local command approval rules.
 
 ### Interruption (ESC-ESC)
 Press **ESC twice** to abort at any time — during generation, tool calls, or streaming.

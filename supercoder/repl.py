@@ -22,6 +22,8 @@ from . import __version__
 from .abort_controller import InterruptHandler, KeyboardListener
 from .agent.agent_modes import MODE_CONFIGS, MODE_CYCLE, AgentMode
 from .context.references import summarize_attachment_content, summarize_context_attachment
+from .logging import get_logger
+from .permissions import PermissionAction
 from .utils import format_relative_time
 
 
@@ -50,6 +52,7 @@ class SuperCoderREPL:
             "/debug": self.cmd_debug,
             "/models": self.cmd_models,
             "/model": self.cmd_model,
+            "/permissions": self.cmd_permissions,
             "exit": self.cmd_exit,
             "/exit": self.cmd_exit,
             "quit": self.cmd_quit,
@@ -359,11 +362,22 @@ class SuperCoderREPL:
                     spinner.stop()
                     if hasattr(self, "keyboard_listener"):
                         self.keyboard_listener.stop()
-                    approved = self._handle_command_confirm(content.get("command", ""))
-                    event["result"]["approved"] = approved
+                    result = self._handle_command_confirm(content.get("command", ""))
+                    event["result"].update(result)
                     if hasattr(self, "keyboard_listener"):
                         self.keyboard_listener.start()
                     spinner.update("[bold blue]Running command...[/]")
+                    spinner.start()
+
+                elif event_type == "edit_confirm":
+                    spinner.stop()
+                    if hasattr(self, "keyboard_listener"):
+                        self.keyboard_listener.stop()
+                    result = self._handle_edit_confirm(content.get("arguments", {}))
+                    event["result"].update(result)
+                    if hasattr(self, "keyboard_listener"):
+                        self.keyboard_listener.start()
+                    spinner.update("[bold blue]Applying edit...[/]")
                     spinner.start()
 
                 elif event_type == "command_waiting":
@@ -566,12 +580,23 @@ class SuperCoderREPL:
                     # which breaks sys.stdin.readline() used in the confirm prompt.
                     if hasattr(self, "keyboard_listener"):
                         self.keyboard_listener.stop()
-                    approved = self._handle_command_confirm(content.get("command", ""))
-                    event["result"]["approved"] = approved
+                    result = self._handle_command_confirm(content.get("command", ""))
+                    event["result"].update(result)
                     # Restart listener for the upcoming LLM turn
                     if hasattr(self, "keyboard_listener"):
                         self.keyboard_listener.start()
                     spinner.update("[bold blue]Running command...[/]")
+                    spinner.start()
+
+                elif event_type == "edit_confirm":
+                    stop_streaming()
+                    if hasattr(self, "keyboard_listener"):
+                        self.keyboard_listener.stop()
+                    result = self._handle_edit_confirm(content.get("arguments", {}))
+                    event["result"].update(result)
+                    if hasattr(self, "keyboard_listener"):
+                        self.keyboard_listener.start()
+                    spinner.update("[bold blue]Applying edit...[/]")
                     spinner.start()
 
                 elif event_type == "command_waiting":
@@ -813,10 +838,10 @@ class SuperCoderREPL:
         """Display a compact summary of host-attached @path context."""
         self.console.print(f"[dim]{summarize_context_attachment(summary)}[/]")
 
-    def _handle_command_confirm(self, command: str) -> bool:
+    def _handle_command_confirm(self, command: str) -> dict[str, object]:
         """Ask user to approve or deny a shell command before it runs.
 
-        Returns True if user approved, False otherwise.
+        Returns a structured decision consumed by the agent.
         """
         from prompt_toolkit import prompt as pt_prompt
         from prompt_toolkit.key_binding import KeyBindings
@@ -835,10 +860,20 @@ class SuperCoderREPL:
         def _(event):
             event.app.exit(result="yes")
 
+        @kb.add("s")
+        @kb.add("S")
+        def _(event):
+            event.app.exit(result="session")
+
         @kb.add("a")
         @kb.add("A")
         def _(event):
             event.app.exit(result="always")
+
+        @kb.add("d")
+        @kb.add("D")
+        def _(event):
+            event.app.exit(result="deny_always")
 
         @kb.add("n")
         @kb.add("N")
@@ -848,8 +883,10 @@ class SuperCoderREPL:
             event.app.exit(result="no")
 
         self.console.print(
-            "  [bold green][[y]][/bold green] Yes   "
-            "[bold cyan][[a]][/bold cyan] Always allow   "
+            "  [bold green][[y]][/bold green] Once   "
+            "[bold cyan][[s]][/bold cyan] Session   "
+            "[bold cyan][[a]][/bold cyan] Always   "
+            "[bold yellow][[d]][/bold yellow] Always deny   "
             "[bold red][[n]][/bold red] No"
         )
         try:
@@ -859,12 +896,97 @@ class SuperCoderREPL:
 
         if choice == "yes":
             self.console.print("[green]✓ Approved[/]")
-            return True
+            return {"approved": True, "decision": "approve_once"}
+        if choice == "session":
+            self.console.print("[green]✓ Approved (allowed this session)[/]")
+            return {"approved": True, "decision": "allow_session"}
         if choice == "always":
-            self.console.print("[green]✓ Approved (always allowed this session)[/]")
-            return True
+            self.console.print("[green]✓ Approved (saved for this project)[/]")
+            return {"approved": True, "decision": "allow_persistent"}
+        if choice == "deny_always":
+            self.console.print("[yellow]✓ Denied (saved for this project)[/]")
+            return {"approved": False, "decision": "deny_persistent"}
         self.console.print("[red]✗ Cancelled[/]")
-        return False
+        return {"approved": False, "decision": "deny_once"}
+
+    def _handle_edit_confirm(self, arguments: dict) -> dict[str, object]:
+        """Ask user to approve or deny a file edit before it runs."""
+        from prompt_toolkit import prompt as pt_prompt
+        from prompt_toolkit.key_binding import KeyBindings
+
+        self._print_block(self._format_edit_preview(arguments), "Apply File Edit?", "cyan", "📝")
+
+        kb = KeyBindings()
+
+        @kb.add("y")
+        @kb.add("Y")
+        def _(event):
+            event.app.exit(result="yes")
+
+        @kb.add("n")
+        @kb.add("N")
+        @kb.add("escape")
+        @kb.add("enter")
+        def _(event):
+            event.app.exit(result="no")
+
+        self.console.print(
+            "  [bold green][[y]][/bold green] Apply   [bold red][[n]][/bold red] Cancel"
+        )
+        try:
+            choice = pt_prompt("  > ", key_bindings=kb)
+        except (KeyboardInterrupt, EOFError):
+            choice = "no"
+
+        if choice == "yes":
+            self.console.print("[green]✓ Edit approved[/]")
+            return {"approved": True}
+        self.console.print("[red]✗ Edit cancelled[/]")
+        return {"approved": False}
+
+    def _format_edit_preview(self, arguments: dict) -> Text:
+        """Build a compact preview for a pending code-edit call."""
+        filepath = str(arguments.get("filepath") or arguments.get("fileName") or "")
+        operation = str(arguments.get("operation") or "search_replace")
+        preview = Text()
+        preview.append("File: ", style="bold")
+        preview.append(filepath or "(missing)", style="yellow")
+        preview.append("\nOperation: ", style="bold")
+        preview.append(operation, style="cyan")
+
+        if operation in {"create", "append"}:
+            content = self._short_preview(str(arguments.get("content", "")))
+            preview.append("\n\nContent preview:\n", style="bold")
+            preview.append(content or "(empty)")
+        elif operation == "search_replace":
+            search = self._short_preview(str(arguments.get("search", "")), limit=500)
+            replace = self._short_preview(str(arguments.get("replace", "")), limit=500)
+            preview.append("\n\nSearch:\n", style="bold")
+            preview.append(search or "(empty)")
+            preview.append("\n\nReplace:\n", style="bold")
+            preview.append(replace or "(empty)")
+        elif operation == "replace_lines":
+            preview.append("\n\nLines: ", style="bold")
+            preview.append(f"{arguments.get('startLine', '?')} - {arguments.get('endLine', '?')}")
+            content = self._short_preview(str(arguments.get("content", "")))
+            preview.append("\n\nReplacement preview:\n", style="bold")
+            preview.append(content or "(empty)")
+        else:
+            preview.append("\n\nArguments preview:\n", style="bold")
+            safe_args = {
+                key: self._short_preview(str(value), limit=300)
+                for key, value in arguments.items()
+                if key not in {"content", "search", "replace"}
+            }
+            preview.append(str(safe_args))
+
+        return preview
+
+    def _short_preview(self, value: str, limit: int = 1200) -> str:
+        """Return a bounded preview string for terminal confirmation prompts."""
+        if len(value) <= limit:
+            return value
+        return value[:limit] + "\n... truncated ..."
 
     def _handle_command_waiting(self, event):
         """Handle a command that appears to be waiting for input."""
@@ -1163,7 +1285,7 @@ class SuperCoderREPL:
         return False
 
     def cmd_code(self, user_input: str):
-        """Switch to code mode (edits blocked by default).
+        """Switch to code mode (file edits require approval).
 
         /code         - Switch to code mode (sticky)
         /code <text>  - Execute one request in code mode
@@ -1182,8 +1304,8 @@ class SuperCoderREPL:
         else:
             # Sticky switch to code mode
             self.agent.set_mode(AgentMode.CODE)
-            self.console.print("[cyan]Switched to code mode[/] - edits blocked by default")
-            self.console.print("[dim]Use /accept-edits when you want file changes applied[/]")
+            self.console.print("[cyan]Switched to code mode[/] - edits ask for approval")
+            self.console.print("[dim]Use /accept-edits to apply edits without per-edit prompts[/]")
         return False
 
     def cmd_accept_edits(self, user_input: str):
@@ -1369,7 +1491,7 @@ class SuperCoderREPL:
         table.add_row("[bold dim]Mode[/]", "")
         table.add_row("/ask", "Q&A mode (read-only, no edits)")
         table.add_row("/plan", "Planning mode (read/search, save dated plans only)")
-        table.add_row("/code", "Code mode (edits blocked by default)")
+        table.add_row("/code", "Code mode (file edits require approval)")
         table.add_row("/accept-edits", "Editing mode (file edits enabled)")
         table.add_row("Shift+Tab", "Cycle ask -> plan -> code -> accept-edits")
 
@@ -1393,6 +1515,7 @@ class SuperCoderREPL:
         table.add_row("/models", "List available model profiles")
         table.add_row("/model <name>", "Switch to a model profile")
         table.add_row("/config", "Show current configuration")
+        table.add_row("/permissions", "Show or manage saved command approvals")
         table.add_row("/debug", "Toggle debug mode")
 
         table.add_section()
@@ -1420,6 +1543,77 @@ class SuperCoderREPL:
         table.add_row("API Key", masked_key)
 
         self._print_block(table, "Configuration", "cyan", "⚙")
+        return False
+
+    def cmd_permissions(self, user_input: str):
+        """Show or manage project-local command permission rules."""
+        parts = user_input.split(maxsplit=2)
+        policy = self.agent.permission_policy
+
+        if len(parts) == 1:
+            rules = policy.list_command_rules()
+            table = Table(
+                title="Command Permissions",
+                box=box.SIMPLE,
+                show_header=True,
+                header_style="bold cyan",
+            )
+            table.add_column("ID", style="cyan", min_width=4)
+            table.add_column("Scope", min_width=10)
+            table.add_column("Action", min_width=6)
+            table.add_column("Rule")
+
+            if rules:
+                for rule in rules:
+                    action_style = "green" if rule.action == PermissionAction.ALLOW else "red"
+                    table.add_row(
+                        rule.id,
+                        rule.scope,
+                        f"[{action_style}]{rule.action.value}[/]",
+                        rule.pattern,
+                    )
+            else:
+                table.add_row("-", "-", "-", "No session or persistent command rules")
+
+            self.console.print(table)
+            self.console.print(
+                f"[dim]Persistent rules file: {policy.persistent_path}[/]\n"
+                "[dim]Use /permissions remove <id> or /permissions clear[/]"
+            )
+            return False
+
+        action = parts[1].lower()
+        if action == "remove":
+            if len(parts) < 3:
+                self.console.print("[yellow]Usage: /permissions remove <id>[/]")
+                return False
+            removed = policy.remove_persistent_command_rule(parts[2])
+            if not removed:
+                self.console.print(f"[red]No persistent permission rule found: {parts[2]}[/]")
+                return False
+            get_logger().log_permission_rule_change(
+                action="remove",
+                scope=removed.scope,
+                rule_action=removed.action.value,
+                rule=removed.pattern,
+                source="/permissions",
+            )
+            self.console.print(f"[green]✓ Removed {removed.id}: {removed.pattern}[/]")
+            return False
+
+        if action == "clear":
+            count = policy.clear_persistent_command_rules()
+            get_logger().log_permission_rule_change(
+                action="clear",
+                scope="persistent",
+                rule_action="all",
+                rule="*",
+                source="/permissions",
+            )
+            self.console.print(f"[green]✓ Cleared {count} persistent permission rule(s)[/]")
+            return False
+
+        self.console.print("[yellow]Usage: /permissions [remove <id>|clear][/]")
         return False
 
     def cmd_stats(self, _):

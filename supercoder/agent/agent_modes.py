@@ -14,7 +14,7 @@ class AgentMode(Enum):
 
     ASK = "ask"  # Q&A mode: can only read and analyze code
     PLAN = "plan"  # Planning mode: read-only plus plans under .supercoder/plans
-    CODE = "code"  # Default work mode: no file edits unless accept-edits is enabled
+    CODE = "code"  # Default work mode: file edits require host approval
     ACCEPT_EDITS = "accept-edits"  # Editing mode: file edits allowed
 
 
@@ -73,11 +73,11 @@ MODE_CONFIGS = {
         name="code",
         instruction=(
             "Current mode: CODE. You may inspect code and run useful shell commands through "
-            "the host permission flow. File edits are blocked; switch to /accept-edits when "
-            "the user wants changes applied."
+            "the host permission flow. File edits require host approval before execution; "
+            "switch to /accept-edits when the user wants edits applied without per-edit prompts."
         ),
         allowed_tools=None,
-        toolbar="read/search + approved shell; edits blocked",
+        toolbar="read/search; shell/edit ask",
         prompt_label="code",
     ),
     AgentMode.ACCEPT_EDITS: ModeConfig(

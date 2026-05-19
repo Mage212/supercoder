@@ -171,6 +171,85 @@ class CoderAgent:
         self._log_permission_decision("command-exec", command, decision)
         return decision
 
+    def _log_edit_confirmation(self, arguments: dict, approved: bool) -> None:
+        """Log a host-side edit confirmation without file contents."""
+        filepath = str(arguments.get("filepath") or arguments.get("fileName") or "")
+        operation = str(arguments.get("operation") or "")
+        get_logger().log_edit_confirmation(
+            mode=self._mode.value,
+            filepath=filepath,
+            operation=operation,
+            approved=approved,
+        )
+
+    def _add_command_permission_rule(
+        self,
+        command: str,
+        action: PermissionAction,
+        scope: str,
+        *,
+        source: str,
+    ) -> tuple[bool, str | None]:
+        """Persist a command permission rule and log the change."""
+        try:
+            rule = self.permission_policy.add_command_rule(action, command, scope=scope)
+        except Exception as exc:
+            get_logger().log_error(exc)
+            return False, f"Error saving permission rule: {exc}"
+
+        get_logger().log_permission_rule_change(
+            action="add",
+            scope=rule.scope,
+            rule_action=rule.action.value,
+            rule=rule.pattern,
+            source=source,
+        )
+        return True, None
+
+    def _apply_command_confirmation(
+        self,
+        command: str,
+        confirm_result: dict,
+    ) -> tuple[bool, str]:
+        """Apply a command confirmation result from the REPL."""
+        decision = confirm_result.get("decision")
+        if decision is None:
+            return (
+                bool(confirm_result.get("approved", False)),
+                "Command execution cancelled by user.",
+            )
+
+        if decision == "approve_once":
+            return True, ""
+        if decision == "allow_session":
+            ok, error = self._add_command_permission_rule(
+                command,
+                PermissionAction.ALLOW,
+                "session",
+                source="command_confirm",
+            )
+            return ok, error or ""
+        if decision == "allow_persistent":
+            ok, error = self._add_command_permission_rule(
+                command,
+                PermissionAction.ALLOW,
+                "persistent",
+                source="command_confirm",
+            )
+            return ok, error or ""
+        if decision == "deny_persistent":
+            ok, error = self._add_command_permission_rule(
+                command,
+                PermissionAction.DENY,
+                "persistent",
+                source="command_confirm",
+            )
+            if not ok:
+                return False, error or "Error saving permission rule."
+            return False, "Command execution denied by user and saved as a persistent deny rule."
+
+        return False, "Command execution cancelled by user."
+
     def _log_mode_tool_decision(
         self,
         tool_name: str,
@@ -247,9 +326,6 @@ class CoderAgent:
         """Return tools available in current mode."""
         mode_config = MODE_CONFIGS[self._mode]
 
-        if self._mode == AgentMode.CODE:
-            return [t for t in self._tools_list if t.definition.name != "code-edit"]
-
         if mode_config.allowed_tools is None:
             # All tools allowed
             return self._tools_list
@@ -315,15 +391,6 @@ class CoderAgent:
                     args,
                 )
             self._log_mode_tool_decision(tool_name, decision, decision.arguments or args)
-            return decision
-
-        if self._mode == AgentMode.CODE and tool_name == "code-edit":
-            decision = ModeToolDecision(
-                False,
-                "code-edit is blocked in CODE mode. Switch to /accept-edits to modify files.",
-                args,
-            )
-            self._log_mode_tool_decision(tool_name, decision, args)
             return decision
 
         decision = ModeToolDecision(True, f"Tool allowed in {self._mode.value} mode", args)
@@ -441,6 +508,7 @@ class CoderAgent:
           - ``{"type": "tool_call", "content": {...}}``      → tool invocation
           - ``{"type": "tool_result", "content": {...}}``    → tool output
           - ``{"type": "command_confirm", ...}``             → confirm shell cmd
+          - ``{"type": "edit_confirm", ...}``                → confirm file edit
           - ``{"type": "command_waiting", ...}``             → interactive cmd
           - ``{"type": "error", "content": "..."}``
           - ``{"type": "rollback", "content": {...}}``
@@ -622,6 +690,34 @@ class CoderAgent:
                     )
                     continue
 
+                if name == "code-edit" and self._mode == AgentMode.CODE:
+                    confirm_result: dict = {}
+                    yield {
+                        "type": "edit_confirm",
+                        "content": {"arguments": arguments},
+                        "result": confirm_result,
+                    }
+                    approved = bool(confirm_result.get("approved", False))
+                    self._log_edit_confirmation(arguments, approved)
+                    if not approved:
+                        tool_result = "File edit cancelled by user."
+                        args_str = json.dumps(arguments)
+                        self._log_early_tool_outcome(name, args_str, tool_result)
+                        yield {
+                            "type": "tool_result",
+                            "content": {"name": name, "result": tool_result},
+                        }
+                        self.context.add_message(
+                            Message(
+                                role="tool",
+                                content=tool_result,
+                                tool_call_id=tc.id,
+                                name=name,
+                                display_type="tool_result",
+                            )
+                        )
+                        continue
+
                 if name == "code-edit":
                     has_file_edits = True
 
@@ -659,8 +755,13 @@ class CoderAgent:
                                 "content": {"command": _cmd_str},
                                 "result": confirm_result,
                             }
-                            if not confirm_result.get("approved", False):
-                                tool_result = "Command execution cancelled by user."
+                            approved, denial_reason = self._apply_command_confirmation(
+                                _cmd_str, confirm_result
+                            )
+                            if not approved:
+                                tool_result = (
+                                    denial_reason or "Command execution cancelled by user."
+                                )
                                 self._log_early_tool_outcome(name, args_str, tool_result)
                                 yield {
                                     "type": "tool_result",
@@ -917,6 +1018,25 @@ class CoderAgent:
                             all_results.append(f"[{name}]: {result}")
                             continue
 
+                        if name == "code-edit" and self._mode == AgentMode.CODE:
+                            confirm_result: dict = {}
+                            yield {
+                                "type": "edit_confirm",
+                                "content": {"arguments": parsed_args},
+                                "result": confirm_result,
+                            }
+                            approved = bool(confirm_result.get("approved", False))
+                            self._log_edit_confirmation(parsed_args, approved)
+                            if not approved:
+                                result = "File edit cancelled by user."
+                                self._log_early_tool_outcome(name, args, result)
+                                yield {
+                                    "type": "tool_result",
+                                    "content": {"name": name, "result": result},
+                                }
+                                all_results.append(f"[{name}]: {result}")
+                                continue
+
                         if name == "code-edit":
                             has_file_edits = True
 
@@ -945,8 +1065,11 @@ class CoderAgent:
                                     "content": {"command": _cmd_str},
                                     "result": confirm_result,
                                 }
-                                if not confirm_result.get("approved", False):
-                                    result = "Command execution cancelled by user."
+                                approved, denial_reason = self._apply_command_confirmation(
+                                    _cmd_str, confirm_result
+                                )
+                                if not approved:
+                                    result = denial_reason or "Command execution cancelled by user."
                                     self._log_early_tool_outcome(name, args, result)
                                     yield {
                                         "type": "tool_result",

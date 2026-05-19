@@ -153,3 +153,46 @@ def test_log_mode_policy_event(tmp_path, monkeypatch):
     assert event["tool"] == "code-edit"
     assert event["action"] == "deny"
     assert event["subject"] == "src/app.py"
+
+
+def test_log_permission_rule_change_event(tmp_path, monkeypatch):
+    monkeypatch.setattr(logging_mod, "LOG_DIR", tmp_path)
+
+    logger = logging_mod.ConversationLogger("model", enabled=True)
+    logger.log_permission_rule_change(
+        action="add",
+        scope="persistent",
+        rule_action="allow",
+        rule="printf ok",
+        source="command_confirm",
+    )
+
+    entries = [json.loads(line) for line in next(tmp_path.glob("*.jsonl")).read_text().splitlines()]
+    event = next(entry for entry in entries if entry["type"] == "permission_rule_change")
+
+    assert event["action"] == "add"
+    assert event["scope"] == "persistent"
+    assert event["rule_action"] == "allow"
+    assert event["rule"] == "printf ok"
+    assert event["source"] == "command_confirm"
+
+
+def test_log_edit_confirmation_event_without_file_content(tmp_path, monkeypatch):
+    monkeypatch.setattr(logging_mod, "LOG_DIR", tmp_path)
+
+    logger = logging_mod.ConversationLogger("model", enabled=True)
+    logger.log_edit_confirmation(
+        mode="code",
+        filepath="main.py",
+        operation="create",
+        approved=True,
+    )
+
+    entries = [json.loads(line) for line in next(tmp_path.glob("*.jsonl")).read_text().splitlines()]
+    event = next(entry for entry in entries if entry["type"] == "edit_confirm")
+
+    assert event["mode"] == "code"
+    assert event["filepath"] == "main.py"
+    assert event["operation"] == "create"
+    assert event["approved"] is True
+    assert "content" not in event

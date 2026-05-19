@@ -229,6 +229,52 @@ class ConversationLogger:
             }
         )
 
+    def log_permission_rule_change(
+        self,
+        *,
+        action: str,
+        scope: str,
+        rule_action: str,
+        rule: str,
+        source: str,
+    ) -> None:
+        """Log user-driven changes to session or persistent permission rules."""
+        if not self.enabled:
+            return
+        self._write_entry(
+            {
+                "type": "permission_rule_change",
+                "action": action,
+                "scope": scope,
+                "rule_action": rule_action,
+                "rule": rule[:300],
+                "source": source,
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
+
+    def log_edit_confirmation(
+        self,
+        *,
+        mode: str,
+        filepath: str,
+        operation: str,
+        approved: bool,
+    ) -> None:
+        """Log host-side file edit confirmations without file contents."""
+        if not self.enabled:
+            return
+        self._write_entry(
+            {
+                "type": "edit_confirm",
+                "mode": mode,
+                "filepath": filepath[:300],
+                "operation": operation,
+                "approved": approved,
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
+
     def log_mode_policy(
         self,
         *,
