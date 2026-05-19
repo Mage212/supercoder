@@ -1,6 +1,6 @@
 # 🤖 SuperCoder
 
-[![Version](https://img.shields.io/badge/version-0.3.7-blue.svg)](https://github.com/Mage212/supercoder)
+[![Version](https://img.shields.io/badge/version-0.3.8-blue.svg)](https://github.com/Mage212/supercoder)
 [![Python](https://img.shields.io/badge/python-3.11+-green.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -8,12 +8,13 @@
 
 ---
 
-## 🆕 What's New in v0.3.7
+## 🆕 What's New in v0.3.8
 
-- **Host-Enforced Modes**: SuperCoder now has `ask`, `plan`, `code`, and `accept-edits` modes enforced by the host before tools run.
-- **Cache-Friendly Mode Switching**: Mode changes no longer rebuild the system prompt or tool schema list; SuperCoder announces mode policy in-band only when needed.
-- **Plan Files**: `plan` mode can save dated plans under `.supercoder/plans/` while blocking project file edits and shell commands.
-- **Mode UX**: Use `/plan`, `/accept-edits`, `/accept`, `/edit`, or `Shift+Tab` to switch modes with a live toolbar indicator.
+- **Persistent Command Approvals**: Save one-time, session, always-allow, or always-deny command decisions in project-local permission rules.
+- **Permission Management**: Use `/permissions` to inspect, remove, or clear saved command rules for the current project.
+- **CODE Edit Approval**: `code` mode asks before file edits, while `accept-edits` keeps the low-friction editing path.
+- **Approval Menus + Diff Preview**: Command and edit confirmations use arrow-key menus; file edits show a highlighted diff before approval.
+- **Apply and Auto-Accept**: An edit approval can apply the current change and switch the rest of the active loop to `accept-edits`.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
@@ -46,7 +47,7 @@ Provides an organized, tree-based view of your project's folders and files, inte
 Modifies your codebase seamlessly using diff-based operations. Every edit is **atomic** and protected by a **checkpoint system**:
 - **Atomic Writes**: Changes are written to temporary files first, then moved to the original path.
 - **Auto-Backups**: Original file state is saved before any modification.
-- **Host Approval**: In `code` mode, every file edit asks for manual approval before execution. Use `accept-edits` when you want edits applied without per-edit prompts.
+- **Host Approval**: In `code` mode, every file edit asks for manual approval with a highlighted diff preview before execution. The approval menu can also apply the current edit and switch the rest of the loop to `accept-edits`.
 - **Smart Undo**: Revert any number of changes with the `/undo` command.
 - **Operations**: `search_replace`, `insert_after`, `replace_lines`, and `create`.
 

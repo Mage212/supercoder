@@ -10,7 +10,7 @@ from prompt_toolkit.lexers import PygmentsLexer
 from prompt_toolkit.styles import Style as PromptStyle
 from pygments.lexers.markup import MarkdownLexer
 from rich import box
-from rich.console import Console
+from rich.console import Console, Group
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.rule import Rule
@@ -373,7 +373,9 @@ class SuperCoderREPL:
                     spinner.stop()
                     if hasattr(self, "keyboard_listener"):
                         self.keyboard_listener.stop()
-                    result = self._handle_edit_confirm(content.get("arguments", {}))
+                    result = self._handle_edit_confirm(
+                        content.get("arguments", {}), content.get("preview")
+                    )
                     event["result"].update(result)
                     if hasattr(self, "keyboard_listener"):
                         self.keyboard_listener.start()
@@ -592,7 +594,9 @@ class SuperCoderREPL:
                     stop_streaming()
                     if hasattr(self, "keyboard_listener"):
                         self.keyboard_listener.stop()
-                    result = self._handle_edit_confirm(content.get("arguments", {}))
+                    result = self._handle_edit_confirm(
+                        content.get("arguments", {}), content.get("preview")
+                    )
                     event["result"].update(result)
                     if hasattr(self, "keyboard_listener"):
                         self.keyboard_listener.start()
@@ -922,24 +926,102 @@ class SuperCoderREPL:
         self.console.print("[red]✗ Cancelled[/]")
         return {"approved": False, "decision": "deny_once"}
 
-    def _handle_edit_confirm(self, arguments: dict) -> dict[str, object]:
+    def _handle_edit_confirm(
+        self, arguments: dict, preview: object | None = None
+    ) -> dict[str, object]:
         """Ask user to approve or deny a file edit before it runs."""
-        self._print_block(self._format_edit_preview(arguments), "Apply File Edit?", "cyan", "📝")
+        preview_content = self._format_edit_diff_preview(
+            arguments, preview
+        ) or self._format_edit_preview(arguments)
+        transient_lines = self._print_transient_block(
+            preview_content, "Apply File Edit?", "cyan", "📝"
+        )
 
         choice = self._select_confirmation_action(
             "Choose edit action",
             [
                 ("Apply edit", "apply"),
+                ("Apply and switch to accept-edits", "apply_accept_edits"),
                 ("Cancel", "cancel"),
             ],
             "cancel",
         )
+        self._clear_transient_lines(transient_lines + 1)
 
         if choice == "apply":
             self.console.print("[green]✓ Edit approved[/]")
             return {"approved": True}
+        if choice == "apply_accept_edits":
+            self.console.print("[green]✓ Edit approved; switched to accept-edits[/]")
+            return {"approved": True, "decision": "apply_and_accept_edits"}
         self.console.print("[red]✗ Edit cancelled[/]")
         return {"approved": False}
+
+    def _print_transient_block(self, content, title: str, color: str, icon: str) -> int:
+        """Render a block and return the number of terminal lines it occupied."""
+        with self.console.capture() as capture:
+            self._print_block(content, title, color, icon)
+        rendered = capture.get()
+        self.console.file.write(rendered)
+        self.console.file.flush()
+        return self._terminal_line_count(rendered)
+
+    def _clear_transient_lines(self, line_count: int) -> None:
+        """Clear recently rendered confirmation UI from the terminal."""
+        if line_count <= 0:
+            return
+        self.console.file.write(f"\x1b[{line_count}A\x1b[J")
+        self.console.file.flush()
+
+    def _terminal_line_count(self, rendered: str) -> int:
+        """Count rendered terminal lines in captured Rich output."""
+        import re
+
+        plain = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", rendered)
+        return max(1, len(plain.splitlines()))
+
+    def _format_edit_diff_preview(self, arguments: dict, preview: object | None = None):
+        """Build a syntax-highlighted diff preview for a pending code-edit call."""
+        if preview is None:
+            preview = self._get_code_edit_preview(arguments)
+        if preview is None or not getattr(preview, "ok", False):
+            return None
+
+        diff = getattr(preview, "diff", "")
+        if not diff:
+            return None
+
+        header = Text()
+        header.append("File: ", style="bold")
+        header.append(
+            str(arguments.get("filepath") or arguments.get("fileName") or ""), style="yellow"
+        )
+        header.append("\nOperation: ", style="bold")
+        header.append(str(arguments.get("operation") or "search_replace"), style="cyan")
+        message = str(getattr(preview, "message", ""))
+        if message:
+            header.append("\n")
+            header.append(message, style="green")
+
+        syntax = Syntax(
+            diff, "diff", theme="monokai", line_numbers=False, background_color="default"
+        )
+        return Group(header, syntax)
+
+    def _get_code_edit_preview(self, arguments: dict):
+        """Return CodeEditTool preview data when available."""
+        tools = getattr(self.agent, "tools", None)
+        if not isinstance(tools, dict):
+            return None
+        tool = tools.get("code-edit")
+        preview_edit = getattr(tool, "preview_edit", None)
+        if not callable(preview_edit):
+            return None
+        try:
+            return preview_edit(arguments)
+        except Exception as exc:
+            get_logger().log_error(exc)
+            return None
 
     def _format_edit_preview(self, arguments: dict) -> Text:
         """Build a compact preview for a pending code-edit call."""

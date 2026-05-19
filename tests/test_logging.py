@@ -186,6 +186,7 @@ def test_log_edit_confirmation_event_without_file_content(tmp_path, monkeypatch)
         filepath="main.py",
         operation="create",
         approved=True,
+        decision="apply_and_accept_edits",
     )
 
     entries = [json.loads(line) for line in next(tmp_path.glob("*.jsonl")).read_text().splitlines()]
@@ -195,4 +196,5 @@ def test_log_edit_confirmation_event_without_file_content(tmp_path, monkeypatch)
     assert event["filepath"] == "main.py"
     assert event["operation"] == "create"
     assert event["approved"] is True
+    assert event["decision"] == "apply_and_accept_edits"
     assert "content" not in event

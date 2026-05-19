@@ -133,6 +133,84 @@ class TestCodeEditTool:
         content = test_file.read_text()
         assert "Hello Universe" in content
 
+    def test_code_edit_preview_search_replace_does_not_write(self, tmp_path):
+        """Preview builds a diff without changing the file."""
+        tool = CodeEditTool()
+        test_file = tmp_path / "preview_replace.txt"
+        test_file.write_text("Hello World\n")
+
+        preview = tool.preview_edit(
+            {
+                "filepath": str(test_file),
+                "operation": "search_replace",
+                "search": "Hello World",
+                "replace": "Hello Universe",
+            }
+        )
+
+        assert preview.ok
+        assert "---" in preview.diff
+        assert "+++" in preview.diff
+        assert "-Hello World" in preview.diff
+        assert "+Hello Universe" in preview.diff
+        assert test_file.read_text() == "Hello World\n"
+
+    def test_code_edit_preview_create_does_not_write(self, tmp_path):
+        """Create preview shows all additions without creating the file."""
+        tool = CodeEditTool()
+        test_file = tmp_path / "preview_create.txt"
+
+        preview = tool.preview_edit(
+            {
+                "filepath": str(test_file),
+                "operation": "create",
+                "content": "created\n",
+            }
+        )
+
+        assert preview.ok
+        assert "+created" in preview.diff
+        assert not test_file.exists()
+
+    def test_code_edit_preview_append_does_not_write(self, tmp_path):
+        """Append preview builds a diff without appending content."""
+        tool = CodeEditTool()
+        test_file = tmp_path / "preview_append.txt"
+        test_file.write_text("first\n")
+
+        preview = tool.preview_edit(
+            {
+                "filepath": str(test_file),
+                "operation": "append",
+                "content": "second",
+            }
+        )
+
+        assert preview.ok
+        assert "+second" in preview.diff
+        assert test_file.read_text() == "first\n"
+
+    def test_code_edit_preview_replace_lines_does_not_write(self, tmp_path):
+        """Replace-lines preview builds a diff without replacing lines."""
+        tool = CodeEditTool()
+        test_file = tmp_path / "preview_lines.txt"
+        test_file.write_text("one\ntwo\nthree\n")
+
+        preview = tool.preview_edit(
+            {
+                "filepath": str(test_file),
+                "operation": "replace_lines",
+                "startLine": 2,
+                "endLine": 2,
+                "content": "updated",
+            }
+        )
+
+        assert preview.ok
+        assert "-two" in preview.diff
+        assert "+updated" in preview.diff
+        assert test_file.read_text() == "one\ntwo\nthree\n"
+
     def test_code_edit_requires_prior_read_with_freshness_tracker(self, tmp_path):
         """Freshness tracker blocks edits to files the model has not seen."""
         test_file = tmp_path / "guarded.txt"

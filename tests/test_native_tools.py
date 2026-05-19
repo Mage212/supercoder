@@ -1239,6 +1239,212 @@ class TestChatTurnEventFlow:
         assert "Created file" in result
         assert (tmp_path / "approved.txt").read_text() == "ok"
 
+    def test_code_mode_edit_without_fresh_read_returns_preflight_error(self, tmp_path):
+        """CODE mode does not ask approval for an edit that cannot pass preflight."""
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+
+        target = tmp_path / "main.py"
+        target.write_text("old\n")
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+        mock_llm.chat_with_tools_interruptible.side_effect = [
+            CompletionResult(
+                content="",
+                tool_calls=[
+                    NativeToolCall(
+                        id="call_edit",
+                        name="code-edit",
+                        arguments={
+                            "filepath": "main.py",
+                            "operation": "search_replace",
+                            "search": "old",
+                            "replace": "new",
+                        },
+                    )
+                ],
+                raw_tool_calls=[
+                    {
+                        "id": "call_edit",
+                        "type": "function",
+                        "function": {"name": "code-edit", "arguments": "{}"},
+                    }
+                ],
+            ),
+            CompletionResult(content="Done.", tool_calls=[]),
+        ]
+        agent = CoderAgent(
+            llm=mock_llm,
+            tools=ALL_TOOLS,
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+        )
+
+        events = list(agent.chat_turn("Edit file"))
+        result = next(e for e in events if e["type"] == "tool_result")["content"]["result"]
+
+        assert "edit_confirm" not in [event["type"] for event in events]
+        assert "File was not read before edit" in result
+        assert target.read_text() == "old\n"
+
+    def test_code_mode_edit_after_file_read_sends_diff_preview(self, tmp_path):
+        """CODE mode sends a prepared diff preview before asking edit approval."""
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+
+        target = tmp_path / "main.py"
+        target.write_text("old\n")
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+        mock_llm.chat_with_tools_interruptible.side_effect = [
+            CompletionResult(
+                content="",
+                tool_calls=[
+                    NativeToolCall(
+                        id="call_read",
+                        name="file-read",
+                        arguments={"fileName": "main.py"},
+                    )
+                ],
+                raw_tool_calls=[
+                    {
+                        "id": "call_read",
+                        "type": "function",
+                        "function": {"name": "file-read", "arguments": "{}"},
+                    }
+                ],
+            ),
+            CompletionResult(
+                content="",
+                tool_calls=[
+                    NativeToolCall(
+                        id="call_edit",
+                        name="code-edit",
+                        arguments={
+                            "filepath": "main.py",
+                            "operation": "search_replace",
+                            "search": "old",
+                            "replace": "new",
+                        },
+                    )
+                ],
+                raw_tool_calls=[
+                    {
+                        "id": "call_edit",
+                        "type": "function",
+                        "function": {"name": "code-edit", "arguments": "{}"},
+                    }
+                ],
+            ),
+            CompletionResult(content="Done.", tool_calls=[]),
+        ]
+        agent = CoderAgent(
+            llm=mock_llm,
+            tools=ALL_TOOLS,
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+        )
+
+        events = []
+        for event in agent.chat_turn("Edit file"):
+            if event["type"] == "edit_confirm":
+                preview = event["content"].get("preview")
+                assert preview is not None
+                assert "-old" in preview.diff
+                assert "+new" in preview.diff
+                event["result"].update({"approved": True})
+            events.append(event)
+
+        edit_results = [
+            event["content"]["result"]
+            for event in events
+            if event["type"] == "tool_result" and event["content"]["name"] == "code-edit"
+        ]
+        assert [event["type"] for event in events].count("edit_confirm") == 1
+        assert "Replaced 1 occurrence" in edit_results[0]
+        assert target.read_text() == "new\n"
+
+    def test_code_mode_apply_and_accept_edits_skips_followup_confirm(self, tmp_path):
+        """Edit approval can switch the rest of the active loop to accept-edits."""
+        from supercoder.agent.agent_modes import AgentMode
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+        first_call = NativeToolCall(
+            id="call_first",
+            name="code-edit",
+            arguments={
+                "filepath": "first.txt",
+                "operation": "create",
+                "content": "first",
+            },
+        )
+        second_call = NativeToolCall(
+            id="call_second",
+            name="code-edit",
+            arguments={
+                "filepath": "second.txt",
+                "operation": "create",
+                "content": "second",
+            },
+        )
+        mock_llm.chat_with_tools_interruptible.side_effect = [
+            CompletionResult(
+                content="",
+                tool_calls=[first_call, second_call],
+                raw_tool_calls=[
+                    {
+                        "id": "call_first",
+                        "type": "function",
+                        "function": {"name": "code-edit", "arguments": "{}"},
+                    },
+                    {
+                        "id": "call_second",
+                        "type": "function",
+                        "function": {"name": "code-edit", "arguments": "{}"},
+                    },
+                ],
+            ),
+            CompletionResult(content="Done.", tool_calls=[]),
+        ]
+        agent = CoderAgent(
+            llm=mock_llm,
+            tools=ALL_TOOLS,
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+        )
+
+        events = []
+        for event in agent.chat_turn("Create files"):
+            if event["type"] == "edit_confirm":
+                event["result"].update({"approved": True, "decision": "apply_and_accept_edits"})
+            events.append(event)
+
+        assert [event["type"] for event in events].count("edit_confirm") == 1
+        assert agent.mode == AgentMode.ACCEPT_EDITS
+        assert (tmp_path / "first.txt").read_text() == "first"
+        assert (tmp_path / "second.txt").read_text() == "second"
+        second_messages = mock_llm.chat_with_tools_interruptible.call_args_list[1].args[0]
+        assert any(
+            getattr(message, "display_type", None) == "mode_policy"
+            and "Current mode: ACCEPT-EDITS" in message.content
+            for message in second_messages
+        )
+
     def test_accept_edits_mode_allows_code_edit_create(self, tmp_path):
         """ACCEPT_EDITS preserves the current low-friction edit behavior."""
         from supercoder.agent.agent_modes import AgentMode

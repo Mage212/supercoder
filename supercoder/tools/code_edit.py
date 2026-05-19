@@ -2,6 +2,7 @@
 
 import difflib
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -14,6 +15,33 @@ from .tool_utils import resolve_within_root
 
 if TYPE_CHECKING:
     from ..checkpoint import CheckpointManager
+
+
+@dataclass(frozen=True)
+class EditPreview:
+    """Non-mutating preview of a pending edit."""
+
+    filepath: str
+    operation: str
+    message: str = ""
+    diff: str = ""
+    error: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return not self.error
+
+
+@dataclass(frozen=True)
+class PreparedEdit:
+    """Resolved edit content ready to preview or apply."""
+
+    path: Path
+    operation: str
+    message: str
+    before: str
+    after: str
+    prelude: str = ""
 
 
 class CodeEditTool(BaseTool):
@@ -118,71 +146,121 @@ class CodeEditTool(BaseTool):
             },
         )
 
+    def preview_edit(self, arguments: str | dict) -> EditPreview:
+        """Build a non-mutating preview for a pending edit."""
+        args = self.parse_args(arguments) if isinstance(arguments, str) else dict(arguments)
+        filepath = str(args.get("filepath", args.get("fileName", "")))
+        operation = str(args.get("operation", "search_replace"))
+
+        if args.get("_parse_error"):
+            return EditPreview(
+                filepath=filepath,
+                operation=operation,
+                error=f"Error: Invalid JSON arguments: {args.get('raw', '')}",
+            )
+
+        prepared, error = self._prepare_edit(args)
+        if error or prepared is None:
+            return EditPreview(filepath=filepath, operation=operation, error=error or "Error")
+
+        return EditPreview(
+            filepath=str(prepared.path),
+            operation=prepared.operation,
+            message=prepared.message,
+            diff=self._generate_diff(prepared.before, prepared.after, prepared.path),
+        )
+
     def execute(self, arguments: str) -> str:
         args = self.parse_args(arguments)
         if args.get("_parse_error"):
             return f"Error: Invalid JSON arguments: {args.get('raw', '')}"
+
+        try:
+            prepared, error = self._prepare_edit(args, log_permission_denial=True)
+            if error or prepared is None:
+                return error or "Error preparing edit"
+
+            self._apply_prepared_edit(prepared)
+            diff = self._generate_diff(prepared.before, prepared.after, prepared.path)
+
+            if prepared.prelude:
+                return f"{prepared.message}\n\n{prepared.prelude}\n\nApplied changes:\n{diff}"
+            return f"{prepared.message}\n\n{diff}" if diff else prepared.message
+
+        except Exception as e:
+            return f"Error: {e}"
+
+    def _prepare_edit(
+        self, args: dict, *, log_permission_denial: bool = False
+    ) -> tuple[PreparedEdit | None, str]:
+        """Resolve and validate an edit without writing files."""
         filepath = args.get("filepath", args.get("fileName", ""))
         operation = args.get("operation", "search_replace")
 
         if not filepath:
-            return "Error: filepath is required"
+            return None, "Error: filepath is required"
 
-        path, error = resolve_within_root(filepath, self.allowed_root)
+        path, error = resolve_within_root(str(filepath), self.allowed_root)
         if error:
-            return error
+            return None, error
         if path is None:
-            return "Error: Invalid file path"
+            return None, "Error: Invalid file path"
 
         if self.permission_policy:
             decision = self.permission_policy.check_path(path, "write")
             if decision.denied:
-                get_logger().log_permission_decision(
-                    tool_name=self.definition.name,
-                    subject=self.permission_policy.relative_path(path),
-                    action=decision.action.value,
-                    reason=decision.reason,
-                    source=decision.source,
-                    matched_rule=decision.matched_rule,
-                )
-                return self.permission_policy.format_denial(filepath, decision)
+                if log_permission_denial:
+                    get_logger().log_permission_decision(
+                        tool_name=self.definition.name,
+                        subject=self.permission_policy.relative_path(path),
+                        action=decision.action.value,
+                        reason=decision.reason,
+                        source=decision.source,
+                        matched_rule=decision.matched_rule,
+                    )
+                return None, self.permission_policy.format_denial(str(filepath), decision)
 
-        # Handle create operation separately
         if operation == "create":
-            if path.exists():
-                return (
-                    f"Error: File '{filepath}' already exists. "
-                    "Use an edit operation after reading the file with file-read or @file."
-                )
-            return self._create_file(path, args.get("content", ""))
+            return self._prepare_create(path, args.get("content", ""))
 
-        # For other operations, file must exist
         if not path.exists():
-            return f"Error: File '{filepath}' not found"
+            return None, f"Error: File '{filepath}' not found"
 
         if self.freshness_tracker:
             freshness = self.freshness_tracker.check_edit(path, source=self.definition.name)
             if not freshness.allowed:
-                return f"Error: {freshness.reason}"
+                return None, f"Error: {freshness.reason}"
 
-        try:
-            if operation == "search_replace":
-                return self._search_replace(path, args.get("search", ""), args.get("replace", ""))
-            elif operation == "insert_after":
-                return self._insert_after(path, args.get("after", ""), args.get("content", ""))
-            elif operation == "insert_before":
-                return self._insert_before(path, args.get("before", ""), args.get("content", ""))
-            elif operation == "replace_lines":
-                return self._replace_lines(
-                    path, args.get("startLine", 1), args.get("endLine", 1), args.get("content", "")
-                )
-            elif operation == "append":
-                return self._append(path, args.get("content", ""))
-            else:
-                return f"Error: Unknown operation '{operation}'"
+        if operation == "search_replace":
+            return self._prepare_search_replace(
+                path, args.get("search", ""), args.get("replace", "")
+            )
+        if operation == "insert_after":
+            return self._prepare_insert_after(path, args.get("after", ""), args.get("content", ""))
+        if operation == "insert_before":
+            return self._prepare_insert_before(
+                path, args.get("before", ""), args.get("content", "")
+            )
+        if operation == "replace_lines":
+            return self._prepare_replace_lines(
+                path, args.get("startLine", 1), args.get("endLine", 1), args.get("content", "")
+            )
+        if operation == "append":
+            return self._prepare_append(path, args.get("content", ""))
+        return None, f"Error: Unknown operation '{operation}'"
 
-        except Exception as e:
-            return f"Error: {e}"
+    def _apply_prepared_edit(self, prepared: PreparedEdit) -> None:
+        """Write a prepared edit through the normal safe-write path."""
+        if prepared.operation == "create":
+            prepared.path.parent.mkdir(parents=True, exist_ok=True)
+            if self.checkpoint:
+                self.checkpoint.track_created_file(prepared.path)
+            AtomicFileWriter.write(prepared.path, prepared.after)
+            if self.freshness_tracker:
+                self.freshness_tracker.mark_written(prepared.path, source=self.definition.name)
+            return
+
+        self._safe_write(prepared.path, prepared.after)
 
     def _generate_diff(self, before: str, after: str, filepath: Path) -> str:
         """Generate unified diff between before and after content."""
@@ -368,6 +446,223 @@ class CodeEditTool(BaseTool):
                     parts.append(f"  {line}")
 
         return "\n".join(parts)
+
+    def _prepare_create(self, path: Path, content: str) -> tuple[PreparedEdit | None, str]:
+        """Prepare a file creation without writing it."""
+        if path.exists():
+            return (
+                None,
+                f"Error: File '{path}' already exists. "
+                "Use an edit operation after reading the file with file-read or @file.",
+            )
+        return PreparedEdit(
+            path=path,
+            operation="create",
+            message=f"✅ Created file: {path}",
+            before="",
+            after=content,
+        ), ""
+
+    def _prepare_search_replace(
+        self, path: Path, search: str, replace: str
+    ) -> tuple[PreparedEdit | None, str]:
+        """Prepare a search/replace edit without writing it."""
+        if not search:
+            return None, "Error: search string is required"
+
+        content_before = path.read_text()
+        match = self._find_best_match(content_before, search)
+
+        if not match["found"]:
+            return None, self._build_match_error(path, content_before, search, match)
+
+        matched_text = match["matched_text"]
+
+        if match["match_type"] == "exact":
+            count = content_before.count(search)
+            if count > 1:
+                return (
+                    None,
+                    f"Error: Search string found {count} times in {path}. "
+                    f"Provide a more specific search string with additional context.",
+                )
+
+        content_after = content_before.replace(matched_text, replace, 1)
+
+        if match["match_type"] == "exact":
+            message = f"✅ Replaced 1 occurrence in {path}"
+            prelude = ""
+        else:
+            message = (
+                f"✅ Replaced 1 occurrence in {path} "
+                f"({match['match_type']}, similarity: {match['ratio']:.0%})"
+            )
+            match_diff = self._generate_diff(search, match["matched_text"], path)
+            prelude = f"Match diff (searched vs found):\n{match_diff}"
+
+        return PreparedEdit(
+            path=path,
+            operation="search_replace",
+            message=message,
+            before=content_before,
+            after=content_after,
+            prelude=prelude,
+        ), ""
+
+    def _prepare_insert_after(
+        self, path: Path, after: str, content: str
+    ) -> tuple[PreparedEdit | None, str]:
+        """Prepare an insert-after edit without writing it."""
+        if not after:
+            return None, "Error: 'after' string is required"
+
+        content_before = path.read_text()
+        had_trailing_newline = content_before.endswith("\n")
+        lines = content_before.splitlines()
+
+        matching = [i for i, line in enumerate(lines) if after in line]
+        if not matching:
+            best_idx, best_ratio = -1, 0.0
+            for i, line in enumerate(lines):
+                ratio = difflib.SequenceMatcher(None, after, line).ratio()
+                if ratio > best_ratio:
+                    best_idx, best_ratio = i, ratio
+            if best_ratio >= 0.8:
+                matching = [best_idx]
+            else:
+                parts = [f"Error: Line containing '{after[:60]}' not found in {path}"]
+                if best_ratio > 0.4 and best_idx >= 0:
+                    parts.append(
+                        f"\nClosest match (line {best_idx + 1}, similarity: {best_ratio:.0%}):"
+                    )
+                    start = max(0, best_idx - 1)
+                    end = min(len(lines), best_idx + 2)
+                    for i in range(start, end):
+                        marker = ">>>" if i == best_idx else "   "
+                        parts.append(f"{marker} {i + 1:4d} | {lines[i]}")
+                return None, "\n".join(parts)
+
+        if len(matching) > 1:
+            return (
+                None,
+                f"Error: '{after[:50]}' found on {len(matching)} lines. "
+                f"Provide a more specific string to uniquely identify the target line.",
+            )
+
+        i = matching[0]
+        new_lines = content.splitlines()
+        lines = lines[: i + 1] + new_lines + lines[i + 1 :]
+        content_after = "\n".join(lines)
+        if had_trailing_newline:
+            content_after += "\n"
+
+        return PreparedEdit(
+            path=path,
+            operation="insert_after",
+            message=f"✅ Inserted {len(new_lines)} line(s) after line {i + 1} in {path}",
+            before=content_before,
+            after=content_after,
+        ), ""
+
+    def _prepare_insert_before(
+        self, path: Path, before: str, content: str
+    ) -> tuple[PreparedEdit | None, str]:
+        """Prepare an insert-before edit without writing it."""
+        if not before:
+            return None, "Error: 'before' string is required"
+
+        content_before = path.read_text()
+        had_trailing_newline = content_before.endswith("\n")
+        lines = content_before.splitlines()
+
+        matching = [i for i, line in enumerate(lines) if before in line]
+        if not matching:
+            best_idx, best_ratio = -1, 0.0
+            for i, line in enumerate(lines):
+                ratio = difflib.SequenceMatcher(None, before, line).ratio()
+                if ratio > best_ratio:
+                    best_idx, best_ratio = i, ratio
+            if best_ratio >= 0.8:
+                matching = [best_idx]
+            else:
+                parts = [f"Error: Line containing '{before[:60]}' not found in {path}"]
+                if best_ratio > 0.4 and best_idx >= 0:
+                    parts.append(
+                        f"\nClosest match (line {best_idx + 1}, similarity: {best_ratio:.0%}):"
+                    )
+                    start = max(0, best_idx - 1)
+                    end = min(len(lines), best_idx + 2)
+                    for i in range(start, end):
+                        marker = ">>>" if i == best_idx else "   "
+                        parts.append(f"{marker} {i + 1:4d} | {lines[i]}")
+                return None, "\n".join(parts)
+
+        if len(matching) > 1:
+            return (
+                None,
+                f"Error: '{before[:50]}' found on {len(matching)} lines. "
+                f"Provide a more specific string to uniquely identify the target line.",
+            )
+
+        i = matching[0]
+        new_lines = content.splitlines()
+        lines = lines[:i] + new_lines + lines[i:]
+        content_after = "\n".join(lines)
+        if had_trailing_newline:
+            content_after += "\n"
+
+        return PreparedEdit(
+            path=path,
+            operation="insert_before",
+            message=f"✅ Inserted {len(new_lines)} line(s) before line {i + 1} in {path}",
+            before=content_before,
+            after=content_after,
+        ), ""
+
+    def _prepare_replace_lines(
+        self, path: Path, start: int, end: int, content: str
+    ) -> tuple[PreparedEdit | None, str]:
+        """Prepare a replace-lines edit without writing it."""
+        content_before = path.read_text()
+        had_trailing_newline = content_before.endswith("\n")
+        lines = content_before.splitlines()
+        total = len(lines)
+
+        if start < 1 or start > total:
+            return None, f"Error: startLine {start} out of range (1-{total})"
+        if end < start or end > total:
+            return None, f"Error: endLine {end} invalid (must be {start}-{total})"
+
+        new_lines = content.splitlines() if content else []
+        lines = lines[: start - 1] + new_lines + lines[end:]
+        content_after = "\n".join(lines)
+        if had_trailing_newline:
+            content_after += "\n"
+
+        return PreparedEdit(
+            path=path,
+            operation="replace_lines",
+            message=f"✅ Replaced lines {start}-{end} with {len(new_lines)} line(s) in {path}",
+            before=content_before,
+            after=content_after,
+        ), ""
+
+    def _prepare_append(self, path: Path, content: str) -> tuple[PreparedEdit | None, str]:
+        """Prepare an append edit without writing it."""
+        content_before = path.read_text()
+        if not content_before.endswith("\n"):
+            content_before_normalized = content_before + "\n"
+        else:
+            content_before_normalized = content_before
+        content_after = content_before_normalized + content + "\n"
+
+        return PreparedEdit(
+            path=path,
+            operation="append",
+            message=f"✅ Appended to {path}",
+            before=content_before,
+            after=content_after,
+        ), ""
 
     def _create_file(self, path: Path, content: str) -> str:
         """Create a new file."""

@@ -171,7 +171,12 @@ class CoderAgent:
         self._log_permission_decision("command-exec", command, decision)
         return decision
 
-    def _log_edit_confirmation(self, arguments: dict, approved: bool) -> None:
+    def _log_edit_confirmation(
+        self,
+        arguments: dict,
+        approved: bool,
+        decision: str | None = None,
+    ) -> None:
         """Log a host-side edit confirmation without file contents."""
         filepath = str(arguments.get("filepath") or arguments.get("fileName") or "")
         operation = str(arguments.get("operation") or "")
@@ -180,7 +185,32 @@ class CoderAgent:
             filepath=filepath,
             operation=operation,
             approved=approved,
+            decision=decision,
         )
+
+    def _preview_code_edit_for_confirmation(
+        self, arguments: dict
+    ) -> tuple[object | None, str | None]:
+        """Prepare a code-edit preview before asking the user for approval."""
+        tool = self.tools.get("code-edit")
+        preview_edit = getattr(tool, "preview_edit", None)
+        if not callable(preview_edit):
+            return None, "Error: code-edit preview is unavailable."
+
+        try:
+            preview = preview_edit(arguments)
+        except Exception as exc:
+            get_logger().log_error(exc)
+            return None, f"Error preparing edit preview: {exc}"
+
+        if not getattr(preview, "ok", False):
+            error = str(getattr(preview, "error", "") or "Error preparing edit preview")
+            return None, error
+
+        if not str(getattr(preview, "diff", "")):
+            return None, "Error: Edit preview produced no changes."
+
+        return preview, None
 
     def _add_command_permission_rule(
         self,
@@ -563,6 +593,7 @@ class CoderAgent:
                 if auto_compact_event:
                     yield auto_compact_event
 
+            self._announce_mode_policy_if_needed()
             messages = self.context.get_messages_for_api()
             get_logger().log_messages(messages)
 
@@ -691,14 +722,37 @@ class CoderAgent:
                     continue
 
                 if name == "code-edit" and self._mode == AgentMode.CODE:
+                    preview, preview_error = self._preview_code_edit_for_confirmation(arguments)
+                    if preview_error:
+                        tool_result = preview_error
+                        args_str = json.dumps(arguments)
+                        self._log_early_tool_outcome(name, args_str, tool_result)
+                        yield {
+                            "type": "tool_result",
+                            "content": {"name": name, "result": tool_result},
+                        }
+                        self.context.add_message(
+                            Message(
+                                role="tool",
+                                content=tool_result,
+                                tool_call_id=tc.id,
+                                name=name,
+                                display_type="tool_result",
+                            )
+                        )
+                        continue
+
                     confirm_result: dict = {}
                     yield {
                         "type": "edit_confirm",
-                        "content": {"arguments": arguments},
+                        "content": {"arguments": arguments, "preview": preview},
                         "result": confirm_result,
                     }
                     approved = bool(confirm_result.get("approved", False))
-                    self._log_edit_confirmation(arguments, approved)
+                    confirm_decision = str(confirm_result.get("decision") or "")
+                    self._log_edit_confirmation(arguments, approved, confirm_decision or None)
+                    if approved and confirm_decision == "apply_and_accept_edits":
+                        self.set_mode(AgentMode.ACCEPT_EDITS)
                     if not approved:
                         tool_result = "File edit cancelled by user."
                         args_str = json.dumps(arguments)
@@ -909,6 +963,7 @@ class CoderAgent:
                 return
 
             # Get messages for API
+            self._announce_mode_policy_if_needed()
             messages = self.context.get_messages_for_api()
             get_logger().log_messages(messages)
 
@@ -1019,14 +1074,32 @@ class CoderAgent:
                             continue
 
                         if name == "code-edit" and self._mode == AgentMode.CODE:
+                            preview, preview_error = self._preview_code_edit_for_confirmation(
+                                parsed_args
+                            )
+                            if preview_error:
+                                result = preview_error
+                                self._log_early_tool_outcome(name, args, result)
+                                yield {
+                                    "type": "tool_result",
+                                    "content": {"name": name, "result": result},
+                                }
+                                all_results.append(f"[{name}]: {result}")
+                                continue
+
                             confirm_result: dict = {}
                             yield {
                                 "type": "edit_confirm",
-                                "content": {"arguments": parsed_args},
+                                "content": {"arguments": parsed_args, "preview": preview},
                                 "result": confirm_result,
                             }
                             approved = bool(confirm_result.get("approved", False))
-                            self._log_edit_confirmation(parsed_args, approved)
+                            confirm_decision = str(confirm_result.get("decision") or "")
+                            self._log_edit_confirmation(
+                                parsed_args, approved, confirm_decision or None
+                            )
+                            if approved and confirm_decision == "apply_and_accept_edits":
+                                self.set_mode(AgentMode.ACCEPT_EDITS)
                             if not approved:
                                 result = "File edit cancelled by user."
                                 self._log_early_tool_outcome(name, args, result)

@@ -2,11 +2,15 @@
 
 ## Unreleased
 
+## v0.3.8
+
 - **Persistent Command Approvals**: Added project-local command approval rules in `.supercoder/permissions.yaml`, with one-time, session, always-allow, and always-deny choices in the shell confirmation prompt.
 - **Permission Management**: Added `/permissions` to inspect, remove, or clear saved project command rules.
 - **Approval Debug Logs**: Debug JSONL logs now include `permission_rule_change` events when session or persistent command rules are added, removed, or cleared.
 - **CODE Edit Approval**: `code` mode now asks before applying file edits instead of blocking them outright; `accept-edits` remains the low-friction editing mode.
 - **Interactive Approval Menus**: Shell command and file edit confirmations now use arrow-key menus with `Enter` to confirm and `Esc` to cancel, removing the need for English-layout letter shortcuts.
+- **Edit Approval Upgrade**: File edit approvals now show a highlighted diff preview and can apply the current edit while switching the active loop to `accept-edits`.
+- **Edit Approval Preflight**: SuperCoder now prepares the edit diff before asking for approval; if the edit cannot pass read-before-edit or path checks, the model receives the tool error immediately instead of showing an approval menu for an impossible change.
 
 ## v0.3.7
 

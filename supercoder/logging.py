@@ -260,6 +260,7 @@ class ConversationLogger:
         filepath: str,
         operation: str,
         approved: bool,
+        decision: str | None = None,
     ) -> None:
         """Log host-side file edit confirmations without file contents."""
         if not self.enabled:
@@ -271,6 +272,7 @@ class ConversationLogger:
                 "filepath": filepath[:300],
                 "operation": operation,
                 "approved": approved,
+                "decision": decision,
                 "timestamp": datetime.now().isoformat(),
             }
         )

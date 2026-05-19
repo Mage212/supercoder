@@ -1,11 +1,13 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+from rich.console import Console
 
 from supercoder.agent.agent_modes import AgentMode
 from supercoder.agent.coder_agent import CoderAgent
 from supercoder.permissions import PermissionAction, PermissionPolicy
 from supercoder.repl import SuperCoderREPL
+from supercoder.tools.code_edit import CodeEditTool
 
 
 # Mock dependencies
@@ -249,6 +251,7 @@ def test_repl_command_confirm_preserves_agent_decisions(choice, expected):
     ("choice", "expected"),
     [
         ("apply", {"approved": True}),
+        ("apply_accept_edits", {"approved": True, "decision": "apply_and_accept_edits"}),
         ("cancel", {"approved": False}),
     ],
 )
@@ -259,6 +262,8 @@ def test_repl_edit_confirm_preserves_agent_result(choice, expected):
     agent.mode = AgentMode.CODE
     repl = SuperCoderREPL(agent)
     repl._select_confirmation_action = MagicMock(return_value=choice)
+    repl._print_transient_block = MagicMock(return_value=1)
+    repl._clear_transient_lines = MagicMock()
 
     assert (
         repl._handle_edit_confirm(
@@ -271,6 +276,81 @@ def test_repl_edit_confirm_preserves_agent_result(choice, expected):
         )
         == expected
     )
+
+
+def test_repl_edit_confirm_menu_includes_accept_edits_choice():
+    agent = MagicMock()
+    agent.llm.model = "test"
+    agent.llm.config.model = "test"
+    agent.mode = AgentMode.CODE
+    repl = SuperCoderREPL(agent)
+    repl._print_transient_block = MagicMock(return_value=1)
+    repl._clear_transient_lines = MagicMock()
+    repl._select_confirmation_action = MagicMock(return_value="cancel")
+
+    repl._handle_edit_confirm({"filepath": "main.py", "operation": "create", "content": "ok"})
+
+    choices = repl._select_confirmation_action.call_args.args[1]
+    assert ("Apply and switch to accept-edits", "apply_accept_edits") in choices
+
+
+def test_repl_edit_confirm_uses_diff_preview(tmp_path):
+    target = tmp_path / "main.py"
+    target.write_text("old\n")
+    agent = MagicMock()
+    agent.llm.model = "test"
+    agent.llm.config.model = "test"
+    agent.mode = AgentMode.CODE
+    agent.tools = {"code-edit": CodeEditTool()}
+    repl = SuperCoderREPL(agent)
+
+    preview = repl._format_edit_diff_preview(
+        {
+            "filepath": str(target),
+            "operation": "search_replace",
+            "search": "old",
+            "replace": "new",
+        }
+    )
+
+    console = Console(record=True, width=100)
+    console.print(preview)
+    rendered = console.export_text()
+    assert "---" in rendered
+    assert "+++" in rendered
+    assert "-old" in rendered
+    assert "+new" in rendered
+    assert target.read_text() == "old\n"
+
+
+def test_repl_edit_confirm_uses_prepared_diff_preview(tmp_path):
+    target = tmp_path / "main.py"
+    target.write_text("old\n")
+    args = {
+        "filepath": str(target),
+        "operation": "search_replace",
+        "search": "old",
+        "replace": "new",
+    }
+    tool = CodeEditTool()
+    prepared_preview = tool.preview_edit(args)
+    agent = MagicMock()
+    agent.llm.model = "test"
+    agent.llm.config.model = "test"
+    agent.mode = AgentMode.CODE
+    agent.tools = {}
+    repl = SuperCoderREPL(agent)
+
+    preview = repl._format_edit_diff_preview(args, prepared_preview)
+
+    console = Console(record=True, width=100)
+    console.print(preview)
+    rendered = console.export_text()
+    assert "---" in rendered
+    assert "+++" in rendered
+    assert "-old" in rendered
+    assert "+new" in rendered
+    assert target.read_text() == "old\n"
 
 
 def test_repl_permissions_remove_and_clear(tmp_path):
