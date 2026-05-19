@@ -47,9 +47,10 @@ Provides an organized, tree-based view of your project's folders and files, inte
 Modifies your codebase seamlessly using diff-based operations. Every edit is **atomic** and protected by a **checkpoint system**:
 - **Atomic Writes**: Changes are written to temporary files first, then moved to the original path.
 - **Auto-Backups**: Original file state is saved before any modification.
-- **Host Approval**: In `code` mode, every file edit asks for manual approval with a highlighted diff preview before execution. The approval menu can also apply the current edit and switch the rest of the loop to `accept-edits`.
+- **Host Approval**: In `code` mode, every valid file edit asks for manual approval with a highlighted diff preview before execution. If an edit cannot pass read-before-edit or path checks, the model receives the tool error immediately instead of showing an approval menu for an impossible change.
+- **Apply and Auto-Accept**: The approval menu can apply the current edit and switch the rest of the active loop to `accept-edits`.
 - **Smart Undo**: Revert any number of changes with the `/undo` command.
-- **Operations**: `search_replace`, `insert_after`, `replace_lines`, and `create`.
+- **Operations**: `search_replace`, `insert_after`, `insert_before`, `replace_lines`, `append`, and `create`.
 
 ### 📜 Supercoder Rules (Custom rules)
 Leverage project-specific rules to guide the agent. Place `.md` files in `.supercoder/rules/` and they will be automatically loaded into the agent's context. In lean mode, rules are compacted but still included.
@@ -65,7 +66,7 @@ Uses `tree-sitter` and `networkx` to generate a high-level map of your repositor
 - **Tool Output Compaction**: Large tool outputs are summarized for the model and stored in full under `.supercoder/tool-outputs/`.
 
 ### 🧪 Debug Diagnostics
-Run with `--debug` to write JSONL logs to `~/.supercoder/logs/`. Logs include native tool-call metadata, tool result masking events, permission decisions, edit confirmations, freshness checks, offload paths, API request messages, reasoning, responses, and errors.
+Run with `--debug` to write JSONL logs to `~/.supercoder/logs/`. Logs include native tool-call metadata, tool result masking events, permission decisions, permission rule changes, edit confirmations, freshness checks, approval/preflight outcomes, offload paths, API request messages, reasoning, responses, and errors.
 
 ### 💾 Session Persistence
 - **Auto-Save**: Your conversation is automatically saved after each message exchange.
@@ -166,6 +167,7 @@ models:
 
 # Shared settings (applied to all models)
 temperature: 0.2
+top_p: 0.1
 max_context_tokens: 32000
 reserved_for_response: 4096
 auto_compact: true
@@ -255,6 +257,8 @@ supercoder --stream                    # Enable deprecated text-streaming mode
 | `/code` | Switch to Code mode (edits require approval) |
 | `/code <request>` | Execute one request in code mode, then return to previous mode |
 | `/accept-edits` | Switch to editing mode (file edits apply without per-edit prompts) |
+| `/accept`, `/edit` | Aliases for `/accept-edits` |
+| `Shift+Tab` | Cycle modes: `ask` -> `plan` -> `code` -> `accept-edits` |
 | `/undo` | Revert changes to a specific checkpoint |
 | `/help` | Show available commands |
 | `/continue` | Resume a previous session (interactive picker) |
@@ -264,6 +268,7 @@ supercoder --stream                    # Enable deprecated text-streaming mode
 | `/config` | Show current active configuration |
 | `/models` | List available model profiles |
 | `/model <name>` | Switch to a specific model profile |
+| `/permissions` | Show, remove, or clear saved command approvals |
 | `/debug` | Toggle verbose debug logging |
 | `/exit` | Exit the application |
 
