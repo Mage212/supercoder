@@ -128,6 +128,151 @@ def test_repl_edit_preview_omits_full_long_content():
     assert len(text) < 1400
 
 
+def test_repl_confirmation_menu_uses_escape_cancel(monkeypatch):
+    agent = MagicMock()
+    agent.llm.model = "test"
+    agent.llm.config.model = "test"
+    agent.mode = AgentMode.CODE
+    repl = SuperCoderREPL(agent)
+
+    class FakeKeyBindings:
+        def __init__(self):
+            self.handlers = {}
+
+        def add(self, *keys, **kwargs):
+            def decorator(handler):
+                self.handlers[keys] = (handler, kwargs)
+                return handler
+
+            return decorator
+
+    class FakeApplication:
+        def __init__(self):
+            self.key_bindings = FakeKeyBindings()
+            self.result = None
+
+        def exit(self, result=None, **_kwargs):
+            self.result = result
+
+    class FakeEvent:
+        def __init__(self, app):
+            self.app = app
+
+    class FakeQuestion:
+        def __init__(self):
+            self.application = FakeApplication()
+
+        def unsafe_ask(self):
+            handler, _kwargs = self.application.key_bindings.handlers[("escape",)]
+            handler(FakeEvent(self.application))
+            return self.application.result
+
+    captured = {}
+
+    def fake_select(message, choices, **kwargs):
+        captured["message"] = message
+        captured["choices"] = [(choice.title, choice.value) for choice in choices]
+        captured["kwargs"] = kwargs
+        return FakeQuestion()
+
+    monkeypatch.setattr("questionary.select", fake_select)
+
+    result = repl._select_confirmation_action(
+        "Choose action",
+        [("Do it", "do_it"), ("Cancel", "cancel")],
+        "cancel",
+    )
+
+    assert result == "cancel"
+    assert captured["message"] == "Choose action"
+    assert captured["choices"] == [("Do it", "do_it"), ("Cancel", "cancel")]
+    assert captured["kwargs"]["use_arrow_keys"] is True
+    assert captured["kwargs"]["use_shortcuts"] is False
+
+
+def test_repl_confirmation_menu_falls_back_to_cancel(monkeypatch):
+    agent = MagicMock()
+    agent.llm.model = "test"
+    agent.llm.config.model = "test"
+    agent.mode = AgentMode.CODE
+    repl = SuperCoderREPL(agent)
+
+    class FakeKeyBindings:
+        def add(self, *_keys, **_kwargs):
+            def decorator(handler):
+                return handler
+
+            return decorator
+
+    class FakeApplication:
+        key_bindings = FakeKeyBindings()
+
+    class FakeQuestion:
+        application = FakeApplication()
+
+        def unsafe_ask(self):
+            return None
+
+    monkeypatch.setattr("questionary.select", lambda *_args, **_kwargs: FakeQuestion())
+
+    result = repl._select_confirmation_action(
+        "Choose action",
+        [("Do it", "do_it"), ("Cancel", "cancel")],
+        "cancel",
+    )
+
+    assert result == "cancel"
+
+
+@pytest.mark.parametrize(
+    ("choice", "expected"),
+    [
+        ("approve_once", {"approved": True, "decision": "approve_once"}),
+        ("allow_session", {"approved": True, "decision": "allow_session"}),
+        ("allow_persistent", {"approved": True, "decision": "allow_persistent"}),
+        ("deny_persistent", {"approved": False, "decision": "deny_persistent"}),
+        ("deny_once", {"approved": False, "decision": "deny_once"}),
+    ],
+)
+def test_repl_command_confirm_preserves_agent_decisions(choice, expected):
+    agent = MagicMock()
+    agent.llm.model = "test"
+    agent.llm.config.model = "test"
+    agent.mode = AgentMode.CODE
+    repl = SuperCoderREPL(agent)
+    repl._select_confirmation_action = MagicMock(return_value=choice)
+
+    assert repl._handle_command_confirm("echo hi") == expected
+
+
+@pytest.mark.parametrize(
+    ("choice", "expected"),
+    [
+        ("apply", {"approved": True}),
+        ("cancel", {"approved": False}),
+    ],
+)
+def test_repl_edit_confirm_preserves_agent_result(choice, expected):
+    agent = MagicMock()
+    agent.llm.model = "test"
+    agent.llm.config.model = "test"
+    agent.mode = AgentMode.CODE
+    repl = SuperCoderREPL(agent)
+    repl._select_confirmation_action = MagicMock(return_value=choice)
+
+    assert (
+        repl._handle_edit_confirm(
+            {
+                "filepath": "main.py",
+                "operation": "search_replace",
+                "search": "old",
+                "replace": "new",
+            }
+        )
+        == expected
+    )
+
+
 def test_repl_permissions_remove_and_clear(tmp_path):
     agent = MagicMock()
     agent.llm.model = "test"

@@ -838,14 +838,56 @@ class SuperCoderREPL:
         """Display a compact summary of host-attached @path context."""
         self.console.print(f"[dim]{summarize_context_attachment(summary)}[/]")
 
+    def _select_confirmation_action(
+        self,
+        message: str,
+        options: list[tuple[str, str]],
+        cancel_value: str,
+    ) -> str:
+        """Show an arrow-key confirmation menu and return the selected value."""
+        from questionary import Choice, Style, select
+
+        style = Style(
+            [
+                ("qmark", "fg:#00aa00 bold"),
+                ("pointer", "fg:#00aa00 bold"),
+                ("highlighted", "bold"),
+            ]
+        )
+        question = select(
+            message,
+            choices=[Choice(title=title, value=value) for title, value in options],
+            style=style,
+            qmark="▸",
+            pointer=">",
+            instruction="(↑↓ select, Enter confirm, Esc cancel)",
+            use_shortcuts=False,
+            use_arrow_keys=True,
+            use_jk_keys=False,
+            use_emacs_keys=False,
+        )
+
+        key_bindings = getattr(question.application, "key_bindings", None)
+        if key_bindings is not None:
+
+            @key_bindings.add("escape", eager=True)
+            def _(event):
+                event.app.exit(result=cancel_value)
+
+        try:
+            selected = question.unsafe_ask()
+        except (KeyboardInterrupt, EOFError):
+            selected = cancel_value
+
+        if isinstance(selected, str) and selected:
+            return selected
+        return cancel_value
+
     def _handle_command_confirm(self, command: str) -> dict[str, object]:
         """Ask user to approve or deny a shell command before it runs.
 
         Returns a structured decision consumed by the agent.
         """
-        from prompt_toolkit import prompt as pt_prompt
-        from prompt_toolkit.key_binding import KeyBindings
-
         self._print_block(
             f"[bold]Command:[/]\n[yellow]{command}[/]",
             "Run Command?",
@@ -853,57 +895,28 @@ class SuperCoderREPL:
             "⚡",
         )
 
-        kb = KeyBindings()
-
-        @kb.add("y")
-        @kb.add("Y")
-        def _(event):
-            event.app.exit(result="yes")
-
-        @kb.add("s")
-        @kb.add("S")
-        def _(event):
-            event.app.exit(result="session")
-
-        @kb.add("a")
-        @kb.add("A")
-        def _(event):
-            event.app.exit(result="always")
-
-        @kb.add("d")
-        @kb.add("D")
-        def _(event):
-            event.app.exit(result="deny_always")
-
-        @kb.add("n")
-        @kb.add("N")
-        @kb.add("escape")
-        @kb.add("enter")
-        def _(event):
-            event.app.exit(result="no")
-
-        self.console.print(
-            "  [bold green][[y]][/bold green] Once   "
-            "[bold cyan][[s]][/bold cyan] Session   "
-            "[bold cyan][[a]][/bold cyan] Always   "
-            "[bold yellow][[d]][/bold yellow] Always deny   "
-            "[bold red][[n]][/bold red] No"
+        choice = self._select_confirmation_action(
+            "Choose command action",
+            [
+                ("Run once", "approve_once"),
+                ("Allow for this session", "allow_session"),
+                ("Always allow for this project", "allow_persistent"),
+                ("Always deny for this project", "deny_persistent"),
+                ("Cancel", "deny_once"),
+            ],
+            "deny_once",
         )
-        try:
-            choice = pt_prompt("  > ", key_bindings=kb)
-        except (KeyboardInterrupt, EOFError):
-            choice = "no"
 
-        if choice == "yes":
+        if choice == "approve_once":
             self.console.print("[green]✓ Approved[/]")
             return {"approved": True, "decision": "approve_once"}
-        if choice == "session":
+        if choice == "allow_session":
             self.console.print("[green]✓ Approved (allowed this session)[/]")
             return {"approved": True, "decision": "allow_session"}
-        if choice == "always":
+        if choice == "allow_persistent":
             self.console.print("[green]✓ Approved (saved for this project)[/]")
             return {"approved": True, "decision": "allow_persistent"}
-        if choice == "deny_always":
+        if choice == "deny_persistent":
             self.console.print("[yellow]✓ Denied (saved for this project)[/]")
             return {"approved": False, "decision": "deny_persistent"}
         self.console.print("[red]✗ Cancelled[/]")
@@ -911,34 +924,18 @@ class SuperCoderREPL:
 
     def _handle_edit_confirm(self, arguments: dict) -> dict[str, object]:
         """Ask user to approve or deny a file edit before it runs."""
-        from prompt_toolkit import prompt as pt_prompt
-        from prompt_toolkit.key_binding import KeyBindings
-
         self._print_block(self._format_edit_preview(arguments), "Apply File Edit?", "cyan", "📝")
 
-        kb = KeyBindings()
-
-        @kb.add("y")
-        @kb.add("Y")
-        def _(event):
-            event.app.exit(result="yes")
-
-        @kb.add("n")
-        @kb.add("N")
-        @kb.add("escape")
-        @kb.add("enter")
-        def _(event):
-            event.app.exit(result="no")
-
-        self.console.print(
-            "  [bold green][[y]][/bold green] Apply   [bold red][[n]][/bold red] Cancel"
+        choice = self._select_confirmation_action(
+            "Choose edit action",
+            [
+                ("Apply edit", "apply"),
+                ("Cancel", "cancel"),
+            ],
+            "cancel",
         )
-        try:
-            choice = pt_prompt("  > ", key_bindings=kb)
-        except (KeyboardInterrupt, EOFError):
-            choice = "no"
 
-        if choice == "yes":
+        if choice == "apply":
             self.console.print("[green]✓ Edit approved[/]")
             return {"approved": True}
         self.console.print("[red]✗ Edit cancelled[/]")

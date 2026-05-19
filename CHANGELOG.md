@@ -6,6 +6,7 @@
 - **Permission Management**: Added `/permissions` to inspect, remove, or clear saved project command rules.
 - **Approval Debug Logs**: Debug JSONL logs now include `permission_rule_change` events when session or persistent command rules are added, removed, or cleared.
 - **CODE Edit Approval**: `code` mode now asks before applying file edits instead of blocking them outright; `accept-edits` remains the low-friction editing mode.
+- **Interactive Approval Menus**: Shell command and file edit confirmations now use arrow-key menus with `Enter` to confirm and `Esc` to cancel, removing the need for English-layout letter shortcuts.
 
 ## v0.3.7
 

@@ -286,13 +286,14 @@ Before running any shell command, SuperCoder pauses and asks for explicit approv
 ⚡ Run Command?
 Command:
   <the command to execute>
-  [y] Once   [s] Session   [a] Always   [d] Always deny   [n] No
+▸ Choose command action (↑↓ select, Enter confirm, Esc cancel)
+  > Run once
+    Allow for this session
+    Always allow for this project
+    Always deny for this project
+    Cancel
 ```
-Single keypress response:
-- `[y]` approves once.
-- `[s]` allows the exact command for the current process.
-- `[a]` saves a project-local allow rule in `.supercoder/permissions.yaml`.
-- `[d]` saves a project-local deny rule in `.supercoder/permissions.yaml`.
+Use the arrow-key menu to choose whether to approve once, allow the exact command for the current process, save a project-local allow rule, save a project-local deny rule, or cancel with `Esc`.
 
 Use `/permissions` to inspect, remove, or clear project-local command approval rules.
 
