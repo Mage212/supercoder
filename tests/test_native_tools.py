@@ -8,6 +8,7 @@ Covers:
 - chat_with_tools() response parsing
 """
 
+from datetime import date
 from unittest.mock import MagicMock
 
 import pytest
@@ -254,10 +255,15 @@ class TestChatTurnEventFlow:
         api_messages = mock_llm.chat_with_tools_interruptible.call_args[0][0]
 
         assert events[0]["type"] == "context_attachment"
-        assert [m.display_type for m in messages[:2]] == ["context_attachment", "user_input"]
-        assert '<attached_file path="main.py"' in messages[0].content
-        assert api_messages[1].display_type == "context_attachment"
-        assert api_messages[2].content == "Review @main.py"
+        assert [m.display_type for m in messages[:3]] == [
+            "mode_policy",
+            "context_attachment",
+            "user_input",
+        ]
+        assert '<attached_file path="main.py"' in messages[1].content
+        assert api_messages[1].display_type == "mode_policy"
+        assert api_messages[2].display_type == "context_attachment"
+        assert api_messages[3].content == "Review @main.py"
 
     def test_response_with_reasoning(self):
         """LLM returns reasoning + text → thinking + response + done."""
@@ -651,6 +657,450 @@ class TestChatTurnEventFlow:
         ask_tools = [tool.definition.name for tool in agent._get_tools_for_mode()]
         assert "glob" in ask_tools
         assert "code-edit" not in ask_tools
+
+    def test_set_mode_does_not_change_system_prompt(self, tmp_path):
+        """Mode switches must not invalidate the stable system prompt prefix."""
+        from supercoder.agent.agent_modes import AgentMode
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+        agent = CoderAgent(
+            llm=mock_llm,
+            tools=ALL_TOOLS,
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+        )
+
+        before = agent.context.get_messages_for_api()[0].content
+        agent.set_mode(AgentMode.ASK)
+        after = agent.context.get_messages_for_api()[0].content
+
+        assert before == after
+
+    def test_mode_policy_is_announced_once_after_mode_change(self, tmp_path):
+        """The in-band mode instruction should not be repeated on every turn."""
+        from supercoder.agent.agent_modes import AgentMode
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+        mock_llm.chat_with_tools_interruptible.side_effect = [
+            CompletionResult(content="One.", tool_calls=[]),
+            CompletionResult(content="Two.", tool_calls=[]),
+            CompletionResult(content="Three.", tool_calls=[]),
+        ]
+        agent = CoderAgent(
+            llm=mock_llm,
+            tools=ALL_TOOLS,
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+        )
+
+        agent.set_mode(AgentMode.ASK)
+        list(agent.chat_turn("First"))
+        list(agent.chat_turn("Second"))
+        agent.set_mode(AgentMode.PLAN)
+        list(agent.chat_turn("Third"))
+
+        policies = [m for m in agent.context.get_messages() if m.display_type == "mode_policy"]
+        assert [p.content.splitlines()[1].split(".")[0] for p in policies] == [
+            "Current mode: ASK",
+            "Current mode: PLAN",
+        ]
+
+    def test_mode_policy_is_announced_again_after_compact(self, tmp_path):
+        """Compacted history should get the current mode policy on the next turn."""
+        from supercoder.agent.agent_modes import AgentMode
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+        mock_llm.chat_with_tools_interruptible.side_effect = [
+            CompletionResult(content="Before compact.", tool_calls=[]),
+            CompletionResult(content="Compact summary", tool_calls=[]),
+            CompletionResult(content="After compact.", tool_calls=[]),
+        ]
+        agent = CoderAgent(
+            llm=mock_llm,
+            tools=ALL_TOOLS,
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+        )
+
+        agent.set_mode(AgentMode.ASK)
+        list(agent.chat_turn("Before"))
+        agent.compact_context()
+        list(agent.chat_turn("After"))
+
+        policies = [m for m in agent.context.get_messages() if m.display_type == "mode_policy"]
+        assert len(policies) == 1
+        assert "Current mode: ASK" in policies[0].content
+
+    def test_ask_mode_blocks_code_edit(self, tmp_path):
+        """ASK mode is enforced by the host even if the model calls code-edit."""
+        from supercoder.agent.agent_modes import AgentMode
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+        mock_llm.chat_with_tools_interruptible.side_effect = [
+            CompletionResult(
+                content="",
+                tool_calls=[
+                    NativeToolCall(
+                        id="call_edit",
+                        name="code-edit",
+                        arguments={
+                            "filepath": "blocked.txt",
+                            "operation": "create",
+                            "content": "nope",
+                        },
+                    )
+                ],
+                raw_tool_calls=[
+                    {
+                        "id": "call_edit",
+                        "type": "function",
+                        "function": {"name": "code-edit", "arguments": "{}"},
+                    }
+                ],
+            ),
+            CompletionResult(content="Done.", tool_calls=[]),
+        ]
+        agent = CoderAgent(
+            llm=mock_llm,
+            tools=ALL_TOOLS,
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+        )
+        agent.set_mode(AgentMode.ASK)
+
+        events = list(agent.chat_turn("Create a file"))
+        result = next(e for e in events if e["type"] == "tool_result")["content"]["result"]
+
+        assert "ASK mode is read-only" in result
+        assert not (tmp_path / "blocked.txt").exists()
+
+    def test_plan_mode_blocks_command_exec(self, tmp_path):
+        """PLAN mode can inspect and save plans, but cannot run shell commands."""
+        from supercoder.agent.agent_modes import AgentMode
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+        mock_llm.chat_with_tools_interruptible.side_effect = [
+            CompletionResult(
+                content="",
+                tool_calls=[
+                    NativeToolCall(
+                        id="call_cmd",
+                        name="command-exec",
+                        arguments={"command": "echo blocked"},
+                    )
+                ],
+                raw_tool_calls=[
+                    {
+                        "id": "call_cmd",
+                        "type": "function",
+                        "function": {"name": "command-exec", "arguments": "{}"},
+                    }
+                ],
+            ),
+            CompletionResult(content="Done.", tool_calls=[]),
+        ]
+        agent = CoderAgent(
+            llm=mock_llm,
+            tools=ALL_TOOLS,
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+        )
+        agent.set_mode(AgentMode.PLAN)
+
+        events = list(agent.chat_turn("Run command"))
+        types = [event["type"] for event in events]
+        result = next(e for e in events if e["type"] == "tool_result")["content"]["result"]
+
+        assert "command_confirm" not in types
+        assert "PLAN mode blocks shell commands" in result
+
+    def test_plan_mode_blocks_project_file_edit(self, tmp_path):
+        """PLAN mode must not rewrite normal project files."""
+        from supercoder.agent.agent_modes import AgentMode
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "app.py").write_text("print('old')\n")
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+        mock_llm.chat_with_tools_interruptible.side_effect = [
+            CompletionResult(
+                content="",
+                tool_calls=[
+                    NativeToolCall(
+                        id="call_edit",
+                        name="code-edit",
+                        arguments={
+                            "filepath": "src/app.py",
+                            "operation": "create",
+                            "content": "print('new')\n",
+                        },
+                    )
+                ],
+                raw_tool_calls=[
+                    {
+                        "id": "call_edit",
+                        "type": "function",
+                        "function": {"name": "code-edit", "arguments": "{}"},
+                    }
+                ],
+            ),
+            CompletionResult(content="Done.", tool_calls=[]),
+        ]
+        agent = CoderAgent(
+            llm=mock_llm,
+            tools=ALL_TOOLS,
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+        )
+        agent.set_mode(AgentMode.PLAN)
+
+        events = list(agent.chat_turn("Edit project file"))
+        result = next(e for e in events if e["type"] == "tool_result")["content"]["result"]
+
+        assert "PLAN mode cannot edit project files" in result
+        assert (tmp_path / "src" / "app.py").read_text() == "print('old')\n"
+
+    def test_plan_mode_allows_dated_plan_file_create(self, tmp_path):
+        """PLAN mode rewrites simple filenames into dated .supercoder/plans files."""
+        from supercoder.agent.agent_modes import AgentMode
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+
+        today = date.today().isoformat()
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+        mock_llm.chat_with_tools_interruptible.side_effect = [
+            CompletionResult(
+                content="",
+                tool_calls=[
+                    NativeToolCall(
+                        id="call_plan",
+                        name="code-edit",
+                        arguments={
+                            "filepath": "implementation.md",
+                            "operation": "create",
+                            "content": "# Plan\n",
+                        },
+                    )
+                ],
+                raw_tool_calls=[
+                    {
+                        "id": "call_plan",
+                        "type": "function",
+                        "function": {"name": "code-edit", "arguments": "{}"},
+                    }
+                ],
+            ),
+            CompletionResult(content="Done.", tool_calls=[]),
+        ]
+        agent = CoderAgent(
+            llm=mock_llm,
+            tools=ALL_TOOLS,
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+        )
+        agent.set_mode(AgentMode.PLAN)
+
+        events = list(agent.chat_turn("Save a plan"))
+        tool_call = next(e for e in events if e["type"] == "tool_call")["content"]
+        expected = tmp_path / ".supercoder" / "plans" / f"{today}-implementation.md"
+
+        assert tool_call["arguments"]["filepath"] == f".supercoder/plans/{today}-implementation.md"
+        assert expected.read_text() == "# Plan\n"
+
+    def test_plan_mode_dedupes_created_plan_filenames(self, tmp_path):
+        """PLAN mode should avoid overwriting an existing dated plan on create."""
+        from supercoder.agent.agent_modes import AgentMode
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+
+        today = date.today().isoformat()
+        plan_dir = tmp_path / ".supercoder" / "plans"
+        plan_dir.mkdir(parents=True)
+        (plan_dir / f"{today}-plan.md").write_text("old")
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+        mock_llm.chat_with_tools_interruptible.side_effect = [
+            CompletionResult(
+                content="",
+                tool_calls=[
+                    NativeToolCall(
+                        id="call_plan",
+                        name="code-edit",
+                        arguments={"operation": "create", "content": "new"},
+                    )
+                ],
+                raw_tool_calls=[
+                    {
+                        "id": "call_plan",
+                        "type": "function",
+                        "function": {"name": "code-edit", "arguments": "{}"},
+                    }
+                ],
+            ),
+            CompletionResult(content="Done.", tool_calls=[]),
+        ]
+        agent = CoderAgent(
+            llm=mock_llm,
+            tools=ALL_TOOLS,
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+        )
+        agent.set_mode(AgentMode.PLAN)
+
+        events = list(agent.chat_turn("Save a plan"))
+        tool_call = next(e for e in events if e["type"] == "tool_call")["content"]
+
+        assert tool_call["arguments"]["filepath"] == f".supercoder/plans/{today}-plan-2.md"
+        assert (plan_dir / f"{today}-plan.md").read_text() == "old"
+        assert (plan_dir / f"{today}-plan-2.md").read_text() == "new"
+
+    def test_code_mode_blocks_code_edit(self, tmp_path):
+        """CODE mode allows work but requires /accept-edits for file edits."""
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+        mock_llm.chat_with_tools_interruptible.side_effect = [
+            CompletionResult(
+                content="",
+                tool_calls=[
+                    NativeToolCall(
+                        id="call_edit",
+                        name="code-edit",
+                        arguments={
+                            "filepath": "blocked.txt",
+                            "operation": "create",
+                            "content": "nope",
+                        },
+                    )
+                ],
+                raw_tool_calls=[
+                    {
+                        "id": "call_edit",
+                        "type": "function",
+                        "function": {"name": "code-edit", "arguments": "{}"},
+                    }
+                ],
+            ),
+            CompletionResult(content="Done.", tool_calls=[]),
+        ]
+        agent = CoderAgent(
+            llm=mock_llm,
+            tools=ALL_TOOLS,
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+        )
+
+        events = list(agent.chat_turn("Create a file"))
+        result = next(e for e in events if e["type"] == "tool_result")["content"]["result"]
+
+        assert "Switch to /accept-edits" in result
+        assert not (tmp_path / "blocked.txt").exists()
+
+    def test_accept_edits_mode_allows_code_edit_create(self, tmp_path):
+        """ACCEPT_EDITS preserves the current low-friction edit behavior."""
+        from supercoder.agent.agent_modes import AgentMode
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+        mock_llm.chat_with_tools_interruptible.side_effect = [
+            CompletionResult(
+                content="",
+                tool_calls=[
+                    NativeToolCall(
+                        id="call_edit",
+                        name="code-edit",
+                        arguments={
+                            "filepath": "created.txt",
+                            "operation": "create",
+                            "content": "ok",
+                        },
+                    )
+                ],
+                raw_tool_calls=[
+                    {
+                        "id": "call_edit",
+                        "type": "function",
+                        "function": {"name": "code-edit", "arguments": "{}"},
+                    }
+                ],
+            ),
+            CompletionResult(content="Done.", tool_calls=[]),
+        ]
+        agent = CoderAgent(
+            llm=mock_llm,
+            tools=ALL_TOOLS,
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+        )
+        agent.set_mode(AgentMode.ACCEPT_EDITS)
+
+        events = list(agent.chat_turn("Create a file"))
+        result = next(e for e in events if e["type"] == "tool_result")["content"]["result"]
+
+        assert "Created file" in result
+        assert (tmp_path / "created.txt").read_text() == "ok"
 
     def test_compact_context_uses_cache_aware_chat_path(self):
         """Manual compact should append a maintenance request to the current chat."""

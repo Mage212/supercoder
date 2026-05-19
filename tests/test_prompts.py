@@ -19,17 +19,16 @@ Use AtomicWriter for file writes.
     assert "Use AtomicWriter for file writes." in prompt
 
 
-def test_code_mode_prompt_uses_cautious_command_policy():
-    suffix = MODE_CONFIGS[AgentMode.CODE].prompt_suffix
+def test_code_mode_instruction_uses_cautious_command_policy():
+    instruction = MODE_CONFIGS[AgentMode.CODE].instruction
 
-    assert "Do NOT refuse to execute commands" not in suffix
-    assert "Refuse clearly dangerous commands" in suffix
-    assert "Ask for confirmation" in suffix
+    assert "Do NOT refuse to execute commands" not in instruction
+    assert "host permission flow" in instruction
+    assert "File edits are blocked" in instruction
 
 
-def test_code_edit_prompt_example_matches_tool_schema():
-    suffix = MODE_CONFIGS[AgentMode.CODE].prompt_suffix
+def test_accept_edits_instruction_enables_file_edits():
+    instruction = MODE_CONFIGS[AgentMode.ACCEPT_EDITS].instruction
 
-    assert '"filepath"' in suffix
-    assert '"operation"' in suffix
-    assert '{"file": "path"' not in suffix
+    assert "edit files" in instruction
+    assert "Shell commands still go through" in instruction

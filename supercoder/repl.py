@@ -20,7 +20,7 @@ from rich.text import Text
 
 from . import __version__
 from .abort_controller import InterruptHandler, KeyboardListener
-from .agent.agent_modes import AgentMode
+from .agent.agent_modes import MODE_CONFIGS, MODE_CYCLE, AgentMode
 from .context.references import summarize_attachment_content, summarize_context_attachment
 from .utils import format_relative_time
 
@@ -35,7 +35,11 @@ class SuperCoderREPL:
         # Initialize commands BEFORE session setup (session uses commands for autocomplete)
         self.commands = {
             "/ask": self.cmd_ask,
+            "/plan": self.cmd_plan,
             "/code": self.cmd_code,
+            "/accept-edits": self.cmd_accept_edits,
+            "/accept": self.cmd_accept_edits,
+            "/edit": self.cmd_accept_edits,
             "/clear": self.cmd_clear,
             "/compact": self.cmd_compact,
             "/continue": self.cmd_continue,
@@ -84,6 +88,7 @@ class SuperCoderREPL:
         style = PromptStyle.from_dict(
             {
                 "prompt": "#00aa00 bold",
+                "bottom-toolbar": "#666666",
             }
         )
 
@@ -114,6 +119,12 @@ class SuperCoderREPL:
             else:
                 buff.validate_and_handle()
 
+        @kb.add("s-tab")
+        def _(event):
+            """Cycle agent mode without submitting the prompt."""
+            self._cycle_mode()
+            event.app.invalidate()
+
         # History file in project-specific directory
         history_path = self.agent.repo_root / ".supercoder" / "history"
         history_path.parent.mkdir(parents=True, exist_ok=True)
@@ -125,6 +136,7 @@ class SuperCoderREPL:
             completer=completer,
             auto_suggest=auto_suggest,
             key_bindings=kb,
+            bottom_toolbar=self._get_bottom_toolbar,
             complete_while_typing=True,
             multiline=False,  # We handle multiline via { } or Alt+Enter
         )
@@ -769,6 +781,9 @@ class SuperCoderREPL:
                     "@",
                 )
 
+            elif dt == "mode_policy":
+                self.console.print(f"[dim]{msg.content}[/]")
+
             else:
                 # Fallback for old sessions without display_type
                 if msg.role == "user" and msg.content:
@@ -1090,8 +1105,20 @@ class SuperCoderREPL:
     def _get_prompt(self) -> str:
         """Get prompt string with model tag and current mode."""
         model_tag = self.agent.llm.config.model.split("/")[-1][:15]
-        mode = "ask> " if self.agent.mode == AgentMode.ASK else "You> "
-        return f"[{model_tag}] {mode}"
+        mode_label = MODE_CONFIGS[self.agent.mode].prompt_label
+        return f"[{model_tag}] {mode_label}> "
+
+    def _get_bottom_toolbar(self):
+        """Return the prompt bottom toolbar with the active mode."""
+        config = MODE_CONFIGS[self.agent.mode]
+        return f" Mode: {config.name} | {config.toolbar} | Shift+Tab cycles modes "
+
+    def _cycle_mode(self) -> AgentMode:
+        """Switch to the next mode in the keyboard cycle."""
+        current_idx = MODE_CYCLE.index(self.agent.mode)
+        next_mode = MODE_CYCLE[(current_idx + 1) % len(MODE_CYCLE)]
+        self.agent.set_mode(next_mode)
+        return next_mode
 
     def cmd_ask(self, user_input: str):
         """Switch to ask mode or ask a question without editing.
@@ -1115,11 +1142,28 @@ class SuperCoderREPL:
             # Sticky switch to ask mode
             self.agent.set_mode(AgentMode.ASK)
             self.console.print("[cyan]Switched to ask mode[/] - questions only, no edits")
-            self.console.print("[dim]Use /code to switch back to editing mode[/]")
+            self.console.print("[dim]Use /plan, /code, or /accept-edits to switch modes[/]")
+        return False
+
+    def cmd_plan(self, user_input: str):
+        """Switch to plan mode or handle one request in plan mode."""
+        parts = user_input.split(maxsplit=1)
+        request = parts[1].strip() if len(parts) > 1 else ""
+
+        if request:
+            original_mode = self.agent.mode
+            self.agent.set_mode(AgentMode.PLAN)
+            try:
+                self._handle_chat(request)
+            finally:
+                self.agent.set_mode(original_mode)
+        else:
+            self.agent.set_mode(AgentMode.PLAN)
+            self.console.print("[cyan]Switched to plan mode[/] - read/search plus dated plans only")
         return False
 
     def cmd_code(self, user_input: str):
-        """Switch to code mode (can edit files).
+        """Switch to code mode (edits blocked by default).
 
         /code         - Switch to code mode (sticky)
         /code <text>  - Execute one request in code mode
@@ -1138,7 +1182,25 @@ class SuperCoderREPL:
         else:
             # Sticky switch to code mode
             self.agent.set_mode(AgentMode.CODE)
-            self.console.print("[cyan]Switched to code mode[/] - can edit files")
+            self.console.print("[cyan]Switched to code mode[/] - edits blocked by default")
+            self.console.print("[dim]Use /accept-edits when you want file changes applied[/]")
+        return False
+
+    def cmd_accept_edits(self, user_input: str):
+        """Switch to accept-edits mode or handle one request with edits enabled."""
+        parts = user_input.split(maxsplit=1)
+        request = parts[1].strip() if len(parts) > 1 else ""
+
+        if request:
+            original_mode = self.agent.mode
+            self.agent.set_mode(AgentMode.ACCEPT_EDITS)
+            try:
+                self._handle_chat(request)
+            finally:
+                self.agent.set_mode(original_mode)
+        else:
+            self.agent.set_mode(AgentMode.ACCEPT_EDITS)
+            self.console.print("[cyan]Switched to accept-edits mode[/] - file edits are enabled")
         return False
 
     def cmd_clear(self, _):
@@ -1306,7 +1368,10 @@ class SuperCoderREPL:
         table.add_section()
         table.add_row("[bold dim]Mode[/]", "")
         table.add_row("/ask", "Q&A mode (read-only, no edits)")
-        table.add_row("/code", "Code mode (can edit files)")
+        table.add_row("/plan", "Planning mode (read/search, save dated plans only)")
+        table.add_row("/code", "Code mode (edits blocked by default)")
+        table.add_row("/accept-edits", "Editing mode (file edits enabled)")
+        table.add_row("Shift+Tab", "Cycle ask -> plan -> code -> accept-edits")
 
         # Context
         table.add_section()

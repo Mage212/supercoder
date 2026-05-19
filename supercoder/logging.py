@@ -229,6 +229,30 @@ class ConversationLogger:
             }
         )
 
+    def log_mode_policy(
+        self,
+        *,
+        mode: str,
+        tool_name: str,
+        action: str,
+        reason: str,
+        subject: str = "",
+    ) -> None:
+        """Log host-side mode policy announcements and tool decisions."""
+        if not self.enabled:
+            return
+        self._write_entry(
+            {
+                "type": "mode_policy",
+                "mode": mode,
+                "tool": tool_name,
+                "action": action,
+                "reason": reason,
+                "subject": subject[:300],
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
+
     def log_freshness_check(
         self,
         *,

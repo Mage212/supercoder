@@ -135,6 +135,7 @@ class SessionManager:
             for m in session.messages
             if m.role == "user"
             and m.display_type != "context_attachment"
+            and m.display_type != "mode_policy"
             and not m.content.startswith("<@TOOL_RESULT>")
             and not m.content.startswith("[Previous Context")
         ]

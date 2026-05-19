@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.3.7
+
+- **Host-Enforced Agent Modes**: Added `ask`, `plan`, `code`, and `accept-edits` modes enforced by SuperCoder before tool execution instead of relying only on model instructions.
+- **Cache-Friendly Mode Switching**: Mode changes no longer rebuild the system prompt or change the API tool schema list; the active mode policy is announced in-band only after changes and after compaction.
+- **Plan File Persistence**: `plan` mode can save dated plan files only under `.supercoder/plans/`, while project file edits and shell commands remain blocked.
+- **Mode Switching UX**: Added `/plan`, `/accept-edits`, `/accept`, `/edit`, `Shift+Tab` mode cycling, and a bottom toolbar that shows the active mode without printing extra lines.
+- **Mode Policy Logs**: Debug JSONL logs now include `mode_policy` events for announcements, allowed tool calls, and denied tool calls.
+
 ## v0.3.6
 
 - **Read-Before-Edit Enforcement**: Added host-side freshness tracking so `code-edit` blocks edits to files that were not first shown to the model through `file-read` or \@file attachment.

@@ -132,3 +132,24 @@ def test_log_freshness_check_event_without_file_content_or_hash(tmp_path, monkey
     assert event["hash_present"] is True
     assert "content" not in event
     assert "sha256" not in event
+
+
+def test_log_mode_policy_event(tmp_path, monkeypatch):
+    monkeypatch.setattr(logging_mod, "LOG_DIR", tmp_path)
+
+    logger = logging_mod.ConversationLogger("model", enabled=True)
+    logger.log_mode_policy(
+        mode="plan",
+        tool_name="code-edit",
+        action="deny",
+        reason="PLAN mode cannot edit project files.",
+        subject="src/app.py",
+    )
+
+    entries = [json.loads(line) for line in next(tmp_path.glob("*.jsonl")).read_text().splitlines()]
+    event = next(entry for entry in entries if entry["type"] == "mode_policy")
+
+    assert event["mode"] == "plan"
+    assert event["tool"] == "code-edit"
+    assert event["action"] == "deny"
+    assert event["subject"] == "src/app.py"

@@ -136,7 +136,8 @@ class ContextWindowManager:
         compactable_count = sum(
             1
             for msg in self.history
-            if msg.display_type != "thinking" and not self._is_compact_summary(msg)
+            if msg.display_type not in ("thinking", "mode_policy")
+            and not self._is_compact_summary(msg)
         )
         if compactable_count <= self.config.protected_recent_steps:
             return False
@@ -167,7 +168,8 @@ class ContextWindowManager:
         eligible_indices = [
             idx
             for idx, msg in enumerate(self.history)
-            if msg.display_type != "thinking" and not self._is_compact_summary(msg)
+            if msg.display_type not in ("thinking", "mode_policy")
+            and not self._is_compact_summary(msg)
         ]
         selected = set(eligible_indices[-limit:])
         if not selected:
@@ -248,7 +250,8 @@ class ContextWindowManager:
             self.history.extend(
                 msg
                 for msg in recent_messages
-                if msg.display_type != "thinking" and not self._is_compact_summary(msg)
+                if msg.display_type not in ("thinking", "mode_policy")
+                and not self._is_compact_summary(msg)
             )
 
     def _is_compact_summary(self, msg: Message) -> bool:

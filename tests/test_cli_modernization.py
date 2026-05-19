@@ -2,6 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from supercoder.agent.agent_modes import AgentMode
 from supercoder.agent.coder_agent import CoderAgent
 from supercoder.repl import SuperCoderREPL
 
@@ -70,6 +71,38 @@ def test_repl_commands():
     agent.debug = False
     repl.commands["/debug"]("")
     agent.set_debug.assert_called_with(True)
+
+
+def test_repl_cycle_mode_uses_shift_tab_order():
+    """The REPL helper should cycle modes in the visible Shift+Tab order."""
+    agent = MagicMock()
+    agent.llm.model = "test"
+    agent.llm.config.model = "test"
+    agent.mode = AgentMode.ASK
+
+    def set_mode(mode):
+        agent.mode = mode
+
+    agent.set_mode.side_effect = set_mode
+    repl = SuperCoderREPL(agent)
+
+    assert repl._cycle_mode() == AgentMode.PLAN
+    assert repl._cycle_mode() == AgentMode.CODE
+    assert repl._cycle_mode() == AgentMode.ACCEPT_EDITS
+    assert repl._cycle_mode() == AgentMode.ASK
+
+
+def test_repl_bottom_toolbar_shows_current_mode():
+    agent = MagicMock()
+    agent.llm.model = "test"
+    agent.llm.config.model = "test"
+    agent.mode = AgentMode.ACCEPT_EDITS
+    repl = SuperCoderREPL(agent)
+
+    toolbar = repl._get_bottom_toolbar()
+
+    assert "accept-edits" in toolbar
+    assert "Shift+Tab" in toolbar
 
 
 def test_tool_call_stream(mock_agent):

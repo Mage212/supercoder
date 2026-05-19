@@ -1,6 +1,9 @@
 """Main coding agent with context management."""
 
 import json
+import re
+from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 from rich.console import Console
@@ -22,12 +25,21 @@ from ..tools.code_search import CodeSearchTool
 from ..tools.file_read import FileReadTool
 from ..tools.glob_tool import GlobTool
 from ..tools.project_structure import ProjectStructureTool
-from .agent_modes import MODE_CONFIGS, AgentMode
+from .agent_modes import MODE_CONFIGS, READ_ONLY_TOOLS, AgentMode
 from .prompts import CACHE_AWARE_COMPACT_REQUEST, build_system_prompt
 from .tool_output import ToolOutputMasker
 from .tool_parser import ToolCallParser
 
 console = Console()
+
+
+@dataclass
+class ModeToolDecision:
+    """Host-side decision for a tool call under the active agent mode."""
+
+    allowed: bool
+    reason: str
+    arguments: dict | None = None
 
 
 class CoderAgent:
@@ -95,21 +107,17 @@ class CoderAgent:
         # Build OpenAI-compatible tool schemas for native mode
         self._tools_schema = [t.definition.to_openai_schema() for t in self._tools_list]
 
-        # Build system prompt template with tools and project rules
-        mode_config = MODE_CONFIGS[self._mode]
-        suffix = (
-            mode_config.lean_prompt_suffix
-            if self.lean and mode_config.lean_prompt_suffix
-            else mode_config.prompt_suffix
-        )
+        # Build a stable system prompt template with all tools and project rules.
+        # Mode changes are enforced host-side and announced in-band so local
+        # backends can keep reusing the prompt/KV cache prefix.
         self.base_system_prompt = build_system_prompt(
-            self._get_tools_for_mode(),
+            self._tools_list,
             rules=project_rules,
             tool_calling_type=self.tool_calling_type,
-            mode_suffix=suffix,
             native_tools=not self.streaming,
             lean=self.lean,
         )
+        self._mode_policy_needs_announcement = True
 
         # Setup context management
         config = context_config or ContextConfig()
@@ -163,6 +171,29 @@ class CoderAgent:
         self._log_permission_decision("command-exec", command, decision)
         return decision
 
+    def _log_mode_tool_decision(
+        self,
+        tool_name: str,
+        decision: ModeToolDecision,
+        arguments: dict | None = None,
+    ) -> None:
+        """Log a host-side mode policy decision."""
+        get_logger().log_mode_policy(
+            mode=self._mode.value,
+            tool_name=tool_name,
+            action="allow" if decision.allowed else "deny",
+            reason=decision.reason,
+            subject=self._mode_subject(tool_name, arguments),
+        )
+
+    def _mode_subject(self, tool_name: str, arguments: dict | None = None) -> str:
+        if tool_name == "code-edit" and arguments:
+            value = arguments.get("filepath") or arguments.get("fileName") or ""
+            return str(value)
+        if tool_name == "command-exec" and arguments:
+            return str(arguments.get("command", ""))
+        return tool_name
+
     def _log_early_tool_outcome(self, tool_name: str, arguments: str, result: str) -> None:
         """Log a tool request that resolved before normal tool execution."""
         logger = get_logger()
@@ -177,6 +208,22 @@ class CoderAgent:
         payload = attachment.to_log_dict()
         get_logger().log_context_attachment(payload)
         return payload
+
+    def _announce_mode_policy_if_needed(self) -> None:
+        """Add the current mode policy to history once after a mode change."""
+        if not self._mode_policy_needs_announcement:
+            return
+        mode_config = MODE_CONFIGS[self._mode]
+        content = f"[Mode Policy]\n{mode_config.instruction}"
+        self.context.add_message(Message("user", content, display_type="mode_policy"))
+        get_logger().log_mode_policy(
+            mode=self._mode.value,
+            tool_name="mode",
+            action="announce",
+            reason=mode_config.instruction,
+            subject=self._mode.value,
+        )
+        self._mode_policy_needs_announcement = False
 
     def _update_system_prompt(self):
         """Update system prompt with latest RepoMap if enabled."""
@@ -200,6 +247,9 @@ class CoderAgent:
         """Return tools available in current mode."""
         mode_config = MODE_CONFIGS[self._mode]
 
+        if self._mode == AgentMode.CODE:
+            return [t for t in self._tools_list if t.definition.name != "code-edit"]
+
         if mode_config.allowed_tools is None:
             # All tools allowed
             return self._tools_list
@@ -213,28 +263,12 @@ class CoderAgent:
         return self._mode
 
     def set_mode(self, mode: AgentMode) -> None:
-        """Switch agent mode and update available tools and prompt."""
+        """Switch agent mode without changing the stable system prompt."""
         if mode == self._mode:
             return
 
         self._mode = mode
-
-        # Rebuild system prompt with new mode's tools and suffix
-        mode_config = MODE_CONFIGS[self._mode]
-        suffix = (
-            mode_config.lean_prompt_suffix
-            if self.lean and mode_config.lean_prompt_suffix
-            else mode_config.prompt_suffix
-        )
-        self.base_system_prompt = build_system_prompt(
-            self._get_tools_for_mode(),
-            rules=self._project_rules,
-            tool_calling_type=self.tool_calling_type,
-            mode_suffix=suffix,
-            native_tools=not self.streaming,
-            lean=self.lean,
-        )
-        self._update_system_prompt()
+        self._mode_policy_needs_announcement = True
 
     def set_tool_calling_type(self, tool_calling_type: str) -> None:
         """Update tool calling type and rebuild system prompt.
@@ -243,21 +277,156 @@ class CoderAgent:
         """
         if tool_calling_type != self.tool_calling_type:
             self.tool_calling_type = tool_calling_type
-            mode_config = MODE_CONFIGS[self._mode]
-            suffix = (
-                mode_config.lean_prompt_suffix
-                if self.lean and mode_config.lean_prompt_suffix
-                else mode_config.prompt_suffix
-            )
             self.base_system_prompt = build_system_prompt(
-                self._get_tools_for_mode(),
+                self._tools_list,
                 rules=self._project_rules,
                 tool_calling_type=self.tool_calling_type,
-                mode_suffix=suffix,
                 native_tools=not self.streaming,
                 lean=self.lean,
             )
             self._update_system_prompt()
+
+    def _check_mode_tool(self, tool_name: str, arguments: dict | None) -> ModeToolDecision:
+        """Return the host-side mode decision for a requested tool call."""
+        args = arguments or {}
+
+        if self._mode == AgentMode.ASK:
+            if tool_name in READ_ONLY_TOOLS:
+                decision = ModeToolDecision(True, "Tool allowed in ASK mode", args)
+            else:
+                decision = ModeToolDecision(
+                    False,
+                    f"{tool_name} is not allowed in ASK mode. ASK mode is read-only.",
+                    args,
+                )
+            self._log_mode_tool_decision(tool_name, decision, args)
+            return decision
+
+        if self._mode == AgentMode.PLAN:
+            if tool_name in READ_ONLY_TOOLS:
+                decision = ModeToolDecision(True, "Tool allowed in PLAN mode", args)
+            elif tool_name == "code-edit":
+                decision = self._prepare_plan_edit(args)
+            else:
+                decision = ModeToolDecision(
+                    False,
+                    f"{tool_name} is not allowed in PLAN mode. "
+                    "PLAN mode blocks shell commands and project file edits.",
+                    args,
+                )
+            self._log_mode_tool_decision(tool_name, decision, decision.arguments or args)
+            return decision
+
+        if self._mode == AgentMode.CODE and tool_name == "code-edit":
+            decision = ModeToolDecision(
+                False,
+                "code-edit is blocked in CODE mode. Switch to /accept-edits to modify files.",
+                args,
+            )
+            self._log_mode_tool_decision(tool_name, decision, args)
+            return decision
+
+        decision = ModeToolDecision(True, f"Tool allowed in {self._mode.value} mode", args)
+        self._log_mode_tool_decision(tool_name, decision, args)
+        return decision
+
+    def _prepare_plan_edit(self, arguments: dict) -> ModeToolDecision:
+        """Normalize and validate the narrow PLAN-mode code-edit exception."""
+        updated = dict(arguments)
+        raw_path = str(updated.get("filepath") or updated.get("fileName") or "").strip()
+        operation = str(updated.get("operation") or "search_replace")
+
+        plan_dir = self.repo_root / ".supercoder" / "plans"
+        plan_dir_resolved = plan_dir.resolve()
+        try:
+            plan_dir_resolved.relative_to(self.repo_root)
+        except ValueError:
+            return ModeToolDecision(
+                False,
+                "PLAN mode cannot write plans because .supercoder/plans resolves outside the project.",
+                updated,
+            )
+
+        if raw_path:
+            path = Path(raw_path)
+            if path.is_absolute():
+                candidate = path.resolve()
+                try:
+                    candidate.relative_to(plan_dir_resolved)
+                except ValueError:
+                    return ModeToolDecision(
+                        False,
+                        "PLAN mode can only edit plan files under .supercoder/plans/.",
+                        updated,
+                    )
+            else:
+                normalized_parts = path.parts
+                if normalized_parts[:2] == (".supercoder", "plans"):
+                    candidate = (self.repo_root / path).resolve()
+                    try:
+                        candidate.relative_to(plan_dir_resolved)
+                    except ValueError:
+                        return ModeToolDecision(
+                            False,
+                            "PLAN mode blocked a plan path that escapes .supercoder/plans/.",
+                            updated,
+                        )
+                elif len(normalized_parts) == 1:
+                    candidate = (plan_dir_resolved / normalized_parts[0]).resolve()
+                else:
+                    return ModeToolDecision(
+                        False,
+                        "PLAN mode cannot edit project files. Save plans under .supercoder/plans/.",
+                        updated,
+                    )
+        else:
+            candidate = plan_dir_resolved / "plan.md"
+
+        candidate = self._date_prefixed_plan_path(candidate, plan_dir_resolved, operation)
+        updated["filepath"] = candidate.relative_to(self.repo_root).as_posix()
+        updated.pop("fileName", None)
+
+        return ModeToolDecision(
+            True,
+            "PLAN mode allows code-edit only for dated plan files under .supercoder/plans/.",
+            updated,
+        )
+
+    def _date_prefixed_plan_path(
+        self,
+        candidate: Path,
+        plan_dir: Path,
+        operation: str,
+    ) -> Path:
+        """Return a date-prefixed plan path, adding create suffixes on collisions."""
+        name = candidate.name.strip() or "plan.md"
+        if name in {".", ".."}:
+            name = "plan.md"
+        if not Path(name).suffix:
+            name = f"{name}.md"
+
+        today = date.today().isoformat()
+        if not re.match(r"^\d{4}-\d{2}-\d{2}-", name):
+            name = f"{today}-{name}"
+
+        normalized = candidate.with_name(name).resolve()
+        try:
+            normalized.relative_to(plan_dir)
+        except ValueError:
+            normalized = (plan_dir / name).resolve()
+
+        if operation != "create" or not normalized.exists():
+            return normalized
+
+        stem = normalized.stem
+        suffix = normalized.suffix
+        parent = normalized.parent
+        idx = 2
+        while True:
+            deduped = parent / f"{stem}-{idx}{suffix}"
+            if not deduped.exists():
+                return deduped.resolve()
+            idx += 1
 
     # ------------------------------------------------------------------
     # Primary path: native tool calling (non-streaming)
@@ -292,6 +461,7 @@ class CoderAgent:
         if user_message:
             self.checkpoint_manager.create(description=user_message[:100])
             checkpoint_active = True
+            self._announce_mode_policy_if_needed()
             attachment = self._expand_context_references(user_message)
             if attachment:
                 yield {
@@ -405,13 +575,14 @@ class CoderAgent:
             has_file_edits = False
 
             for tc in result.tool_calls:
-                yield {"type": "tool_call", "content": {"name": tc.name, "arguments": tc.arguments}}
-
                 name = tc.name
-                if name == "code-edit":
-                    has_file_edits = True
+                arguments = dict(tc.arguments)
 
                 if name not in self.tools:
+                    yield {
+                        "type": "tool_call",
+                        "content": {"name": name, "arguments": arguments},
+                    }
                     error_msg = (
                         f"Unknown tool: '{name}'. Available tools: {', '.join(self.tools.keys())}"
                     )
@@ -428,13 +599,39 @@ class CoderAgent:
                     )
                     continue
 
+                mode_decision = self._check_mode_tool(name, arguments)
+                arguments = mode_decision.arguments or arguments
+                yield {"type": "tool_call", "content": {"name": name, "arguments": arguments}}
+
+                if not mode_decision.allowed:
+                    tool_result = f"Error: {mode_decision.reason}"
+                    args_str = json.dumps(arguments)
+                    self._log_early_tool_outcome(name, args_str, tool_result)
+                    yield {
+                        "type": "tool_result",
+                        "content": {"name": name, "result": tool_result},
+                    }
+                    self.context.add_message(
+                        Message(
+                            role="tool",
+                            content=tool_result,
+                            tool_call_id=tc.id,
+                            name=name,
+                            display_type="tool_result",
+                        )
+                    )
+                    continue
+
+                if name == "code-edit":
+                    has_file_edits = True
+
                 try:
                     tool = self.tools[name]
-                    args_str = json.dumps(tc.arguments)
+                    args_str = json.dumps(arguments)
 
                     # Confirm shell commands
                     if name == "command-exec":
-                        _cmd_str = tc.arguments.get("command", args_str)
+                        _cmd_str = arguments.get("command", args_str)
                         decision = self._check_command_permission(_cmd_str)
                         if decision.action == PermissionAction.DENY:
                             tool_result = self.permission_policy.format_denial(
@@ -587,6 +784,7 @@ class CoderAgent:
 
         # Add user message to context (only once, before the loop)
         if user_message:
+            self._announce_mode_policy_if_needed()
             attachment = self._expand_context_references(user_message)
             if attachment:
                 yield {
@@ -673,7 +871,7 @@ class CoderAgent:
                 for tool_call_data in tool_calls:
                     yield {"type": "tool_call", "content": tool_call_data}
 
-                    name = tool_call_data.get("name", "")
+                    name = str(tool_call_data.get("name") or "")
                     args = tool_call_data.get("arguments", "")
 
                     # Normalize invented tool names that small models hallucinate
@@ -692,9 +890,6 @@ class CoderAgent:
                     }
                     name = TOOL_ALIASES.get(name, name)
 
-                    if name == "code-edit":
-                        has_file_edits = True
-
                     if name not in self.tools:
                         error_msg = f"Unknown tool: '{name}'. Available tools: {', '.join(self.tools.keys())}"
                         yield {"type": "error", "content": error_msg}
@@ -703,14 +898,32 @@ class CoderAgent:
 
                     try:
                         tool = self.tools[name]
+                        try:
+                            parsed_args = json.loads(args) if isinstance(args, str) else dict(args)
+                        except Exception:
+                            parsed_args = {}
+
+                        mode_decision = self._check_mode_tool(name, parsed_args)
+                        if mode_decision.arguments is not None:
+                            parsed_args = mode_decision.arguments
+                            args = json.dumps(parsed_args)
+                        if not mode_decision.allowed:
+                            result = f"Error: {mode_decision.reason}"
+                            self._log_early_tool_outcome(name, args, result)
+                            yield {
+                                "type": "tool_result",
+                                "content": {"name": name, "result": result},
+                            }
+                            all_results.append(f"[{name}]: {result}")
+                            continue
+
+                        if name == "code-edit":
+                            has_file_edits = True
 
                         # Ask user to confirm before running any shell command
                         if name == "command-exec":
                             try:
-                                import json as _json
-
-                                _cmd_args = _json.loads(args) if isinstance(args, str) else args
-                                _cmd_str = _cmd_args.get("command", str(args))
+                                _cmd_str = parsed_args.get("command", str(args))
                             except Exception:
                                 _cmd_str = str(args)
                             decision = self._check_command_permission(_cmd_str)
@@ -1012,6 +1225,7 @@ class CoderAgent:
 
         # Clear old history and keep an exact protected tail after the summary.
         self.context.set_initial_summary(summary, recent_messages)
+        self._mode_policy_needs_announcement = True
 
         # Update session with compacted state
         if self.current_session:

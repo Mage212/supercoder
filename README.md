@@ -1,6 +1,6 @@
 # 🤖 SuperCoder
 
-[![Version](https://img.shields.io/badge/version-0.3.6-blue.svg)](https://github.com/Mage212/supercoder)
+[![Version](https://img.shields.io/badge/version-0.3.7-blue.svg)](https://github.com/Mage212/supercoder)
 [![Python](https://img.shields.io/badge/python-3.11+-green.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -8,12 +8,12 @@
 
 ---
 
-## 🆕 What's New in v0.3.6
+## 🆕 What's New in v0.3.7
 
-- **Read-Before-Edit Enforcement**: `code-edit` now requires fresh file context before modifying existing files.
-- **Stale Edit Protection**: If a file changes after `file-read` or \@file attachment, edits are blocked until the file is read again.
-- **Attachment-Aware Editing**: Successful \@file attachments count as fresh context, while directory listings, `glob`, and search results do not.
-- **Freshness Debug Logs**: Debug JSONL logs now include `freshness_check` events without exposing file contents.
+- **Host-Enforced Modes**: SuperCoder now has `ask`, `plan`, `code`, and `accept-edits` modes enforced by the host before tools run.
+- **Cache-Friendly Mode Switching**: Mode changes no longer rebuild the system prompt or tool schema list; SuperCoder announces mode policy in-band only when needed.
+- **Plan Files**: `plan` mode can save dated plans under `.supercoder/plans/` while blocking project file edits and shell commands.
+- **Mode UX**: Use `/plan`, `/accept-edits`, `/accept`, `/edit`, or `Shift+Tab` to switch modes with a live toolbar indicator.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
@@ -32,6 +32,9 @@ SuperCoder enforces command and path safety in application code instead of relyi
 
 ### 🧷 Read-Before-Edit Freshness
 Before editing an existing file, SuperCoder verifies that the model has fresh file context from `file-read` or an explicit \@file attachment. If the file was never read, or changed externally after it was read, `code-edit` is blocked and the model is asked to read the file again.
+
+### 🧭 Host-Enforced Modes
+Switch between `ask`, `plan`, `code`, and `accept-edits` with slash commands or `Shift+Tab`. `code` now blocks file edits by default, while `accept-edits` enables them; `plan` can persist dated plans only under `.supercoder/plans/`. Mode changes are enforced by SuperCoder itself and announced without rebuilding the system prompt, preserving prompt-cache locality for local models.
 
 ### 📎 Explicit Context References
 Mention files or directories directly in a prompt with \@path, for example `Review @supercoder/repl.py`. SuperCoder attaches bounded file content or a directory file listing before the model call, with autocomplete suggestions while typing \@ma.
