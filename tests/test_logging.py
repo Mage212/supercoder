@@ -85,6 +85,40 @@ def test_log_tool_output_masked_event(tmp_path, monkeypatch):
     assert event["offload_path"] == ".supercoder/tool-outputs/output.txt"
 
 
+def test_log_tool_call_fallback_parse_event(tmp_path, monkeypatch):
+    monkeypatch.setattr(logging_mod, "LOG_DIR", tmp_path)
+
+    logger = logging_mod.ConversationLogger("model", enabled=True)
+    logger.log_tool_call_fallback_parse(
+        success=True,
+        count=1,
+        formats=["supercoder_tag"],
+        reason="parsed_text_tool_calls",
+    )
+
+    entries = [json.loads(line) for line in next(tmp_path.glob("*.jsonl")).read_text().splitlines()]
+    event = next(entry for entry in entries if entry["type"] == "tool_call_fallback_parse")
+
+    assert event["success"] is True
+    assert event["count"] == 1
+    assert event["formats"] == ["supercoder_tag"]
+    assert event["reason"] == "parsed_text_tool_calls"
+
+
+def test_log_tool_call_retry_event(tmp_path, monkeypatch):
+    monkeypatch.setattr(logging_mod, "LOG_DIR", tmp_path)
+
+    logger = logging_mod.ConversationLogger("model", enabled=True)
+    logger.log_tool_call_retry(attempt=1, max_attempts=2, reason="malformed")
+
+    entries = [json.loads(line) for line in next(tmp_path.glob("*.jsonl")).read_text().splitlines()]
+    event = next(entry for entry in entries if entry["type"] == "tool_call_retry")
+
+    assert event["attempt"] == 1
+    assert event["max_attempts"] == 2
+    assert event["reason"] == "malformed"
+
+
 def test_log_context_attachment_event(tmp_path, monkeypatch):
     monkeypatch.setattr(logging_mod, "LOG_DIR", tmp_path)
 

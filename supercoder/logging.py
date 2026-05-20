@@ -151,6 +151,48 @@ class ConversationLogger:
             }
         )
 
+    def log_tool_call_fallback_parse(
+        self,
+        *,
+        success: bool,
+        count: int,
+        formats: list[str] | None = None,
+        reason: str = "",
+    ) -> None:
+        """Log native-mode text tool-call fallback parsing metadata."""
+        if not self.enabled:
+            return
+        self._write_entry(
+            {
+                "type": "tool_call_fallback_parse",
+                "success": success,
+                "count": count,
+                "formats": formats or [],
+                "reason": reason,
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
+
+    def log_tool_call_retry(
+        self,
+        *,
+        attempt: int,
+        max_attempts: int,
+        reason: str,
+    ) -> None:
+        """Log a retry caused by malformed text tool-call output."""
+        if not self.enabled:
+            return
+        self._write_entry(
+            {
+                "type": "tool_call_retry",
+                "attempt": attempt,
+                "max_attempts": max_attempts,
+                "reason": reason,
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
+
     def log_tool_result(self, tool_name: str, result: str) -> None:
         """Log tool result."""
         if not self.enabled:

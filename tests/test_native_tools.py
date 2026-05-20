@@ -412,6 +412,177 @@ class TestChatTurnEventFlow:
         assert tool_msg.tool_call_id == "call_42"
         assert tool_msg.name == "file-read"
 
+    def test_text_tool_call_fallback_executes_supercoder_tag(self, tmp_path):
+        """Native mode should recover textual <@TOOL> calls when providers omit tool_calls."""
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+        from supercoder.tools.file_read import FileReadTool
+
+        (tmp_path / "test.txt").write_text("hello\n")
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+        mock_llm.chat_with_tools_interruptible.side_effect = [
+            CompletionResult(
+                content=(
+                    'I will read it.\n<@TOOL>{"name": "file-read", '
+                    '"arguments": {"fileName": "test.txt"}}</@TOOL>'
+                ),
+                tool_calls=[],
+            ),
+            CompletionResult(content="Done.", tool_calls=[]),
+        ]
+        agent = CoderAgent(
+            llm=mock_llm,
+            tools=[FileReadTool()],
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+        )
+
+        events = list(agent.chat_turn("Read test.txt"))
+        types = [event["type"] for event in events]
+        response = next(event for event in events if event["type"] == "response")
+        assistant_with_tools = next(
+            msg
+            for msg in agent.context.get_messages()
+            if msg.role == "assistant" and msg.tool_calls
+        )
+        tool_msg = next(msg for msg in agent.context.get_messages() if msg.role == "tool")
+
+        assert "tool_call" in types
+        assert "tool_result" in types
+        assert response["content"] == "I will read it."
+        assert "<@TOOL>" not in response["content"]
+        assert assistant_with_tools.tool_calls[0]["id"].startswith("fallback_call_")
+        assert assistant_with_tools.tool_calls[0]["function"]["name"] == "file-read"
+        assert tool_msg.tool_call_id == assistant_with_tools.tool_calls[0]["id"]
+
+    def test_text_tool_call_fallback_executes_qwen_style(self, tmp_path):
+        """Native mode should recover qwen-style textual tool calls."""
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+        from supercoder.tools.file_read import FileReadTool
+
+        (tmp_path / "test.txt").write_text("hello\n")
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+        mock_llm.chat_with_tools_interruptible.side_effect = [
+            CompletionResult(
+                content='to=tool:file-read {"fileName": "test.txt"}',
+                tool_calls=[],
+            ),
+            CompletionResult(content="Done.", tool_calls=[]),
+        ]
+        agent = CoderAgent(
+            llm=mock_llm,
+            tools=[FileReadTool()],
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+        )
+
+        events = list(agent.chat_turn("Read test.txt"))
+        types = [event["type"] for event in events]
+
+        assert "tool_call" in types
+        assert "tool_result" in types
+        assert types.index("tool_call") < types.index("response")
+
+    def test_json_example_without_arguments_does_not_trigger_retry(self):
+        """Ordinary JSON examples should not be treated as malformed tool calls."""
+        agent, mock_llm = self._make_agent()
+        mock_llm.chat_with_tools_interruptible.return_value = CompletionResult(
+            content='```json\n{"name": "demo"}\n```',
+            tool_calls=[],
+        )
+
+        events = list(agent.chat_turn("Show JSON"))
+        types = [event["type"] for event in events]
+
+        assert "tool_retry" not in types
+        assert "tool_call" not in types
+        assert events[-1]["type"] == "done"
+
+    def test_malformed_text_tool_call_retries_then_executes_native_call(self, tmp_path):
+        """Malformed textual tool attempts should retry before giving up."""
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+        from supercoder.tools.file_read import FileReadTool
+
+        (tmp_path / "test.txt").write_text("hello\n")
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+        mock_llm.chat_with_tools_interruptible.side_effect = [
+            CompletionResult(
+                content='<@TOOL>{"name": "file-read", "arguments": {"fileName": "test.txt"',
+                tool_calls=[],
+            ),
+            CompletionResult(
+                content="",
+                tool_calls=[
+                    NativeToolCall(
+                        id="call_retry",
+                        name="file-read",
+                        arguments={"fileName": "test.txt"},
+                    )
+                ],
+                raw_tool_calls=[
+                    {
+                        "id": "call_retry",
+                        "type": "function",
+                        "function": {
+                            "name": "file-read",
+                            "arguments": '{"fileName": "test.txt"}',
+                        },
+                    }
+                ],
+            ),
+            CompletionResult(content="Done.", tool_calls=[]),
+        ]
+        agent = CoderAgent(
+            llm=mock_llm,
+            tools=[FileReadTool()],
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+        )
+
+        events = list(agent.chat_turn("Read test.txt"))
+        retry_events = [event for event in events if event["type"] == "tool_retry"]
+        types = [event["type"] for event in events]
+        second_api_messages = mock_llm.chat_with_tools_interruptible.call_args_list[1][0][0]
+
+        assert len(retry_events) == 1
+        assert retry_events[0]["content"]["attempt"] == 1
+        assert "tool_call" in types
+        assert "tool_result" in types
+        assert "native tool call interface" in second_api_messages[-1].content
+
+    def test_malformed_text_tool_call_stops_after_two_retries(self):
+        """Malformed textual tool attempts should stop after the retry budget."""
+        agent, mock_llm = self._make_agent()
+        malformed = CompletionResult(
+            content='<@TOOL>{"name": "file-read", "arguments": {"fileName": "test.txt"',
+            tool_calls=[],
+        )
+        mock_llm.chat_with_tools_interruptible.side_effect = [malformed, malformed, malformed]
+
+        events = list(agent.chat_turn("Read test.txt"))
+        retry_events = [event for event in events if event["type"] == "tool_retry"]
+        error_event = next(event for event in events if event["type"] == "error")
+
+        assert [event["content"]["attempt"] for event in retry_events] == [1, 2]
+        assert "after 2 retries" in error_event["content"]
+
     def test_command_deny_skips_confirmation_and_execution(self, tmp_path, monkeypatch):
         """Denied commands return a tool result without asking the user."""
         from supercoder.agent.coder_agent import CoderAgent

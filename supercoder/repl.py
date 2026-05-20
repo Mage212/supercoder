@@ -344,6 +344,19 @@ class SuperCoderREPL:
                     spinner.update("[bold blue]SuperCoder is thinking...[/]")
                     spinner.start()
 
+                elif event_type == "tool_retry":
+                    spinner.stop()
+                    attempt = content.get("attempt", 0)
+                    max_attempts = content.get("max_attempts", 0)
+                    self.console.print(
+                        "[yellow]Tool call format was invalid. "
+                        f"Retrying model response ({attempt}/{max_attempts})...[/]"
+                    )
+                    _gen_tokens[0] = 0
+                    _gen_start = time.monotonic()
+                    spinner.update("[bold blue]Retrying tool call format...[/]")
+                    spinner.start()
+
                 elif event_type == "auto_compact":
                     spinner.stop()
                     before = content.get("stats_before")

@@ -14,7 +14,7 @@ from ..context.freshness import FileFreshnessTracker
 from ..context.references import ContextAttachment, expand_context_references
 from ..context.session_manager import ChatSession, SessionManager
 from ..context.window_manager import ContextConfig, ContextStats, ContextWindowManager
-from ..llm.base import BaseLLM, Message
+from ..llm.base import BaseLLM, Message, NativeToolCall
 from ..logging import get_logger
 from ..permissions import PermissionAction, PermissionDecision, PermissionPolicy
 from ..repomap import RepoMap
@@ -309,6 +309,88 @@ class CoderAgent:
         logger.log_tool_call(tool_name, arguments)
         logger.log_tool_result(tool_name, result)
 
+    def _looks_like_text_tool_attempt(self, text: str) -> bool:
+        """Return True when text appears to contain a non-native tool call."""
+        if any(marker in text for marker in ("<@TOOL", "<tool_call", "<function_call")):
+            return True
+
+        if re.search(r"\bto=(?:tool[:\s.]|TOOL\s+)[a-zA-Z0-9_-]+\s*\{", text, re.IGNORECASE):
+            return True
+
+        for match in re.finditer(r"```json\s*\n(.*?)\n?```", text, re.DOTALL | re.IGNORECASE):
+            block = match.group(1)
+            has_tool_name = re.search(r"""["']?(?:tool|name)["']?\s*:""", block)
+            has_arguments = re.search(r"""["']?(?:arguments|args)["']?\s*:""", block)
+            if has_tool_name and has_arguments:
+                return True
+
+        return False
+
+    def _fallback_tool_call_arguments(self, arguments: object) -> dict:
+        """Normalize fallback parser arguments into a native tool-call dict."""
+        if isinstance(arguments, dict):
+            return dict(arguments)
+
+        if isinstance(arguments, str):
+            try:
+                parsed = json.loads(arguments)
+            except json.JSONDecodeError:
+                return {"_raw": arguments}
+            return parsed if isinstance(parsed, dict) else {"_raw": arguments}
+
+        return {"_raw": str(arguments)}
+
+    def _strip_fallback_tool_markup(self, text: str, raw_matches: list[str]) -> str:
+        """Remove parsed textual tool-call markup from display content."""
+        cleaned = text
+        for raw_match in raw_matches:
+            if raw_match:
+                cleaned = cleaned.replace(raw_match, "")
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        return cleaned.strip()
+
+    def _parse_text_tool_calls(
+        self, text: str, iteration: int
+    ) -> tuple[list[NativeToolCall], list[dict], str, list[str]]:
+        """Parse textual tool calls into native-compatible tool call objects."""
+        parsed_calls = self.tool_parser.parse_all(text)
+        native_calls: list[NativeToolCall] = []
+        raw_tool_calls: list[dict] = []
+        raw_matches: list[str] = []
+        formats: list[str] = []
+
+        for index, parsed in enumerate(parsed_calls):
+            name = str(parsed.name or "")
+            if not name:
+                continue
+
+            arguments = self._fallback_tool_call_arguments(parsed.arguments)
+            call_id = f"fallback_call_{iteration}_{index}"
+            args_json = json.dumps(arguments)
+
+            native_calls.append(NativeToolCall(id=call_id, name=name, arguments=arguments))
+            raw_tool_calls.append(
+                {
+                    "id": call_id,
+                    "type": "function",
+                    "function": {"name": name, "arguments": args_json},
+                }
+            )
+            raw_matches.append(parsed.raw_match)
+            formats.append(parsed.format_name)
+
+        cleaned_content = self._strip_fallback_tool_markup(text, raw_matches)
+        return native_calls, raw_tool_calls, cleaned_content, formats
+
+    def _tool_call_retry_instruction(self, attempt: int, max_attempts: int) -> str:
+        """Short cache-friendly correction appended only to the retry API call."""
+        return (
+            "Your previous response looked like a tool call, but SuperCoder could not parse it. "
+            f"Retry the same step now using the native tool call interface only "
+            f"(retry {attempt}/{max_attempts}). Do not write XML, JSON, or markdown tool-call "
+            "syntax in normal text."
+        )
+
     def _add_context_attachment(self, attachment: ContextAttachment) -> dict:
         """Add expanded @path context to history and return an event payload."""
         self.context.add_message(
@@ -577,6 +659,9 @@ class CoderAgent:
             self._update_system_prompt()
 
         tool_iterations = 0
+        malformed_tool_retries = 0
+        max_malformed_tool_retries = 2
+        retry_messages: list[Message] = []
 
         while True:
             if tool_iterations >= MAX_TOOL_ITERATIONS:
@@ -595,6 +680,8 @@ class CoderAgent:
 
             self._announce_mode_policy_if_needed()
             messages = self.context.get_messages_for_api()
+            if retry_messages:
+                messages = [*messages, *retry_messages]
             get_logger().log_messages(messages)
 
             # --- Call LLM with interruptible streaming ---
@@ -633,26 +720,102 @@ class CoderAgent:
                 yield {"type": "thinking", "content": result.reasoning}
                 get_logger().log_reasoning(result.reasoning, stage="pre_response")
 
+            effective_tool_calls = result.tool_calls
+            effective_raw_tool_calls = result.raw_tool_calls
+            display_content = result.content
+
+            if not effective_tool_calls and result.content:
+                (
+                    fallback_tool_calls,
+                    fallback_raw_tool_calls,
+                    fallback_display_content,
+                    fallback_formats,
+                ) = self._parse_text_tool_calls(result.content, tool_iterations)
+                if fallback_tool_calls:
+                    effective_tool_calls = fallback_tool_calls
+                    effective_raw_tool_calls = fallback_raw_tool_calls
+                    display_content = fallback_display_content
+                    malformed_tool_retries = 0
+                    retry_messages = []
+                    get_logger().log_tool_call_fallback_parse(
+                        success=True,
+                        count=len(fallback_tool_calls),
+                        formats=fallback_formats,
+                        reason="parsed_text_tool_calls",
+                    )
+                elif self._looks_like_text_tool_attempt(result.content):
+                    get_logger().log_tool_call_fallback_parse(
+                        success=False,
+                        count=0,
+                        reason="malformed_text_tool_call",
+                    )
+                    if malformed_tool_retries < max_malformed_tool_retries:
+                        malformed_tool_retries += 1
+                        retry_reason = "Malformed text tool-call output"
+                        get_logger().log_tool_call_retry(
+                            attempt=malformed_tool_retries,
+                            max_attempts=max_malformed_tool_retries,
+                            reason=retry_reason,
+                        )
+                        yield {
+                            "type": "tool_retry",
+                            "content": {
+                                "attempt": malformed_tool_retries,
+                                "max_attempts": max_malformed_tool_retries,
+                                "reason": retry_reason,
+                            },
+                        }
+                        retry_messages = [
+                            Message(
+                                "user",
+                                self._tool_call_retry_instruction(
+                                    malformed_tool_retries, max_malformed_tool_retries
+                                ),
+                                display_type="tool_retry",
+                            )
+                        ]
+                        continue
+
+                    if checkpoint_active:
+                        restored = self.checkpoint_manager.rollback()
+                        if restored:
+                            yield {
+                                "type": "rollback",
+                                "content": {
+                                    "files": restored,
+                                    "reason": "Malformed tool call after retries",
+                                },
+                            }
+                    yield {
+                        "type": "error",
+                        "content": "Tool call format was invalid after 2 retries. Stopping.",
+                    }
+                    return
+
+            if effective_tool_calls:
+                malformed_tool_retries = 0
+            retry_messages = []
+
             # 2. Text response
-            if result.content:
+            if display_content:
                 # Add assistant message (with tool_calls metadata for API replay)
                 self.context.add_message(
                     Message(
                         role="assistant",
-                        content=result.content,
-                        tool_calls=result.raw_tool_calls,
+                        content=display_content,
+                        tool_calls=effective_raw_tool_calls,
                         display_type="response",
                     )
                 )
-                get_logger().log_model_response(result.content, self.llm.model)
-                yield {"type": "response", "content": result.content}
-            elif result.tool_calls:
+                get_logger().log_model_response(display_content, self.llm.model)
+                yield {"type": "response", "content": display_content}
+            elif effective_tool_calls:
                 # Assistant message with no text, only tool calls
                 self.context.add_message(
                     Message(
                         role="assistant",
                         content="",
-                        tool_calls=result.raw_tool_calls,
+                        tool_calls=effective_raw_tool_calls,
                         display_type="tool_call",
                     )
                 )
@@ -660,7 +823,7 @@ class CoderAgent:
             self._save_current_session()
 
             # 3. Tool calls
-            if not result.tool_calls:
+            if not effective_tool_calls:
                 # No tool calls — conversation turn is done
                 if checkpoint_active:
                     self.checkpoint_manager.rollback()
@@ -673,7 +836,7 @@ class CoderAgent:
             tool_iterations += 1
             has_file_edits = False
 
-            for tc in result.tool_calls:
+            for tc in effective_tool_calls:
                 name = tc.name
                 arguments = dict(tc.arguments)
 
