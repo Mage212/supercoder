@@ -1,5 +1,8 @@
 """Token counting utilities."""
 
+import json
+from typing import Any
+
 
 class TokenCounter:
     """Count tokens in text, with optional tiktoken support."""
@@ -49,17 +52,44 @@ class TokenCounter:
         # Use the higher of the two estimates
         return max(words, char_estimate)
 
+    def count_serialized(self, value: Any) -> int:
+        """Count tokens in compact JSON-serialized structured data."""
+        if value is None:
+            return 0
+        text = json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
+        return self.count(text)
+
+    def _message_to_api_dict(self, msg: Any) -> dict:
+        """Convert a Message-like object to the shape sent to the chat API."""
+        if hasattr(msg, "to_api_dict"):
+            return msg.to_api_dict()
+        if isinstance(msg, dict):
+            return msg
+        return {
+            "role": getattr(msg, "role", "user"),
+            "content": getattr(msg, "content", ""),
+        }
+
+    def count_api_messages(self, messages: list) -> int:
+        """Count tokens in serialized API message payloads."""
+        return self.count_serialized([self._message_to_api_dict(msg) for msg in messages])
+
+    def count_tools_schema(self, tools_schema: list[dict] | None) -> int:
+        """Count tokens in the serialized native tools schema."""
+        if not tools_schema:
+            return 0
+        return self.count_serialized(tools_schema)
+
+    def count_api_payload(self, messages: list, tools_schema: list[dict] | None = None) -> int:
+        """Count tokens in the request payload shape used by chat_with_tools()."""
+        payload: dict[str, Any] = {"messages": [self._message_to_api_dict(msg) for msg in messages]}
+        if tools_schema:
+            payload["tools"] = tools_schema
+        return self.count_serialized(payload)
+
     def count_messages(self, messages: list) -> int:
         """Count tokens in a list of messages."""
-        total = 0
-        for msg in messages:
-            # Add overhead per message (~4 tokens for role, formatting)
-            total += 4
-            if hasattr(msg, "content"):
-                total += self.count(msg.content)
-            elif isinstance(msg, dict):
-                total += self.count(msg.get("content", ""))
-        return total
+        return self.count_api_messages(messages)
 
     @property
     def has_accurate_counting(self) -> bool:

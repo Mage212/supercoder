@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from supercoder.llm.base import CompletionResult, Message, NativeToolCall
+from supercoder.llm.base import CompletionResult, Message, NativeToolCall, UsageStats
 from supercoder.tools import ALL_TOOLS
 from supercoder.tools.base import ToolDefinition
 
@@ -1690,23 +1690,24 @@ class TestChatTurnEventFlow:
         assert messages[0].display_type == "compact_summary"
         assert len(messages) == 7  # summary + protected_recent_steps default
 
-    def test_auto_compact_runs_before_large_turn(self):
-        """Auto-compact should run at a safe boundary before the next user turn."""
+    def test_auto_compact_runs_after_model_response_usage(self):
+        """Auto-compact should use usage from the latest model response."""
         agent, mock_llm = self._make_agent()
         agent.context.config.max_tokens = 2000
         agent.context.config.reserved_for_response = 0
         agent.context.config.auto_compact_threshold = 0.5
         agent.context.config.compression_threshold = 10.0
-        agent.context.config.protected_recent_steps = 6
+        agent.context.config.protected_recent_steps = 1
 
-        agent.context.add_message(Message("user", "x" * 1200, display_type="user_input"))
-        for i in range(6):
-            agent.context.add_message(Message("assistant", f"short {i}", display_type="response"))
-        agent.context.update_actual_usage(1200)
+        assert agent.context.should_auto_compact() is False
 
         mock_llm.chat_with_tools_interruptible.side_effect = [
+            CompletionResult(
+                content="Done.",
+                tool_calls=[],
+                usage=UsageStats(prompt_tokens=600, completion_tokens=600, total_tokens=1200),
+            ),
             CompletionResult(content="Compact summary", tool_calls=[]),
-            CompletionResult(content="Done.", tool_calls=[]),
         ]
 
         events = list(agent.chat_turn("Continue"))
@@ -1714,7 +1715,42 @@ class TestChatTurnEventFlow:
 
         assert "auto_compact" in types
         assert "response" in types
+        assert types.index("response") < types.index("auto_compact")
         assert mock_llm.chat_with_tools_interruptible.call_count == 2
+
+    def test_auto_compact_after_tool_results_before_next_model_call(self):
+        """Tool responses stay API-valid before compacting a large tool-call turn."""
+        agent, mock_llm = self._make_agent()
+        agent.context.config.max_tokens = 2000
+        agent.context.config.reserved_for_response = 0
+        agent.context.config.auto_compact_threshold = 0.5
+        agent.context.config.compression_threshold = 10.0
+        agent.context.config.protected_recent_steps = 1
+        tool_call = NativeToolCall(id="call_unknown", name="missing-tool", arguments={})
+        raw_tool_call = {
+            "id": "call_unknown",
+            "type": "function",
+            "function": {"name": "missing-tool", "arguments": "{}"},
+        }
+
+        mock_llm.chat_with_tools_interruptible.side_effect = [
+            CompletionResult(
+                content="",
+                tool_calls=[tool_call],
+                raw_tool_calls=[raw_tool_call],
+                usage=UsageStats(prompt_tokens=1000, completion_tokens=250, total_tokens=1250),
+            ),
+            CompletionResult(content="Compact summary", tool_calls=[]),
+            CompletionResult(content="Done.", tool_calls=[]),
+        ]
+
+        events = list(agent.chat_turn("Call a tool"))
+        types = [e["type"] for e in events]
+
+        assert "auto_compact" in types
+        assert types.index("error") < types.index("auto_compact")
+        assert types.index("auto_compact") < types.index("response")
+        assert mock_llm.chat_with_tools_interruptible.call_count == 3
 
 
 # ──────────────────────────────────────────────

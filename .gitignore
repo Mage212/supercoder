@@ -34,6 +34,7 @@ ENV/
 # IDEs
 .idea/
 .vscode/
+.antigravitycli/
 
 # Project specific
 .env

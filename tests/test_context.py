@@ -1,7 +1,7 @@
 """Test context management functionality."""
 
 from supercoder.context import ContextConfig, ContextWindowManager, TokenCounter
-from supercoder.llm.base import Message
+from supercoder.llm.base import Message, UsageStats
 
 
 class TestTokenCounter:
@@ -115,6 +115,81 @@ class TestContextWindowManager:
 
         api_msgs = cm.get_messages_for_api()
         assert len(api_msgs) == 3  # all pass through
+
+    def test_actual_usage_prefers_total_tokens(self):
+        """API total_tokens is the primary context usage metric."""
+        cm = ContextWindowManager(ContextConfig(max_tokens=100000))
+
+        cm.update_actual_usage(
+            UsageStats(prompt_tokens=1000, completion_tokens=2000, total_tokens=37162)
+        )
+
+        assert cm.get_stats().used_tokens == 37162
+
+    def test_actual_usage_falls_back_to_prompt_plus_completion(self):
+        """Compatible APIs that omit total_tokens still provide a usable total."""
+        cm = ContextWindowManager(ContextConfig(max_tokens=100000))
+
+        cm.update_actual_usage(
+            UsageStats(prompt_tokens=16000, completion_tokens=1265, total_tokens=0)
+        )
+
+        assert cm.get_stats().used_tokens == 17265
+
+    def test_add_message_does_not_reset_latest_api_usage(self):
+        """Local history changes should not erase the latest API-reported total."""
+        cm = ContextWindowManager(ContextConfig(max_tokens=100000))
+        cm.update_actual_usage(UsageStats(prompt_tokens=10, completion_tokens=5, total_tokens=1200))
+
+        cm.add_message(Message("tool", "large local result", tool_call_id="tc1", name="file-read"))
+
+        assert cm.get_stats().used_tokens == 1200
+
+    def test_fallback_estimate_counts_structured_api_payload(self):
+        """Fallback counting includes tool calls, tool results, and tools schema."""
+        config = ContextConfig(max_tokens=100000)
+        cm = ContextWindowManager(config)
+        cm.set_system_prompt("System")
+        cm.add_message(Message("user", "Read file", display_type="user_input"))
+        plain_tokens = cm.get_stats().used_tokens
+
+        tool_calls = [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "file-read",
+                    "arguments": '{"fileName":"supercoder/context/window_manager.py"}',
+                },
+            }
+        ]
+        cm.add_message(Message("assistant", "", tool_calls=tool_calls, display_type="tool_call"))
+        cm.add_message(
+            Message(
+                "tool",
+                "file contents",
+                tool_call_id="call_1",
+                name="file-read",
+                display_type="tool_result",
+            )
+        )
+        cm.set_tools_schema(
+            [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "file-read",
+                        "description": "Read a file",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"fileName": {"type": "string"}},
+                        },
+                    },
+                }
+            ]
+        )
+
+        assert cm.get_stats().used_tokens > plain_tokens
 
     def test_should_auto_compact_uses_protected_step_floor(self):
         """Auto-compact should wait until there is older history to summarize."""

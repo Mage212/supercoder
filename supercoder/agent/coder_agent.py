@@ -14,7 +14,7 @@ from ..context.freshness import FileFreshnessTracker
 from ..context.references import ContextAttachment, expand_context_references
 from ..context.session_manager import ChatSession, SessionManager
 from ..context.window_manager import ContextConfig, ContextStats, ContextWindowManager
-from ..llm.base import BaseLLM, Message, NativeToolCall
+from ..llm.base import BaseLLM, CompletionResult, Message, NativeToolCall
 from ..logging import get_logger
 from ..permissions import PermissionAction, PermissionDecision, PermissionPolicy
 from ..repomap import RepoMap
@@ -122,6 +122,7 @@ class CoderAgent:
         # Setup context management
         config = context_config or ContextConfig()
         self.context = ContextWindowManager(config)
+        self.context.set_tools_schema(self._tools_schema)
         self._update_system_prompt()
 
         # Multi-format tool call parser (used only in deprecated streaming mode)
@@ -137,6 +138,53 @@ class CoderAgent:
     def set_chunk_callback(self, callback):
         """Set a callback invoked with approx token count during generation."""
         self._chunk_callback = callback
+
+    def _record_response_usage(
+        self, result: CompletionResult, request_messages: list[Message]
+    ) -> None:
+        """Store latest context usage from an API response or fallback estimate."""
+        usage = result.usage
+        has_reported_usage = bool(
+            usage and (usage.total_tokens or usage.prompt_tokens or usage.completion_tokens)
+        )
+        fallback_total = None
+        if not has_reported_usage:
+            fallback_total = self._estimate_response_total_tokens(request_messages, result)
+        self.context.update_actual_usage(usage, fallback_total_tokens=fallback_total)
+
+    def _estimate_response_total_tokens(
+        self, request_messages: list[Message], result: CompletionResult
+    ) -> int:
+        """Estimate total tokens for the latest request/response pair."""
+        prompt_tokens = self.context.counter.count_api_payload(
+            request_messages,
+            self._tools_schema,
+        )
+        response_payload: dict = {
+            "role": "assistant",
+            "content": result.content,
+        }
+        if result.reasoning:
+            response_payload["reasoning"] = result.reasoning
+        if result.raw_tool_calls is not None:
+            response_payload["tool_calls"] = result.raw_tool_calls
+        elif result.tool_calls:
+            response_payload["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.name,
+                        "arguments": json.dumps(
+                            tc.arguments,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                    },
+                }
+                for tc in result.tool_calls
+            ]
+        return prompt_tokens + self.context.counter.count_serialized(response_payload)
 
     def _expand_context_references(self, user_message: str) -> ContextAttachment | None:
         """Expand @path references into a bounded attachment message."""
@@ -631,11 +679,6 @@ class CoderAgent:
         # Reset abort controller
         self.abort_controller.reset()
 
-        if user_message:
-            auto_compact_event = self._auto_compact_if_needed()
-            if auto_compact_event:
-                yield auto_compact_event
-
         # Create checkpoint for this interaction
         checkpoint_active = False
         if user_message:
@@ -650,9 +693,6 @@ class CoderAgent:
                 }
             self.context.add_message(Message("user", user_message, display_type="user_input"))
             get_logger().log_user_input(user_message)
-            auto_compact_event = self._auto_compact_if_needed()
-            if auto_compact_event:
-                yield auto_compact_event
 
         # Update RepoMap if enabled
         if self.repo_map:
@@ -672,11 +712,6 @@ class CoderAgent:
                     "content": f"Tool call limit ({MAX_TOOL_ITERATIONS}) reached. Stopping to prevent infinite loop.",
                 }
                 return
-
-            if tool_iterations > 0:
-                auto_compact_event = self._auto_compact_if_needed()
-                if auto_compact_event:
-                    yield auto_compact_event
 
             self._announce_mode_policy_if_needed()
             messages = self.context.get_messages_for_api()
@@ -700,9 +735,9 @@ class CoderAgent:
                 yield {"type": "error", "content": str(e)}
                 return
 
-            # Update context with actual token usage from API
-            if result.usage and result.usage.prompt_tokens:
-                self.context.update_actual_usage(result.usage.prompt_tokens)
+            # Update context from the latest model response. Auto-compact decisions
+            # are made after this response, not before the next request is built.
+            self._record_response_usage(result, messages)
 
             # Warn about truncated responses
             if result.truncated:
@@ -1066,6 +1101,10 @@ class CoderAgent:
             if checkpoint_active and has_file_edits:
                 self.checkpoint_manager.commit()
                 checkpoint_active = False
+
+            auto_compact_event = self._auto_compact_if_needed()
+            if auto_compact_event:
+                yield auto_compact_event
 
             # Loop back — LLM will see the tool results and continue
             continue

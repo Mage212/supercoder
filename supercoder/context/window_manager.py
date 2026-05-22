@@ -5,7 +5,7 @@ from typing import Literal
 
 from rich.console import Console
 
-from ..llm.base import Message
+from ..llm.base import Message, UsageStats
 from .token_counter import TokenCounter
 
 console = Console()
@@ -20,7 +20,7 @@ class ContextConfig:
     system_prompt_tokens: int = 500  # Estimated system prompt size
     compression_threshold: float = 0.95  # Emergency fallback trimming threshold
     auto_compact: bool = True  # Prefer LLM summarization before trimming
-    auto_compact_threshold: float = 0.75  # Trigger auto-compact at this usable utilization
+    auto_compact_threshold: float = 0.75  # Trigger auto-compact at this total-context utilization
     protected_recent_steps: int = 6  # Exact recent messages to keep after compact
     min_messages_to_keep: int = 4  # Always keep at least this many messages
     compression_strategy: Literal["sliding", "summarize", "smart"] = "sliding"
@@ -59,20 +59,21 @@ class ContextWindowManager:
         self.history: list[Message] = []
         self._system_prompt: str = ""
         self._system_tokens: int = 0
-        self._actual_used_tokens: int | None = None
+        self._last_response_total_tokens: int | None = None
+        self._tools_schema: list[dict] | None = None
 
     def set_system_prompt(self, prompt: str) -> None:
         """Set the system prompt and calculate its tokens."""
         self._system_prompt = prompt
         self._system_tokens = self.counter.count(prompt)
 
-    def add_message(self, message: Message) -> None:
-        """Add a message to history, trimming only as an emergency fallback."""
-        self.history.append(message)
-        self._actual_used_tokens = None
+    def set_tools_schema(self, tools_schema: list[dict] | None) -> None:
+        """Set the native tools schema used for fallback request-size estimation."""
+        self._tools_schema = tools_schema
 
-        if self.should_emergency_compress():
-            self._compress()
+    def add_message(self, message: Message) -> None:
+        """Add a message to history without changing latest API usage."""
+        self.history.append(message)
 
     def get_messages(self) -> list[Message]:
         """Get all messages in history."""
@@ -92,37 +93,62 @@ class ContextWindowManager:
 
     def get_stats(self) -> ContextStats:
         """Get current context utilization statistics."""
-        if self._actual_used_tokens is not None:
-            used = self._actual_used_tokens
+        if self._last_response_total_tokens is not None:
+            used = self._last_response_total_tokens
         else:
-            history_tokens = self.counter.count_messages(self.history)
-            used = self._system_tokens + history_tokens
-        available = self.config.max_tokens - self.config.reserved_for_response
+            used = self._estimate_current_payload_tokens()
+        total = max(1, self.config.max_tokens)
 
         return ContextStats(
             total_tokens=self.config.max_tokens,
             used_tokens=used,
-            available_tokens=available - used,
+            available_tokens=self.config.max_tokens - used,
             message_count=len(self.history),
-            utilization_percent=(used / available) * 100 if available > 0 else 100,
+            utilization_percent=(used / total) * 100,
         )
 
     def clear(self) -> None:
         """Clear conversation history."""
         self.history = []
-        self._actual_used_tokens = None
+        self._last_response_total_tokens = None
 
     def set_max_tokens(self, max_tokens: int) -> None:
         """Update the maximum context token limit at runtime."""
         self.config.max_tokens = max_tokens
 
-    def update_actual_usage(self, prompt_tokens: int) -> None:
-        """Update token count from actual API-reported usage."""
-        self._actual_used_tokens = prompt_tokens
+    def update_actual_usage(
+        self,
+        usage: UsageStats | int | None = None,
+        *,
+        fallback_total_tokens: int | None = None,
+    ) -> None:
+        """Update context usage from the latest API response.
+
+        The primary value is usage.total_tokens because it reflects the actual
+        request plus completion as seen by the API/proxy. When a compatible
+        backend omits total_tokens, prompt_tokens + completion_tokens is used.
+        If the backend omits usage entirely, the caller can provide a fallback
+        estimate of the same request/response pair.
+        """
+        if isinstance(usage, int):
+            self._last_response_total_tokens = max(0, usage)
+            return
+        if usage:
+            if usage.total_tokens:
+                self._last_response_total_tokens = usage.total_tokens
+                return
+            estimated_total = usage.prompt_tokens + usage.completion_tokens
+            if estimated_total:
+                self._last_response_total_tokens = estimated_total
+                return
+        if fallback_total_tokens is not None:
+            self._last_response_total_tokens = max(0, fallback_total_tokens)
+            return
+        self._last_response_total_tokens = None
 
     def reset_actual_usage(self) -> None:
         """Reset actual usage, forcing fallback to estimation."""
-        self._actual_used_tokens = None
+        self._last_response_total_tokens = None
 
     def usable_tokens(self) -> int:
         """Return the context budget available before the reserved response space."""
@@ -143,12 +169,12 @@ class ContextWindowManager:
             return False
 
         stats = self.get_stats()
-        return stats.used_tokens > self.usable_tokens() * self.config.auto_compact_threshold
+        return stats.used_tokens >= self.config.max_tokens * self.config.auto_compact_threshold
 
     def should_emergency_compress(self) -> bool:
         """Return True when hard trimming is needed to avoid overflowing the context."""
         stats = self.get_stats()
-        return stats.used_tokens > self.usable_tokens() * self.config.compression_threshold
+        return stats.used_tokens >= self.config.max_tokens * self.config.compression_threshold
 
     def force_compress(self) -> None:
         """Run the configured compression strategy immediately."""
@@ -238,7 +264,7 @@ class ContextWindowManager:
         Note: We use 'user' role so the model treats this as input context
         to remember, not as its own previous response.
         """
-        self._actual_used_tokens = None
+        self._last_response_total_tokens = None
         self.history = [
             Message(
                 "user",
@@ -260,7 +286,7 @@ class ContextWindowManager:
 
     def _compress(self) -> None:
         """Compress history to free up context space."""
-        self._actual_used_tokens = None
+        self._last_response_total_tokens = None
         if self.config.compression_strategy == "sliding":
             self._sliding_window_compress()
         elif self.config.compression_strategy == "summarize":
@@ -365,3 +391,7 @@ class ContextWindowManager:
         """Check if a response of given size would fit."""
         stats = self.get_stats()
         return stats.available_tokens >= response_tokens
+
+    def _estimate_current_payload_tokens(self) -> int:
+        """Estimate the current chat_with_tools() request payload."""
+        return self.counter.count_api_payload(self.get_messages_for_api(), self._tools_schema)
