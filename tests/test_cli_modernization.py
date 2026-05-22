@@ -287,6 +287,55 @@ def test_repl_command_confirm_preserves_agent_decisions(choice, expected):
     assert repl._handle_command_confirm("echo hi") == expected
 
 
+def test_repl_command_confirm_omits_show_full_for_short_commands():
+    agent = MagicMock()
+    agent.llm.model = "test"
+    agent.llm.config.model = "test"
+    agent.mode = AgentMode.CODE
+    repl = SuperCoderREPL(agent)
+    repl._select_confirmation_action = MagicMock(return_value="deny_once")
+
+    repl._handle_command_confirm("echo hi")
+
+    choices = repl._select_confirmation_action.call_args.args[1]
+    assert ("Show full command", "show_full") not in choices
+
+
+def test_repl_command_confirm_show_full_does_not_approve():
+    agent = MagicMock()
+    agent.llm.model = "test"
+    agent.llm.config.model = "test"
+    agent.mode = AgentMode.CODE
+    repl = SuperCoderREPL(agent)
+    long_command = "python -c '" + ("print(1);" * 300) + "'"
+    repl._select_confirmation_action = MagicMock(side_effect=["show_full", "approve_once"])
+    repl._print_block = MagicMock()
+
+    assert repl._handle_command_confirm(long_command) == {
+        "approved": True,
+        "decision": "approve_once",
+    }
+
+    first_choices = repl._select_confirmation_action.call_args_list[0].args[1]
+    assert ("Show full command", "show_full") in first_choices
+    titles = [call.args[1] for call in repl._print_block.call_args_list]
+    assert "Full Command" in titles
+    assert repl._select_confirmation_action.call_count == 2
+
+
+def test_long_single_line_command_preview_uses_visual_lines():
+    agent = MagicMock()
+    agent.llm.model = "test"
+    agent.llm.config.model = "test"
+    agent.mode = AgentMode.CODE
+    repl = SuperCoderREPL(agent)
+    visual_lines = repl._split_visual_lines("x" * 500, width=40)
+
+    preview = repl._command_preview_text(visual_lines, is_long=True)
+
+    assert "visual lines hidden" in preview
+
+
 @pytest.mark.parametrize(
     ("choice", "expected"),
     [
@@ -332,6 +381,88 @@ def test_repl_edit_confirm_menu_includes_accept_edits_choice():
 
     choices = repl._select_confirmation_action.call_args.args[1]
     assert ("Apply and switch to accept-edits", "apply_accept_edits") in choices
+
+
+def test_tool_call_display_preserves_non_ascii_arguments():
+    agent = MagicMock()
+    agent.llm.model = "test"
+    agent.llm.config.model = "test"
+    agent.mode = AgentMode.CODE
+    repl = SuperCoderREPL(agent)
+    repl.console = Console(record=True, width=100)
+
+    repl._display_tool_call({"name": "test-tool", "arguments": {"label": "Расходы"}})
+
+    rendered = repl.console.export_text()
+    assert "Расходы" in rendered
+    assert "\\u0420" not in rendered
+
+
+def test_diff_detection_ignores_compacted_head_tail_markers():
+    agent = MagicMock()
+    agent.llm.model = "test"
+    agent.llm.config.model = "test"
+    agent.mode = AgentMode.CODE
+    repl = SuperCoderREPL(agent)
+    compacted = "[Tool output compacted]\n--- head ---\ncontent\n--- tail ---\ncontent"
+
+    assert repl._is_diff_result(compacted) is False
+    assert repl._is_diff_result("Done\n\n--- old.py\n+++ new.py\n@@ -1 +1 @@\n-old\n+new") is True
+
+
+def test_compacted_tool_output_is_rendered_as_user_friendly_preview():
+    agent = MagicMock()
+    agent.llm.model = "test"
+    agent.llm.config.model = "test"
+    agent.mode = AgentMode.CODE
+    repl = SuperCoderREPL(agent)
+    repl.console = Console(record=True, width=100)
+    raw = (
+        "[Tool output compacted]\n"
+        "Tool: code-edit\n"
+        "Original size: 9000 chars\n"
+        "Full output saved to: .supercoder/tool-outputs/out.txt\n"
+        "Omitted middle: 4000 chars\n"
+        "\n"
+        "--- head ---\n"
+        "HEAD\n"
+        "\n"
+        "--- tail ---\n"
+        "TAIL"
+    )
+
+    repl._display_tool_result({"name": "code-edit", "result": raw})
+
+    rendered = repl.console.export_text()
+    assert "[Tool output compacted]" not in rendered
+    assert "--- head ---" not in rendered
+    assert "Preview head" in rendered
+    assert "HEAD" in rendered
+    assert "TAIL" in rendered
+
+
+def test_display_result_is_preferred_for_masked_tool_output():
+    agent = MagicMock()
+    agent.llm.model = "test"
+    agent.llm.config.model = "test"
+    agent.mode = AgentMode.CODE
+    repl = SuperCoderREPL(agent)
+    repl.console = Console(record=True, width=100)
+
+    repl._display_tool_result(
+        {
+            "name": "big-output",
+            "result": "[Tool output compacted]\nRAW",
+            "display_result": "Human preview",
+            "masked": True,
+            "original_size": 9000,
+            "offload_path": ".supercoder/tool-outputs/out.txt",
+        }
+    )
+
+    rendered = repl.console.export_text()
+    assert "Human preview" in rendered
+    assert "[Tool output compacted]" not in rendered
 
 
 def test_repl_edit_confirm_uses_diff_preview(tmp_path):

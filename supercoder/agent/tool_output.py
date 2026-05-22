@@ -18,8 +18,11 @@ class MaskedToolOutput:
 
     model_text: str
     full_text: str
+    display_text: str
     offload_path: Path | None = None
     masked: bool = False
+    original_size: int = 0
+    omitted_chars: int = 0
 
 
 class ToolOutputMasker:
@@ -36,7 +39,12 @@ class ToolOutputMasker:
     def mask(self, tool_name: str, tool_call_id: str | None, output: str) -> MaskedToolOutput:
         """Return compact model text and offload full output when needed."""
         if len(output) <= self.MAX_INLINE_CHARS:
-            return MaskedToolOutput(model_text=output, full_text=output)
+            return MaskedToolOutput(
+                model_text=output,
+                full_text=output,
+                display_text=output,
+                original_size=len(output),
+            )
 
         offload_path: Path | None = None
         offload_note = ""
@@ -62,11 +70,24 @@ class ToolOutputMasker:
             "--- tail ---\n"
             f"{output[-self.TAIL_CHARS :].lstrip()}"
         )
+        display_text = (
+            f"Showing first {self.HEAD_CHARS} chars and last {self.TAIL_CHARS} chars.\n"
+            f"Hidden middle: {max(omitted, 0)} chars\n"
+            "\n"
+            "Preview head:\n"
+            f"{output[: self.HEAD_CHARS].rstrip()}\n"
+            "\n"
+            "Preview tail:\n"
+            f"{output[-self.TAIL_CHARS :].lstrip()}"
+        )
         return MaskedToolOutput(
             model_text=model_text,
             full_text=output,
+            display_text=display_text,
             offload_path=offload_path,
             masked=True,
+            original_size=len(output),
+            omitted_chars=max(omitted, 0),
         )
 
     def _write_full_output(self, tool_name: str, tool_call_id: str | None, output: str) -> Path:

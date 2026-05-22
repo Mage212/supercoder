@@ -898,9 +898,20 @@ class TestChatTurnEventFlow:
         events = list(agent.chat_turn("Run big output"))
         tool_event = next(e for e in events if e["type"] == "tool_result")
         tool_text = tool_event["content"]["result"]
+        display_text = tool_event["content"]["display_result"]
 
         assert "[Tool output compacted]" in tool_text
         assert "MIDDLE_ONLY_SECRET" not in tool_text
+        assert "[Tool output compacted]" not in display_text
+        assert "MIDDLE_ONLY_SECRET" not in display_text
+        assert "Preview head:" in display_text
+        assert "Preview tail:" in display_text
+        assert tool_event["content"]["masked"] is True
+        assert tool_event["content"]["original_size"] == len(
+            ("H" * 3500) + "MIDDLE_ONLY_SECRET" + ("T" * 5000)
+        )
+        assert tool_event["content"]["omitted_chars"] > 0
+        assert tool_event["content"]["offload_path"].startswith(".supercoder/tool-outputs/")
 
         tool_msgs = [m for m in agent.context.get_messages() if m.role == "tool"]
         assert "[Tool output compacted]" in tool_msgs[0].content

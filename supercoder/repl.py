@@ -1,6 +1,9 @@
 """Interactive REPL for SuperCoder."""
 
+import re
+import shlex
 import sys
+import textwrap
 import threading
 import time
 
@@ -907,24 +910,45 @@ class SuperCoderREPL:
 
         Returns a structured decision consumed by the agent.
         """
-        self._print_block(
-            f"[bold]Command:[/]\n[yellow]{command}[/]",
-            "Run Command?",
-            "yellow",
-            "⚡",
-        )
+        while True:
+            preview, is_long = self._format_command_confirmation_preview(command)
+            self._print_block(preview, "Run Command?", "yellow", "⚡")
 
-        choice = self._select_confirmation_action(
-            "Choose command action",
-            [
+            choices = [
                 ("Run once", "approve_once"),
-                ("Allow for this session", "allow_session"),
-                ("Always allow for this project", "allow_persistent"),
-                ("Always deny for this project", "deny_persistent"),
-                ("Cancel", "deny_once"),
-            ],
-            "deny_once",
-        )
+            ]
+            if is_long:
+                choices.append(("Show full command", "show_full"))
+            choices.extend(
+                [
+                    ("Allow for this session", "allow_session"),
+                    ("Always allow for this project", "allow_persistent"),
+                    ("Always deny for this project", "deny_persistent"),
+                    ("Cancel", "deny_once"),
+                ]
+            )
+
+            choice = self._select_confirmation_action(
+                "Choose command action",
+                choices,
+                "deny_once",
+            )
+
+            if choice == "show_full":
+                self._print_block(
+                    Syntax(
+                        command,
+                        "bash",
+                        theme="monokai",
+                        word_wrap=True,
+                        background_color="default",
+                    ),
+                    "Full Command",
+                    "yellow",
+                    "⚡",
+                )
+                continue
+            break
 
         if choice == "approve_once":
             self.console.print("[green]✓ Approved[/]")
@@ -990,10 +1014,87 @@ class SuperCoderREPL:
 
     def _terminal_line_count(self, rendered: str) -> int:
         """Count rendered terminal lines in captured Rich output."""
-        import re
-
         plain = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", rendered)
         return max(1, len(plain.splitlines()))
+
+    def _format_command_confirmation_preview(self, command: str):
+        """Build a bounded command confirmation preview."""
+        width = max(40, min(160, self.console.size.width - 12))
+        visual_lines = self._split_visual_lines(command, width)
+        logical_lines = command.count("\n") + 1 if command else 0
+        is_long = len(command) > 1200 or logical_lines > 12 or len(visual_lines) > 12
+
+        root = self._root_command(command)
+        summary = Text()
+        summary.append("Root command: ", style="bold")
+        summary.append(root or "(unknown)", style="yellow")
+        summary.append("\nSize: ", style="bold")
+        summary.append(f"{len(command):,} chars", style="cyan")
+        summary.append(" · ")
+        summary.append(f"{logical_lines:,} logical lines", style="cyan")
+        summary.append(" · ")
+        summary.append(f"{len(visual_lines):,} visual lines", style="cyan")
+        if is_long:
+            summary.append("\nPreview: ", style="bold")
+            summary.append(
+                "showing head/tail only; choose Show full command to inspect all.", style="dim"
+            )
+        else:
+            summary.append("\nCommand:", style="bold")
+
+        preview_text = self._command_preview_text(visual_lines, is_long)
+        syntax = Syntax(
+            preview_text,
+            "bash",
+            theme="monokai",
+            line_numbers=False,
+            word_wrap=False,
+            background_color="default",
+        )
+        return Group(summary, syntax), is_long
+
+    def _root_command(self, command: str) -> str:
+        """Extract the executable/root command for confirmation summary."""
+        stripped = command.strip()
+        if not stripped:
+            return ""
+        try:
+            parts = shlex.split(stripped, posix=True)
+            if parts:
+                return parts[0]
+        except ValueError:
+            pass
+        return stripped.split(maxsplit=1)[0]
+
+    def _split_visual_lines(self, text: str, width: int) -> list[str]:
+        """Split text into terminal-width visual lines without losing newlines."""
+        visual_lines: list[str] = []
+        for logical_line in text.split("\n"):
+            if logical_line == "":
+                visual_lines.append("")
+                continue
+            wrapped = textwrap.wrap(
+                logical_line,
+                width=width,
+                replace_whitespace=False,
+                drop_whitespace=False,
+                break_long_words=True,
+                break_on_hyphens=False,
+            )
+            visual_lines.extend(wrapped or [""])
+        return visual_lines
+
+    def _command_preview_text(self, visual_lines: list[str], is_long: bool) -> str:
+        """Return a head/tail preview for long commands."""
+        if not is_long:
+            return "\n".join(visual_lines)
+        head_count = 6
+        tail_count = 3
+        hidden = max(0, len(visual_lines) - head_count - tail_count)
+        head = visual_lines[:head_count]
+        tail = visual_lines[-tail_count:] if hidden else []
+        marker = [f"... {hidden:,} visual lines hidden ..."] if hidden else []
+        return "\n".join([*head, *marker, *tail])
 
     def _format_edit_diff_preview(self, arguments: dict, preview: object | None = None):
         """Build a syntax-highlighted diff preview for a pending code-edit call."""
@@ -1218,13 +1319,13 @@ class SuperCoderREPL:
 
                 args_obj = json.loads(args)
                 # Pretty print JSON args
-                args_str = json.dumps(args_obj, indent=2)
+                args_str = json.dumps(args_obj, indent=2, ensure_ascii=False)
             except Exception:
                 args_str = args
         else:
             import json
 
-            args_str = json.dumps(args, indent=2)
+            args_str = json.dumps(args, indent=2, ensure_ascii=False)
 
         self._print_block(
             Syntax(args_str, "json", theme="monokai", word_wrap=True, background_color="default"),
@@ -1236,7 +1337,13 @@ class SuperCoderREPL:
     def _display_tool_result(self, result_data):
         """Display tool result in a panel with format-aware rendering."""
         name = result_data.get("name")
-        result = result_data.get("result", "")
+        model_result = result_data.get("result", "")
+        display_result = result_data.get("display_result")
+        result = display_result if display_result is not None else model_result
+
+        if result_data.get("masked") or self._is_compacted_tool_output(model_result):
+            self._display_large_tool_output_result(name, result_data, result, model_result)
+            return
 
         # Diff results (code-edit) — syntax-highlighted diff
         if self._is_diff_result(result):
@@ -1275,46 +1382,131 @@ class SuperCoderREPL:
 
     def _is_diff_result(self, result: str) -> bool:
         """Check if result contains unified diff format."""
-        if not result:
-            return False
-        # Look for unified diff markers (--- and +++ may be at start or after newline)
-        has_minus = result.startswith("---") or "\n---" in result
-        has_plus = "\n+++" in result
-        return has_minus and has_plus
+        return self._split_unified_diff_result(result) is not None
 
     def _display_diff_result(self, name: str, result: str):
         """Display a result containing diff with syntax highlighting."""
-        # Split result into message and diff parts
-        lines = result.split("\n")
-        message_lines = []
-        diff_lines = []
-        in_diff = False
-
-        for line in lines:
-            # Check for unified diff markers to start capturing diff
-            # --- file header, +++ file header, @@ hunk header
-            if line.startswith("--- ") or line.startswith("+++ ") or line.startswith("@@"):
-                in_diff = True
-
-            if in_diff:
-                # Once in diff mode, capture all lines (including +/- content lines)
-                diff_lines.append(line)
-            else:
-                message_lines.append(line)
+        split_result = self._split_unified_diff_result(result)
+        if split_result is None:
+            self._print_block(f"[dim]{result}[/]", f"Result: {name}", "green", "✔")
+            return
+        message, diff_text = split_result
 
         # Display message part (success message)
-        if message_lines:
-            message = "\n".join(message_lines).strip()
-            if message:
-                self.console.print(f"[bold green]✔ {name}[/]: {message}")
+        if message:
+            self.console.print(f"[bold green]✔ {name}[/]: {message}")
 
         # Display diff with syntax highlighting
-        if diff_lines:
-            diff_text = "\n".join(diff_lines)
+        if diff_text:
+            diff_text = self._bounded_diff_text(diff_text)
             syntax = Syntax(
                 diff_text, "diff", theme="monokai", line_numbers=False, background_color="default"
             )
             self._print_block(syntax, "Changes", "cyan", "📝")
+
+    def _split_unified_diff_result(self, result: str) -> tuple[str, str] | None:
+        """Split a tool result into message and strict unified diff parts."""
+        if not result:
+            return None
+        lines = result.split("\n")
+        start = self._find_unified_diff_start(lines)
+        if start is None:
+            return None
+        message = "\n".join(lines[:start]).strip()
+        diff_text = "\n".join(lines[start:]).strip("\n")
+        return message, diff_text
+
+    def _find_unified_diff_start(self, lines: list[str]) -> int | None:
+        """Find a real unified diff header, not compact head/tail markers."""
+        for idx in range(len(lines) - 2):
+            if not lines[idx].startswith("--- "):
+                continue
+            if lines[idx].startswith("--- head") or lines[idx].startswith("--- tail"):
+                continue
+            if not lines[idx + 1].startswith("+++ "):
+                continue
+            if any(line.startswith("@@") for line in lines[idx + 2 :]):
+                return idx
+        return None
+
+    def _bounded_diff_text(self, diff_text: str, max_lines: int = 260) -> str:
+        """Keep very large diffs readable in terminal scrollback."""
+        lines = diff_text.splitlines()
+        if len(lines) <= max_lines:
+            return diff_text
+        head_count = 180
+        tail_count = 60
+        hidden = len(lines) - head_count - tail_count
+        return "\n".join(
+            [
+                *lines[:head_count],
+                f"... {hidden:,} diff lines hidden ...",
+                *lines[-tail_count:],
+            ]
+        )
+
+    def _is_compacted_tool_output(self, result: str) -> bool:
+        """Return True for model-facing compacted tool output payloads."""
+        return result.startswith("[Tool output compacted]")
+
+    def _display_large_tool_output_result(
+        self, name: str, result_data: dict, display_result: str, model_result: str
+    ) -> None:
+        """Display a user-friendly large-output preview."""
+        text = display_result
+        if self._is_compacted_tool_output(model_result) and display_result == model_result:
+            text = self._friendly_compacted_tool_output(model_result)
+
+        original_size = result_data.get("original_size")
+        offload_path = result_data.get("offload_path")
+        header = Text()
+        header.append("Large tool output", style="bold")
+        if isinstance(original_size, int) and original_size > 0:
+            header.append(f" · {original_size:,} chars", style="cyan")
+        if offload_path:
+            header.append("\nFull output saved to: ", style="bold")
+            header.append(str(offload_path), style="yellow")
+
+        syntax = Syntax(
+            text,
+            "text",
+            theme="monokai",
+            line_numbers=False,
+            word_wrap=True,
+            background_color="default",
+        )
+        self._print_block(Group(header, syntax), f"Result: {name}", "green", "✔")
+
+    def _friendly_compacted_tool_output(self, result: str) -> str:
+        """Convert legacy model-facing compact output into user-facing text."""
+        original_size = self._extract_compacted_field(result, "Original size")
+        saved_to = self._extract_compacted_field(result, "Full output saved to")
+        omitted = self._extract_compacted_field(result, "Omitted middle")
+        head = ""
+        tail = ""
+        if "\n--- head ---\n" in result:
+            _prefix, rest = result.split("\n--- head ---\n", 1)
+            if "\n--- tail ---\n" in rest:
+                head, tail = rest.split("\n--- tail ---\n", 1)
+            else:
+                head = rest
+
+        parts = []
+        if original_size:
+            parts.append(f"Original size: {original_size}")
+        if saved_to:
+            parts.append(f"Full output saved to: {saved_to}")
+        if omitted:
+            parts.append(f"Hidden middle: {omitted}")
+        if head:
+            parts.extend(["", "Preview head:", head.rstrip()])
+        if tail:
+            parts.extend(["", "Preview tail:", tail.lstrip()])
+        return "\n".join(parts)
+
+    def _extract_compacted_field(self, result: str, field: str) -> str:
+        match = re.search(rf"^{re.escape(field)}:\s*(.*)$", result, flags=re.MULTILINE)
+        return match.group(1).strip() if match else ""
 
     # Commands
 

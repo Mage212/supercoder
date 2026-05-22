@@ -1057,9 +1057,25 @@ class CoderAgent:
 
                     masked_result = self.output_masker.mask(name, tc.id, tool_result)
                     self._log_tool_output_masking(name, tc.id, masked_result)
+                    offload_path = None
+                    if masked_result.offload_path:
+                        try:
+                            offload_path = masked_result.offload_path.relative_to(
+                                self.repo_root
+                            ).as_posix()
+                        except ValueError:
+                            offload_path = masked_result.offload_path.as_posix()
                     yield {
                         "type": "tool_result",
-                        "content": {"name": name, "result": masked_result.model_text},
+                        "content": {
+                            "name": name,
+                            "result": masked_result.model_text,
+                            "display_result": masked_result.display_text,
+                            "masked": masked_result.masked,
+                            "offload_path": offload_path,
+                            "original_size": masked_result.original_size,
+                            "omitted_chars": masked_result.omitted_chars,
+                        },
                     }
                     get_logger().log_tool_call(name, args_str)
                     get_logger().log_tool_result(name, tool_result)
