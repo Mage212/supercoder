@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## v0.3.9
+
+- **Native Tool-Call Recovery**: Native mode now detects when local/OpenAI-compatible backends emit tool calls as plain text, parses supported SuperCoder/Qwen/XML/JSON-style formats as a fallback, and executes them through the same host-side tool pipeline.
+- **Malformed Tool-Call Retries**: If a response looks like a tool call but cannot be parsed, SuperCoder retries the model response with a short correction message before giving up, reducing dead turns from weak/local models.
+- **Tool-Call Retry Diagnostics**: Debug JSONL logs now include `tool_call_fallback_parse` and `tool_call_retry` events, and the REPL shows a concise retry notice while the agent recovers.
+- **API-Based Context Usage**: Context usage now uses the latest API `usage.total_tokens` as the primary metric for the footer and auto-compact thresholds, matching proxy/provider accounting more closely than local prompt-only estimates.
+- **Serialized Payload Fallback Counting**: When API usage is missing, fallback estimates count the actual request/response payload shape, including messages, native tool schemas, assistant tool calls, reasoning, and response content.
+- **Post-Response Auto-Compact**: Auto-compact decisions are evaluated after each model response instead of before the next request, so valid API usage drives compaction timing and local-model prompt cache locality is preserved.
+- **Interrupt-Safe `/compact`**: REPL abort state is reset around interrupted turns and manual compaction, preventing a stale double-ESC abort from crashing the next `/compact` command.
+- **Clean Interrupt Prompt**: The first ESC warning now prints as plain terminal text instead of leaking raw ANSI escape sequences.
+- **Cleaner Large Tool Output UI**: Large tool outputs keep compact head/tail text in the model context, while the CLI renders a separate user-facing preview without internal `[Tool output compacted]` markers.
+- **Stricter Diff Rendering**: Tool result rendering now recognizes only real unified diffs, avoiding false diff panels from compact-output `--- head ---` / `--- tail ---` markers.
+- **Long Command Preview**: Shell command approval now shows a bounded head/tail preview for very long commands and adds a `Show full command` action that reveals the full command without approving it.
+- **Unicode Tool Arguments**: Tool-call argument panels preserve non-ASCII text instead of escaping it as `\u...`.
+- **Repository Hygiene**: `.antigravitycli/` is ignored as an IDE/runtime artifact.
+
 ## v0.3.8
 
 - **Persistent Command Approvals**: Added project-local command approval rules in `.supercoder/permissions.yaml`, with one-time, session, always-allow, and always-deny choices in the shell confirmation prompt.

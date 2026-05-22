@@ -1,6 +1,6 @@
 # 🤖 SuperCoder
 
-[![Version](https://img.shields.io/badge/version-0.3.8-blue.svg)](https://github.com/Mage212/supercoder)
+[![Version](https://img.shields.io/badge/version-0.3.9-blue.svg)](https://github.com/Mage212/supercoder)
 [![Python](https://img.shields.io/badge/python-3.11+-green.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -8,13 +8,13 @@
 
 ---
 
-## 🆕 What's New in v0.3.8
+## 🆕 What's New in v0.3.9
 
-- **Persistent Command Approvals**: Save one-time, session, always-allow, or always-deny command decisions in project-local permission rules.
-- **Permission Management**: Use `/permissions` to inspect, remove, or clear saved command rules for the current project.
-- **CODE Edit Approval**: `code` mode asks before file edits, while `accept-edits` keeps the low-friction editing path.
-- **Approval Menus + Diff Preview**: Command and edit confirmations use arrow-key menus; file edits show a highlighted diff before approval.
-- **Apply and Auto-Accept**: An edit approval can apply the current change and switch the rest of the active loop to `accept-edits`.
+- **Native Tool-Call Recovery**: If a local/OpenAI-compatible backend writes a tool call as text in native mode, SuperCoder can parse the supported fallback formats and keep the turn moving.
+- **Malformed Tool-Call Retries**: Responses that look like broken tool calls get a short retry correction before the agent gives up.
+- **API-Based Context Usage**: Context usage and auto-compact thresholds now use the latest API `usage.total_tokens` when available, matching proxy/provider accounting more closely.
+- **Interrupt-Safe Compaction**: Double-ESC abort state is reset before manual `/compact`, so an interrupted turn no longer poisons the next compaction request.
+- **Cleaner Terminal UI**: Large tool outputs show user-facing previews instead of internal compact markers, long shell commands get bounded previews with `Show full command`, and Unicode tool arguments render as readable text.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
@@ -36,6 +36,9 @@ Before editing an existing file, SuperCoder verifies that the model has fresh fi
 
 ### 🧭 Host-Enforced Modes
 Switch between `ask`, `plan`, `code`, and `accept-edits` with slash commands or `Shift+Tab`. `code` reads and searches freely, then asks before shell commands or file edits; `accept-edits` enables file edits without per-edit prompts. `plan` can persist dated plans only under `.supercoder/plans/`. Mode changes are enforced by SuperCoder itself and announced without rebuilding the system prompt, preserving prompt-cache locality for local models.
+
+### 🧩 Native Tool-Call Recovery
+Native API tool calling remains the default path. If a local or OpenAI-compatible backend ignores the native tool-call interface and emits a textual tool call instead, SuperCoder detects supported fallback formats, strips the raw markup from the visible response, and executes the parsed call through the same host-side permission, mode, freshness, and logging pipeline. If the output looks like a malformed tool call but cannot be parsed, the agent retries with a short correction message before stopping.
 
 ### 📎 Explicit Context References
 Mention files or directories directly in a prompt with \@path, for example `Review @supercoder/repl.py`. SuperCoder attaches bounded file content or a directory file listing before the model call, with autocomplete suggestions while typing \@ma.
@@ -59,14 +62,15 @@ Leverage project-specific rules to guide the agent. Place `.md` files in `.super
 Uses `tree-sitter` and `networkx` to generate a high-level map of your repository, helping the LLM understand relationships between files and symbols. Runtime artifacts, virtual environments, cache folders, and `.supercoder` internals are ignored to avoid prompt pollution.
 
 ### 🧠 Context Management
-- **Token Counter**: Real-time monitoring of context usage.
+- **API Usage Tracking**: The status footer uses the latest API `usage.total_tokens` when available, so the visible context number matches proxy/provider accounting instead of relying only on local prompt estimates.
+- **Fallback Payload Counting**: If a backend omits usage, SuperCoder estimates the serialized chat payload, including messages, native tool schemas, assistant tool calls, reasoning, and response content.
 - **Cache-Aware Compaction**: Use `/compact` to summarize conversation history without switching to a separate summarization prompt, which keeps local-model prompt cache useful.
-- **Auto-Compact**: Long sessions compact automatically around 75% of usable context, with emergency trimming left as a fallback.
+- **Auto-Compact**: Long sessions compact automatically after model responses around 75% of total context, with emergency trimming left as a fallback.
 - **Protected Recent Steps**: After compacting, SuperCoder keeps the summary plus the last 6 exact conversation steps.
-- **Tool Output Compaction**: Large tool outputs are summarized for the model and stored in full under `.supercoder/tool-outputs/`.
+- **Tool Output Compaction**: Large tool outputs are compacted for the model, stored in full under `.supercoder/tool-outputs/`, and displayed in the CLI as clean user-facing previews.
 
 ### 🧪 Debug Diagnostics
-Run with `--debug` to write JSONL logs to `~/.supercoder/logs/`. Logs include native tool-call metadata, tool result masking events, permission decisions, permission rule changes, edit confirmations, freshness checks, approval/preflight outcomes, offload paths, API request messages, reasoning, responses, and errors.
+Run with `--debug` to write JSONL logs to `~/.supercoder/logs/`. Logs include native tool-call metadata, fallback parse/retry events, tool result masking events, permission decisions, permission rule changes, edit confirmations, freshness checks, approval/preflight outcomes, offload paths, API request messages, reasoning, responses, and errors.
 
 ### 💾 Session Persistence
 - **Auto-Save**: Your conversation is automatically saved after each message exchange.
@@ -216,6 +220,8 @@ permissions:
 
 Native API tool calling is the default path and passes schemas through the OpenAI-compatible `tools` parameter. `tool_calling_type` is mainly used by the deprecated streaming mode for models that emit tool calls as text:
 
+In native mode, SuperCoder can also recover when a backend incorrectly emits one of these text formats instead of returning structured `tool_calls`. Recovery is a fallback, not the preferred protocol: parsed calls still go through the normal host-side safety and approval pipeline.
+
 | Type | Format | Best for |
 |------|--------|----------|
 | `supercoder` (default) | `<@TOOL>{"name": "...", "arguments": {...}}</@TOOL>` | Most instruction-following models |
@@ -290,16 +296,19 @@ Every user message that leads to a file modification creates a new **Checkpoint*
 Before running any shell command, SuperCoder pauses and asks for explicit approval:
 ```
 ⚡ Run Command?
+Root command: <command>
+Size: <chars> · <logical lines> · <visual lines>
 Command:
-  <the command to execute>
+  <preview of the command>
 ▸ Choose command action (↑↓ select, Enter confirm, Esc cancel)
   > Run once
+    Show full command        # shown only for long commands
     Allow for this session
     Always allow for this project
     Always deny for this project
     Cancel
 ```
-Use the arrow-key menu to choose whether to approve once, allow the exact command for the current process, save a project-local allow rule, save a project-local deny rule, or cancel with `Esc`.
+Use the arrow-key menu to choose whether to approve once, inspect the full command when it is long, allow the exact command for the current process, save a project-local allow rule, save a project-local deny rule, or cancel with `Esc`.
 
 Use `/permissions` to inspect, remove, or clear project-local command approval rules.
 
@@ -308,6 +317,7 @@ Press **ESC twice** to abort at any time — during generation, tool calls, or s
 1. The keyboard listener detects the interrupt.
 2. The current LLM stream is aborted immediately.
 3. Any partial file changes from the current turn are **rolled back** automatically.
+4. The abort state is reset before the next turn or manual `/compact` command.
 
 ---
 
