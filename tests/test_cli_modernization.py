@@ -1,8 +1,10 @@
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 from rich.console import Console
 
+from supercoder.abort_controller import AbortController, AgentAbortedError
 from supercoder.agent.agent_modes import AgentMode
 from supercoder.agent.coder_agent import CoderAgent
 from supercoder.permissions import PermissionAction, PermissionPolicy
@@ -74,6 +76,44 @@ def test_repl_commands():
     agent.debug = False
     repl.commands["/debug"]("")
     agent.set_debug.assert_called_with(True)
+
+
+def test_first_esc_prompt_uses_plain_text(monkeypatch):
+    """First ESC prompt should not leak raw ANSI codes like [33m."""
+    agent = MagicMock()
+    agent.llm.model = "test"
+    agent.llm.config.model = "test"
+    repl = SuperCoderREPL(agent)
+    printed = []
+
+    def fake_print(*args, **kwargs):
+        printed.append((args, kwargs))
+
+    monkeypatch.setattr("builtins.print", fake_print)
+
+    repl._on_first_esc()
+
+    text = printed[0][0][0]
+    assert text == "\rPress ESC again to interrupt"
+    assert "\x1b" not in text
+
+
+def test_compact_resets_stale_abort_and_handles_abort():
+    """Manual compact should not crash after a previous ESC interruption."""
+    agent = MagicMock()
+    agent.llm.model = "test"
+    agent.llm.config.model = "test"
+    agent.abort_controller = AbortController()
+    agent.abort_controller.abort()
+    agent.context.get_stats.return_value = SimpleNamespace(used_tokens=100, message_count=1)
+    agent.compact_context.side_effect = AgentAbortedError("Agent execution aborted by user")
+    repl = SuperCoderREPL(agent)
+    repl._print_block = MagicMock()
+
+    assert repl.cmd_compact("") is False
+    assert agent.abort_controller.is_aborted is False
+    agent.compact_context.assert_called_once()
+    repl._print_block.assert_called_once()
 
 
 def test_repl_cycle_mode_uses_shift_tab_order():

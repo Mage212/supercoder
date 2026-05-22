@@ -19,7 +19,7 @@ from rich.table import Table
 from rich.text import Text
 
 from . import __version__
-from .abort_controller import InterruptHandler, KeyboardListener
+from .abort_controller import AgentAbortedError, InterruptHandler, KeyboardListener
 from .agent.agent_modes import MODE_CONFIGS, MODE_CYCLE, AgentMode
 from .context.references import summarize_attachment_content, summarize_context_attachment
 from .logging import get_logger
@@ -77,9 +77,9 @@ class SuperCoderREPL:
 
     def _on_first_esc(self):
         """Called after first ESC press."""
-        # Use direct print to avoid conflict with Rich spinner in main thread
-        # \x1b[33m is Yellow, \x1b[0m is Reset
-        print("\r\x1b[33mPress ESC again to interrupt\x1b[0m", end="", flush=True)
+        # Use plain text: manual ANSI escapes can leak as "[33m" while
+        # prompt_toolkit/Rich are both managing terminal state.
+        print("\rPress ESC again to interrupt", end="", flush=True)
 
     def _setup_session(self):
         """Configure prompt_toolkit session."""
@@ -414,6 +414,7 @@ class SuperCoderREPL:
             spinner.stop()
             if hasattr(self, "keyboard_listener"):
                 self.keyboard_listener.stop()
+            self.agent.abort_controller.reset()
 
         # === Post-processing ===
         if rollback_info:
@@ -637,6 +638,7 @@ class SuperCoderREPL:
             spinner.stop()
             if hasattr(self, "keyboard_listener"):
                 self.keyboard_listener.stop()
+            self.agent.abort_controller.reset()
 
         # === Post-processing ===
 
@@ -1434,9 +1436,21 @@ class SuperCoderREPL:
             f"[dim]Current context: {stats.used_tokens:,} tokens, {stats.message_count} messages[/]"
         )
 
-        # Show spinner while compacting
-        with self.console.status("[bold blue]Compacting context...[/]", spinner="dots"):
-            summary, stats_before, stats_after = self.agent.compact_context()
+        self.agent.abort_controller.reset()
+        try:
+            # Show spinner while compacting
+            with self.console.status("[bold blue]Compacting context...[/]", spinner="dots"):
+                summary, stats_before, stats_after = self.agent.compact_context()
+        except AgentAbortedError:
+            self._print_block(
+                "[bold yellow]Context compact was interrupted by user (ESC)[/]",
+                "Compact Interrupted",
+                "yellow",
+                "⚠",
+            )
+            return False
+        finally:
+            self.agent.abort_controller.reset()
 
         if summary.startswith("Error generating summary:"):
             self._print_block(f"[red]{summary}[/]", "Compact Failed", "red", "❌")
