@@ -389,6 +389,7 @@ def test_tool_call_display_preserves_non_ascii_arguments():
     agent.llm.config.model = "test"
     agent.mode = AgentMode.CODE
     repl = SuperCoderREPL(agent)
+    repl._show_agent_details = True
     repl.console = Console(record=True, width=100)
 
     repl._display_tool_call({"name": "test-tool", "arguments": {"label": "Расходы"}})
@@ -416,6 +417,7 @@ def test_compacted_tool_output_is_rendered_as_user_friendly_preview():
     agent.llm.config.model = "test"
     agent.mode = AgentMode.CODE
     repl = SuperCoderREPL(agent)
+    repl._show_agent_details = True
     repl.console = Console(record=True, width=100)
     raw = (
         "[Tool output compacted]\n"
@@ -447,6 +449,7 @@ def test_display_result_is_preferred_for_masked_tool_output():
     agent.llm.config.model = "test"
     agent.mode = AgentMode.CODE
     repl = SuperCoderREPL(agent)
+    repl._show_agent_details = True
     repl.console = Console(record=True, width=100)
 
     repl._display_tool_result(
@@ -463,6 +466,23 @@ def test_display_result_is_preferred_for_masked_tool_output():
     rendered = repl.console.export_text()
     assert "Human preview" in rendered
     assert "[Tool output compacted]" not in rendered
+
+
+def test_file_read_tool_call_summary_uses_file_name_argument():
+    agent = MagicMock()
+    agent.llm.model = "test"
+    agent.llm.config.model = "test"
+    agent.mode = AgentMode.CODE
+    repl = SuperCoderREPL(agent)
+    repl.console = Console(record=True, width=100)
+
+    repl._display_tool_call(
+        {"name": "file-read", "arguments": {"fileName": "supercoder-rpg/game/core.py"}}
+    )
+
+    rendered = repl.console.export_text()
+    assert "file-read supercoder-rpg/game/core.py" in rendered
+    assert "None" not in rendered
 
 
 def test_compact_tool_result_uses_summary_by_default():
@@ -485,6 +505,38 @@ def test_compact_tool_result_uses_summary_by_default():
     rendered = repl.console.export_text()
     assert "file-read README.md · 12 lines" in rendered
     assert "raw file content" not in rendered
+
+
+def test_masked_tool_output_is_compact_by_default():
+    agent = MagicMock()
+    agent.llm.model = "test"
+    agent.llm.config.model = "test"
+    agent.mode = AgentMode.CODE
+    repl = SuperCoderREPL(agent)
+    repl.console = Console(record=True, width=120)
+
+    repl._display_tool_result(
+        {
+            "name": "file-read",
+            "result": "[Tool output compacted]\nRAW",
+            "display_result": "Preview head:\nSECRET",
+            "display_summary": (
+                "file-read supercoder-rpg/game/core.py · 9,935 chars · "
+                "saved to .supercoder/tool-outputs/out.txt"
+            ),
+            "display_policy": "compact",
+            "masked": True,
+            "original_size": 9935,
+            "offload_path": ".supercoder/tool-outputs/out.txt",
+        }
+    )
+
+    rendered = repl.console.export_text()
+    assert "file-read supercoder-rpg/game/core.py" in rendered
+    assert "9,935 chars" in rendered
+    assert ".supercoder/tool-outputs/out.txt" in rendered
+    assert "Preview head" not in rendered
+    assert "SECRET" not in rendered
 
 
 def test_repl_edit_confirm_uses_diff_preview(tmp_path):

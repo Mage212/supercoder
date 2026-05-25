@@ -1233,7 +1233,13 @@ class CoderAgent:
                             "result": masked_result.model_text,
                             "display_result": masked_result.display_text,
                             "display_summary": self._tool_display_summary(
-                                name, arguments, masked_result.model_text, "success"
+                                name,
+                                arguments,
+                                masked_result.model_text,
+                                "success",
+                                masked=masked_result.masked,
+                                original_size=masked_result.original_size,
+                                offload_path=offload_path,
                             ),
                             "display_policy": self._tool_display_policy(
                                 name, masked_result.model_text, masked_result.masked, "success"
@@ -1256,7 +1262,13 @@ class CoderAgent:
                             name=name,
                             display_type="tool_result",
                             display_summary=self._tool_display_summary(
-                                name, arguments, masked_result.model_text, "success"
+                                name,
+                                arguments,
+                                masked_result.model_text,
+                                "success",
+                                masked=masked_result.masked,
+                                original_size=masked_result.original_size,
+                                offload_path=offload_path,
                             ),
                             display_result=masked_result.display_text,
                             display_policy=self._tool_display_policy(
@@ -1699,36 +1711,60 @@ class CoderAgent:
         )
 
     def _tool_display_summary(
-        self, tool_name: str, arguments: dict, result: str, status: str
+        self,
+        tool_name: str,
+        arguments: dict,
+        result: str,
+        status: str,
+        masked: bool = False,
+        original_size: int = 0,
+        offload_path: str | None = None,
     ) -> str:
         """Build a compact, deterministic UI summary for a tool result."""
         if tool_name == "file-read":
-            path = arguments.get("path") or arguments.get("file_path") or arguments.get("file")
+            path = self._tool_argument_path(arguments)
             line_count = len(result.splitlines()) if result else 0
             target = f" {path}" if path else ""
-            return f"{tool_name}{target} · {line_count} lines"
-        if tool_name == "code-search":
+            summary = f"{tool_name}{target} · {line_count} lines"
+        elif tool_name == "code-search":
             query = arguments.get("query") or arguments.get("pattern")
             match_count = len([line for line in result.splitlines() if line.strip()])
             target = f" {query}" if query else ""
-            return f"{tool_name}{target} · {match_count} matches"
-        if tool_name == "code-edit":
-            path = arguments.get("path") or arguments.get("file_path") or arguments.get("file")
+            summary = f"{tool_name}{target} · {match_count} matches"
+        elif tool_name == "code-edit":
+            path = self._tool_argument_path(arguments)
             target = f" {path}" if path else ""
-            return f"{tool_name}{target} · changes prepared"
-        if tool_name == "command-exec":
+            summary = f"{tool_name}{target} · changes prepared"
+        elif tool_name == "command-exec":
             command = arguments.get("command") or arguments.get("cmd")
             first_line = str(command).splitlines()[0][:80] if command else ""
-            return f"{tool_name} {first_line}".strip()
-        return f"{tool_name} {status}"
+            summary = f"{tool_name} {first_line}".strip()
+        else:
+            summary = f"{tool_name} {status}"
+
+        if not masked:
+            return summary
+
+        parts = [summary]
+        if original_size > 0:
+            parts.append(f"{original_size:,} chars")
+        if offload_path:
+            parts.append(f"saved to {offload_path}")
+        return " · ".join(parts)
+
+    def _tool_argument_path(self, arguments: dict) -> str | None:
+        """Return a path-like argument from known tool schema aliases."""
+        for key in ("fileName", "filename", "filepath", "file_path", "path", "file"):
+            value = arguments.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
 
     def _tool_display_policy(self, tool_name: str, result: str, masked: bool, status: str) -> str:
         """Choose the default UI visibility policy for a tool result."""
         if status == "error":
             return "error"
         if tool_name == "code-edit" and "--- " in result and "+++ " in result:
-            return "expanded"
-        if masked:
             return "expanded"
         return "compact"
 

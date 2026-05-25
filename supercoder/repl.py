@@ -304,12 +304,14 @@ class SuperCoderREPL:
 
                 if event_type == "thinking":
                     spinner.stop()
+                    self._print_output_spacer()
                     self._print_block(content.strip(), "Reasoning", "magenta", "💭")
                     spinner.update("[bold blue]SuperCoder is thinking...[/]")
                     spinner.start()
 
                 elif event_type == "response":
                     spinner.stop()
+                    self._print_output_spacer()
                     # Full response — render as Markdown
                     self.console.print(Markdown(content))
                     spinner.update("[bold blue]SuperCoder is thinking...[/]")
@@ -317,6 +319,7 @@ class SuperCoderREPL:
 
                 elif event_type == "tool_call":
                     spinner.stop()
+                    self._print_output_spacer()
                     self._display_tool_call(content)
                     self._track_files(content, touched_files)
                     name = content.get("name", "tool")
@@ -325,6 +328,7 @@ class SuperCoderREPL:
 
                 elif event_type == "tool_result":
                     spinner.stop()
+                    self._print_output_spacer()
                     self._display_tool_result(content)
                     _gen_tokens[0] = 0
                     _gen_start = time.monotonic()
@@ -334,6 +338,7 @@ class SuperCoderREPL:
 
                 elif event_type == "context_attachment":
                     spinner.stop()
+                    self._print_output_spacer()
                     self._display_context_attachment(content)
                     spinner.update("[bold blue]SuperCoder is thinking...[/]")
                     spinner.start()
@@ -343,6 +348,7 @@ class SuperCoderREPL:
 
                 elif event_type == "warning":
                     spinner.stop()
+                    self._print_output_spacer()
                     self._print_block(f"[yellow]{content}[/]", "Warning", "yellow", "!")
                     spinner.update("[bold blue]SuperCoder is thinking...[/]")
                     spinner.start()
@@ -351,6 +357,7 @@ class SuperCoderREPL:
                     spinner.stop()
                     attempt = content.get("attempt", 0)
                     max_attempts = content.get("max_attempts", 0)
+                    self._print_output_spacer()
                     self.console.print(
                         "[yellow]Tool call format was invalid. "
                         f"Retrying model response ({attempt}/{max_attempts})...[/]"
@@ -774,15 +781,18 @@ class SuperCoderREPL:
             dt = msg.display_type
 
             if dt == "user_input":
+                self._print_output_spacer()
                 self._print_block(msg.content, "You", "cyan", "👤")
 
             elif dt == "thinking":
                 text = msg.content[:500] + ("..." if len(msg.content) > 500 else "")
+                self._print_output_spacer()
                 self._print_block(text, "Reasoning", "magenta", "💭")
 
             elif dt in ("response", "tool_call"):
                 # Render text content
                 if msg.content and msg.content.strip():
+                    self._print_output_spacer()
                     self.console.print(Markdown(msg.content))
 
                 # Interleave: tool_call → matching tool_result
@@ -797,6 +807,7 @@ class SuperCoderREPL:
                             )
                         except Exception:
                             args_obj = {"_raw": args_str}
+                        self._print_output_spacer()
                         self._display_tool_call({"name": name, "arguments": args_obj})
 
                         # Find and render matching tool result
@@ -804,6 +815,7 @@ class SuperCoderREPL:
                         j = result_index.get(tc_id)
                         if j is not None and j not in consumed:
                             result_msg = to_show[j]
+                            self._print_output_spacer()
                             self._display_tool_result(
                                 self._tool_result_payload_from_message(result_msg, name)
                             )
@@ -811,9 +823,11 @@ class SuperCoderREPL:
 
             elif dt == "tool_result":
                 # Only render if not already consumed by interleaving above
+                self._print_output_spacer()
                 self._display_tool_result(self._tool_result_payload_from_message(msg, "tool"))
 
             elif dt == "error":
+                self._print_output_spacer()
                 if msg.role == "tool":
                     self._display_tool_result(self._tool_result_payload_from_message(msg, "tool"))
                 else:
@@ -821,9 +835,11 @@ class SuperCoderREPL:
 
             elif dt == "compact_summary":
                 text = msg.content[:200]
+                self._print_output_spacer()
                 self._print_block(f"[dim]{text}...[/]", "Context Summary", "dim", "📋")
 
             elif dt == "context_attachment":
+                self._print_output_spacer()
                 self._print_block(
                     f"[dim]{summarize_attachment_content(msg.content)}[/]",
                     "Attached Context",
@@ -832,15 +848,19 @@ class SuperCoderREPL:
                 )
 
             elif dt == "mode_policy":
+                self._print_output_spacer()
                 self.console.print(f"[dim]{msg.content}[/]")
 
             else:
                 # Fallback for old sessions without display_type
                 if msg.role == "user" and msg.content:
+                    self._print_output_spacer()
                     self._print_block(msg.content, "You", "cyan", "👤")
                 elif msg.role == "assistant" and msg.content:
+                    self._print_output_spacer()
                     self.console.print(Markdown(msg.content))
                 elif msg.role == "tool":
+                    self._print_output_spacer()
                     self._display_tool_result({"name": msg.name or "tool", "result": msg.content})
 
             i += 1
@@ -899,6 +919,10 @@ class SuperCoderREPL:
         self.console.print(
             Panel(content, title=full_title, border_style=color, box=box.HORIZONTALS)
         )
+
+    def _print_output_spacer(self) -> None:
+        """Separate consecutive agent outputs in terminal scrollback."""
+        self.console.print()
 
     def _display_context_attachment(self, summary: dict):
         """Display a compact summary of host-attached @path context."""
@@ -1387,13 +1411,13 @@ class SuperCoderREPL:
     def _tool_call_summary(self, name: str, args: dict) -> str:
         """Return one-line summary for compact tool-call rendering."""
         if name == "file-read":
-            path = args.get("path") or args.get("file_path") or args.get("file")
+            path = self._tool_argument_path(args)
             return f"{name} {path}".strip()
         if name == "code-search":
             query = args.get("query") or args.get("pattern")
             return f"{name} {query}".strip()
         if name == "code-edit":
-            path = args.get("path") or args.get("file_path") or args.get("file")
+            path = self._tool_argument_path(args)
             operation = args.get("operation") or args.get("op")
             suffix = " ".join(str(part) for part in (operation, path) if part)
             return f"{name} {suffix}".strip()
@@ -1405,6 +1429,14 @@ class SuperCoderREPL:
             if isinstance(value, str) and value.strip():
                 return f"{name} {value.strip()[:100]}".strip()
         return name or "tool"
+
+    def _tool_argument_path(self, args: dict) -> str | None:
+        """Return a path-like argument from known tool schema aliases."""
+        for key in ("fileName", "filename", "filepath", "file_path", "path", "file"):
+            value = args.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
 
     def _display_tool_result(self, result_data):
         """Display tool result in a panel with format-aware rendering."""
@@ -1423,6 +1455,16 @@ class SuperCoderREPL:
             self.console.print(f"[dim]· {summary}[/]")
             return
 
+        if policy == "compact" and not getattr(self, "_show_agent_details", False):
+            self.console.print(f"[green]✔ {self._tool_result_summary(name, result_data)}[/]")
+            return
+
+        if (
+            result_data.get("masked") or self._is_compacted_tool_output(model_result)
+        ) and not getattr(self, "_show_agent_details", False):
+            self.console.print(f"[green]✔ {self._tool_result_summary(name, result_data)}[/]")
+            return
+
         if result_data.get("masked") or self._is_compacted_tool_output(model_result):
             self._display_large_tool_output_result(name, result_data, result, model_result)
             return
@@ -1430,14 +1472,6 @@ class SuperCoderREPL:
         # Diff results (code-edit) — syntax-highlighted diff
         if self._is_diff_result(result):
             self._display_diff_result(name, result)
-            return
-
-        if (
-            policy == "compact"
-            and not getattr(self, "_show_agent_details", False)
-            and result_data.get("display_summary")
-        ):
-            self.console.print(f"[green]✔ {result_data['display_summary']}[/]")
             return
 
         # File read — show with line numbers
@@ -1469,6 +1503,21 @@ class SuperCoderREPL:
         # Default: truncated dim text
         display_result = result[:500] + "..." if len(result) > 500 else result
         self._print_block(f"[dim]{display_result}[/]", f"Result: {name}", "green", "✔")
+
+    def _tool_result_summary(self, name: str, result_data: dict) -> str:
+        """Return a compact one-line summary for tool result rendering."""
+        summary = result_data.get("display_summary")
+        if summary:
+            return summary
+
+        parts = [str(name or "tool")]
+        original_size = result_data.get("original_size")
+        offload_path = result_data.get("offload_path")
+        if isinstance(original_size, int) and original_size > 0:
+            parts.append(f"{original_size:,} chars")
+        if offload_path:
+            parts.append(f"saved to {offload_path}")
+        return " · ".join(parts)
 
     def _is_diff_result(self, result: str) -> bool:
         """Check if result contains unified diff format."""
