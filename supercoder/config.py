@@ -49,6 +49,13 @@ auto_compact: true
 auto_compact_threshold: 0.75
 protected_recent_steps: 6
 compression_threshold: 0.95  # Emergency fallback trimming threshold
+loop_detection:
+  enabled: true
+  identical_tool_call_threshold: 3
+  identical_tool_error_threshold: 3
+  no_progress_edit_threshold: 3
+  assistant_repeat_threshold: 3
+  corrective_attempts: 1
 request_timeout: 300.0
 debug: false
 streaming: false  # DEPRECATED — native tool calls used by default. Set to true for legacy streaming mode.
@@ -171,6 +178,16 @@ class Config:
     auto_compact_threshold: float = 0.75
     protected_recent_steps: int = 6
     compression_threshold: float = 0.95
+    loop_detection: dict = field(
+        default_factory=lambda: {
+            "enabled": True,
+            "identical_tool_call_threshold": 3,
+            "identical_tool_error_threshold": 3,
+            "no_progress_edit_threshold": 3,
+            "assistant_repeat_threshold": 3,
+            "corrective_attempts": 1,
+        }
+    )
     request_timeout: float = 300.0
     streaming: bool = False  # DEPRECATED — native tool calls by default
     permissions: dict = field(default_factory=dict)

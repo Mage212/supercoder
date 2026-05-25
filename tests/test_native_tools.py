@@ -353,6 +353,7 @@ class TestChatTurnEventFlow:
     def test_max_iterations_limit(self):
         """Agent should stop after MAX_TOOL_ITERATIONS to prevent infinite loops."""
         agent, mock_llm = self._make_agent()
+        agent.loop_detection = {"enabled": False}
 
         # LLM always returns a tool call → infinite loop
         def always_tool_call(*args, **kwargs):

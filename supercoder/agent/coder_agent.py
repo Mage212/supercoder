@@ -26,6 +26,7 @@ from ..tools.file_read import FileReadTool
 from ..tools.glob_tool import GlobTool
 from ..tools.project_structure import ProjectStructureTool
 from .agent_modes import MODE_CONFIGS, READ_ONLY_TOOLS, AgentMode
+from .loop_guard import AgentLoopGuard, LoopGuardDecision
 from .prompts import CACHE_AWARE_COMPACT_REQUEST, build_system_prompt
 from .tool_output import ToolOutputMasker
 from .tool_parser import ToolCallParser
@@ -56,6 +57,7 @@ class CoderAgent:
         streaming: bool = False,
         lean: bool = False,
         permissions: dict | None = None,
+        loop_detection: dict | bool | None = None,
     ):
         self.llm = llm
         self.repo_root = Path(repo_root).resolve()
@@ -63,6 +65,7 @@ class CoderAgent:
         self.lean = lean  # Shorter prompts for weak/local models
         self.output_masker = ToolOutputMasker(self.repo_root)
         self.permission_policy = PermissionPolicy(self.repo_root, permissions)
+        self.loop_detection = loop_detection
         self.freshness_tracker = FileFreshnessTracker(self.repo_root)
 
         # Abort controller for graceful interruption
@@ -702,6 +705,7 @@ class CoderAgent:
         malformed_tool_retries = 0
         max_malformed_tool_retries = 2
         retry_messages: list[Message] = []
+        loop_guard = AgentLoopGuard.from_config(self.loop_detection)
 
         while True:
             if tool_iterations >= MAX_TOOL_ITERATIONS:
@@ -758,6 +762,7 @@ class CoderAgent:
             effective_tool_calls = result.tool_calls
             effective_raw_tool_calls = result.raw_tool_calls
             display_content = result.content
+            assistant_loop_decision: LoopGuardDecision | None = None
 
             if not effective_tool_calls and result.content:
                 (
@@ -830,6 +835,11 @@ class CoderAgent:
             if effective_tool_calls:
                 malformed_tool_retries = 0
             retry_messages = []
+            if effective_tool_calls and not result.truncated:
+                assistant_loop_decision = loop_guard.observe_assistant(
+                    display_content,
+                    effective_tool_calls,
+                )
 
             # 2. Text response
             if display_content:
@@ -894,6 +904,44 @@ class CoderAgent:
                     yield auto_compact_event
                 continue
 
+            if assistant_loop_decision:
+                for tc in effective_tool_calls:
+                    name = tc.name
+                    arguments = dict(tc.arguments)
+                    tool_result = assistant_loop_decision.message
+                    yield {"type": "tool_call", "content": {"name": name, "arguments": arguments}}
+                    yield {
+                        "type": "tool_result",
+                        "content": {"name": name, "result": tool_result},
+                    }
+                    self.context.add_message(
+                        Message(
+                            role="tool",
+                            content=tool_result,
+                            tool_call_id=tc.id,
+                            name=name,
+                            display_type="tool_result",
+                        )
+                    )
+                self._save_current_session()
+                if assistant_loop_decision.stop:
+                    if checkpoint_active:
+                        restored = self.checkpoint_manager.rollback()
+                        if restored:
+                            yield {
+                                "type": "rollback",
+                                "content": {
+                                    "files": restored,
+                                    "reason": assistant_loop_decision.reason,
+                                },
+                            }
+                    yield {"type": "error", "content": assistant_loop_decision.message}
+                    return
+                auto_compact_event = self._auto_compact_if_needed()
+                if auto_compact_event:
+                    yield auto_compact_event
+                continue
+
             # 3. Tool calls
             if not effective_tool_calls:
                 # No tool calls — conversation turn is done
@@ -907,10 +955,80 @@ class CoderAgent:
 
             tool_iterations += 1
             has_file_edits = False
+            pending_loop_decision: LoopGuardDecision | None = None
 
-            for tc in effective_tool_calls:
+            def remember_loop_result(tool_name: str, tool_arguments: dict, tool_text: str) -> None:
+                nonlocal pending_loop_decision
+                decision = loop_guard.observe_tool_result(
+                    tool_name,
+                    tool_arguments,
+                    tool_text,
+                )
+                if decision and pending_loop_decision is None:
+                    pending_loop_decision = decision
+
+            for call_index, tc in enumerate(effective_tool_calls):
                 name = tc.name
                 arguments = dict(tc.arguments)
+                loop_decision = loop_guard.observe_tool_call(name, arguments)
+                if loop_decision:
+                    tool_result = loop_decision.message
+                    yield {"type": "tool_call", "content": {"name": name, "arguments": arguments}}
+                    yield {
+                        "type": "tool_result",
+                        "content": {"name": name, "result": tool_result},
+                    }
+                    self.context.add_message(
+                        Message(
+                            role="tool",
+                            content=tool_result,
+                            tool_call_id=tc.id,
+                            name=name,
+                            display_type="tool_result",
+                        )
+                    )
+                    if loop_decision.stop:
+                        for remaining_tc in effective_tool_calls[call_index + 1 :]:
+                            remaining_name = remaining_tc.name
+                            remaining_arguments = dict(remaining_tc.arguments)
+                            remaining_result = (
+                                "Skipped because loop detection stopped this turn before "
+                                "executing remaining tool calls."
+                            )
+                            yield {
+                                "type": "tool_call",
+                                "content": {
+                                    "name": remaining_name,
+                                    "arguments": remaining_arguments,
+                                },
+                            }
+                            yield {
+                                "type": "tool_result",
+                                "content": {
+                                    "name": remaining_name,
+                                    "result": remaining_result,
+                                },
+                            }
+                            self.context.add_message(
+                                Message(
+                                    role="tool",
+                                    content=remaining_result,
+                                    tool_call_id=remaining_tc.id,
+                                    name=remaining_name,
+                                    display_type="tool_result",
+                                )
+                            )
+                        self._save_current_session()
+                        if checkpoint_active:
+                            restored = self.checkpoint_manager.rollback()
+                            if restored:
+                                yield {
+                                    "type": "rollback",
+                                    "content": {"files": restored, "reason": loop_decision.reason},
+                                }
+                        yield {"type": "error", "content": loop_decision.message}
+                        return
+                    continue
 
                 if name not in self.tools:
                     yield {
@@ -931,6 +1049,7 @@ class CoderAgent:
                             display_type="error",
                         )
                     )
+                    remember_loop_result(name, arguments, error_msg)
                     continue
 
                 mode_decision = self._check_mode_tool(name, arguments)
@@ -954,6 +1073,7 @@ class CoderAgent:
                             display_type="tool_result",
                         )
                     )
+                    remember_loop_result(name, arguments, tool_result)
                     continue
 
                 if name == "code-edit" and self._mode == AgentMode.CODE:
@@ -975,6 +1095,7 @@ class CoderAgent:
                                 display_type="tool_result",
                             )
                         )
+                        remember_loop_result(name, arguments, tool_result)
                         continue
 
                     confirm_result: dict = {}
@@ -1005,6 +1126,7 @@ class CoderAgent:
                                 display_type="tool_result",
                             )
                         )
+                        remember_loop_result(name, arguments, tool_result)
                         continue
 
                 if name == "code-edit":
@@ -1036,6 +1158,7 @@ class CoderAgent:
                                     display_type="tool_result",
                                 )
                             )
+                            remember_loop_result(name, arguments, tool_result)
                             continue
                         if decision.action == PermissionAction.ASK:
                             confirm_result: dict = {}
@@ -1065,6 +1188,7 @@ class CoderAgent:
                                         display_type="tool_result",
                                     )
                                 )
+                                remember_loop_result(name, arguments, tool_result)
                                 continue
 
                     # Execute tool (streaming for command-exec)
@@ -1127,6 +1251,7 @@ class CoderAgent:
                             display_type="tool_result",
                         )
                     )
+                    remember_loop_result(name, arguments, masked_result.model_text)
 
                 except Exception as e:
                     get_logger().log_error(e)
@@ -1141,6 +1266,7 @@ class CoderAgent:
                             display_type="error",
                         )
                     )
+                    remember_loop_result(name, arguments, error_result)
                     if checkpoint_active:
                         restored = self.checkpoint_manager.rollback()
                         if restored:
@@ -1149,6 +1275,29 @@ class CoderAgent:
                                 "content": {"files": restored, "reason": str(e)},
                             }
                         checkpoint_active = False
+
+            if pending_loop_decision:
+                if pending_loop_decision.stop:
+                    if checkpoint_active:
+                        restored = self.checkpoint_manager.rollback()
+                        if restored:
+                            yield {
+                                "type": "rollback",
+                                "content": {
+                                    "files": restored,
+                                    "reason": pending_loop_decision.reason,
+                                },
+                            }
+                    yield {"type": "error", "content": pending_loop_decision.message}
+                    return
+                retry_messages = [
+                    Message(
+                        "user",
+                        pending_loop_decision.message,
+                        display_type="tool_retry",
+                    )
+                ]
+                yield {"type": "warning", "content": pending_loop_decision.message}
 
             # Commit checkpoint after successful file edits
             if checkpoint_active and has_file_edits:

@@ -154,6 +154,7 @@ def main(
             streaming=use_streaming,
             lean=lean,
             permissions=config.permissions,
+            loop_detection=config.loop_detection,
         )
         agent.set_debug(debug)
     except Exception as e:
