@@ -31,6 +31,11 @@ class Message:
     display_type: str | None = (
         None  # "user_input", "context_attachment", "mode_policy", "thinking", "response", "tool_call", "tool_result", "error", "compact_summary"
     )
+    # UI-only display metadata for session restore (not sent to API)
+    display_summary: str | None = None
+    display_result: str | None = field(default=None, repr=False)
+    display_policy: str | None = None  # "compact", "expanded", "hidden", "error"
+    display_meta: dict[str, Any] | None = field(default=None, repr=False)
 
     def to_api_dict(self) -> dict:
         """Serialize to a dict suitable for the OpenAI messages array."""

@@ -465,6 +465,28 @@ def test_display_result_is_preferred_for_masked_tool_output():
     assert "[Tool output compacted]" not in rendered
 
 
+def test_compact_tool_result_uses_summary_by_default():
+    agent = MagicMock()
+    agent.llm.model = "test"
+    agent.llm.config.model = "test"
+    agent.mode = AgentMode.CODE
+    repl = SuperCoderREPL(agent)
+    repl.console = Console(record=True, width=100)
+
+    repl._display_tool_result(
+        {
+            "name": "file-read",
+            "result": "raw file content that should stay hidden",
+            "display_summary": "file-read README.md · 12 lines",
+            "display_policy": "compact",
+        }
+    )
+
+    rendered = repl.console.export_text()
+    assert "file-read README.md · 12 lines" in rendered
+    assert "raw file content" not in rendered
+
+
 def test_repl_edit_confirm_uses_diff_preview(tmp_path):
     target = tmp_path / "main.py"
     target.write_text("old\n")

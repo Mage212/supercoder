@@ -747,14 +747,14 @@ class SuperCoderREPL:
         """
         import json
 
-        MAX_SHOW = 30
+        MAX_TURNS = 6
 
         # Filter out system messages
         showable = [m for m in messages if m.role != "system"]
-        to_show = showable[-MAX_SHOW:] if len(showable) > MAX_SHOW else showable
+        to_show = self._tail_turn_groups(showable, MAX_TURNS)
 
-        if len(showable) > MAX_SHOW:
-            skipped = len(showable) - MAX_SHOW
+        if len(showable) > len(to_show):
+            skipped = len(showable) - len(to_show)
             self.console.print(f"[dim]... {skipped} earlier messages not shown[/]\n")
 
         # Build index: tool_call_id → position for fast lookup
@@ -805,16 +805,19 @@ class SuperCoderREPL:
                         if j is not None and j not in consumed:
                             result_msg = to_show[j]
                             self._display_tool_result(
-                                {"name": result_msg.name or name, "result": result_msg.content}
+                                self._tool_result_payload_from_message(result_msg, name)
                             )
                             consumed.add(j)
 
             elif dt == "tool_result":
                 # Only render if not already consumed by interleaving above
-                self._display_tool_result({"name": msg.name or "tool", "result": msg.content})
+                self._display_tool_result(self._tool_result_payload_from_message(msg, "tool"))
 
             elif dt == "error":
-                self._print_block(msg.content, "Error", "red", "❌")
+                if msg.role == "tool":
+                    self._display_tool_result(self._tool_result_payload_from_message(msg, "tool"))
+                else:
+                    self._print_block(msg.content, "Error", "red", "❌")
 
             elif dt == "compact_summary":
                 text = msg.content[:200]
@@ -841,6 +844,47 @@ class SuperCoderREPL:
                     self._display_tool_result({"name": msg.name or "tool", "result": msg.content})
 
             i += 1
+
+    def _tail_turn_groups(self, messages: list, max_turns: int) -> list:
+        """Return the last complete user-turn groups for session restore."""
+        groups: list[list] = []
+        current: list = []
+
+        for msg in messages:
+            if msg.display_type == "user_input" and current:
+                groups.append(current)
+                current = [msg]
+            else:
+                current.append(msg)
+        if current:
+            groups.append(current)
+
+        selected: list = []
+        turns = 0
+        for group in reversed(groups):
+            selected = [*group, *selected]
+            if any(msg.display_type == "user_input" for msg in group):
+                turns += 1
+            if turns >= max_turns:
+                break
+        return selected
+
+    def _tool_result_payload_from_message(self, msg, fallback_name: str) -> dict:
+        """Build a render payload from persisted UI-only message metadata."""
+        payload = {
+            "name": msg.name or fallback_name,
+            "result": msg.content,
+            "display_summary": getattr(msg, "display_summary", None),
+            "display_result": getattr(msg, "display_result", None),
+            "display_policy": getattr(msg, "display_policy", None),
+        }
+        payload.update(getattr(msg, "display_meta", None) or {})
+        if getattr(msg, "display_type", None) == "error":
+            if not payload.get("display_policy"):
+                payload["display_policy"] = "error"
+            if payload.get("display_result") is None:
+                payload["display_result"] = msg.content
+        return payload
 
     def _print_block(self, content, title: str, color: str, icon: str = ""):
         """Print content in a panel with horizontal lines only (no vertical borders).
@@ -1321,11 +1365,17 @@ class SuperCoderREPL:
                 # Pretty print JSON args
                 args_str = json.dumps(args_obj, indent=2, ensure_ascii=False)
             except Exception:
+                args_obj = {"_raw": args}
                 args_str = args
         else:
             import json
 
+            args_obj = args if isinstance(args, dict) else {}
             args_str = json.dumps(args, indent=2, ensure_ascii=False)
+
+        if not getattr(self, "_show_agent_details", False):
+            self.console.print(f"[yellow]-> {self._tool_call_summary(name, args_obj)}[/]")
+            return
 
         self._print_block(
             Syntax(args_str, "json", theme="monokai", word_wrap=True, background_color="default"),
@@ -1334,12 +1384,44 @@ class SuperCoderREPL:
             "🔧",
         )
 
+    def _tool_call_summary(self, name: str, args: dict) -> str:
+        """Return one-line summary for compact tool-call rendering."""
+        if name == "file-read":
+            path = args.get("path") or args.get("file_path") or args.get("file")
+            return f"{name} {path}".strip()
+        if name == "code-search":
+            query = args.get("query") or args.get("pattern")
+            return f"{name} {query}".strip()
+        if name == "code-edit":
+            path = args.get("path") or args.get("file_path") or args.get("file")
+            operation = args.get("operation") or args.get("op")
+            suffix = " ".join(str(part) for part in (operation, path) if part)
+            return f"{name} {suffix}".strip()
+        if name == "command-exec":
+            command = args.get("command") or args.get("cmd")
+            first_line = str(command).splitlines()[0][:100] if command else ""
+            return f"{name} {first_line}".strip()
+        for value in args.values():
+            if isinstance(value, str) and value.strip():
+                return f"{name} {value.strip()[:100]}".strip()
+        return name or "tool"
+
     def _display_tool_result(self, result_data):
         """Display tool result in a panel with format-aware rendering."""
         name = result_data.get("name")
         model_result = result_data.get("result", "")
         display_result = result_data.get("display_result")
         result = display_result if display_result is not None else model_result
+        policy = result_data.get("display_policy")
+
+        if policy == "error":
+            self._print_block(result, f"Error: {name}", "red", "❌")
+            return
+
+        if policy == "hidden" and not getattr(self, "_show_agent_details", False):
+            summary = result_data.get("display_summary") or f"{name} result hidden"
+            self.console.print(f"[dim]· {summary}[/]")
+            return
 
         if result_data.get("masked") or self._is_compacted_tool_output(model_result):
             self._display_large_tool_output_result(name, result_data, result, model_result)
@@ -1348,6 +1430,14 @@ class SuperCoderREPL:
         # Diff results (code-edit) — syntax-highlighted diff
         if self._is_diff_result(result):
             self._display_diff_result(name, result)
+            return
+
+        if (
+            policy == "compact"
+            and not getattr(self, "_show_agent_details", False)
+            and result_data.get("display_summary")
+        ):
+            self.console.print(f"[green]✔ {result_data['display_summary']}[/]")
             return
 
         # File read — show with line numbers

@@ -963,6 +963,11 @@ class TestChatTurnEventFlow:
         tool_msgs = [m for m in agent.context.get_messages() if m.role == "tool"]
         assert "[Tool output compacted]" in tool_msgs[0].content
         assert "MIDDLE_ONLY_SECRET" not in tool_msgs[0].content
+        assert tool_msgs[0].display_result == display_text
+        assert tool_msgs[0].display_policy == "expanded"
+        assert tool_msgs[0].display_meta["masked"] is True
+        assert tool_msgs[0].display_meta["original_size"] == tool_event["content"]["original_size"]
+        assert tool_msgs[0].display_meta["offload_path"].startswith(".supercoder/tool-outputs/")
 
         offloaded = list((tmp_path / ".supercoder" / "tool-outputs").glob("*.txt"))
         assert len(offloaded) == 1

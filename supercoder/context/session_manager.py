@@ -35,6 +35,14 @@ class ChatSession:
                 m["name"] = msg.name
             if msg.display_type:
                 m["display_type"] = msg.display_type
+            if msg.display_summary:
+                m["display_summary"] = msg.display_summary
+            if msg.display_result is not None:
+                m["display_result"] = msg.display_result
+            if msg.display_policy:
+                m["display_policy"] = msg.display_policy
+            if msg.display_meta:
+                m["display_meta"] = msg.display_meta
             serialized_messages.append(m)
 
         return {
@@ -59,6 +67,10 @@ class ChatSession:
                     tool_call_id=m.get("tool_call_id"),
                     name=m.get("name"),
                     display_type=m.get("display_type"),
+                    display_summary=m.get("display_summary"),
+                    display_result=m.get("display_result"),
+                    display_policy=m.get("display_policy"),
+                    display_meta=m.get("display_meta"),
                 )
             )
         return cls(

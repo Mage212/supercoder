@@ -1232,6 +1232,12 @@ class CoderAgent:
                             "name": name,
                             "result": masked_result.model_text,
                             "display_result": masked_result.display_text,
+                            "display_summary": self._tool_display_summary(
+                                name, arguments, masked_result.model_text, "success"
+                            ),
+                            "display_policy": self._tool_display_policy(
+                                name, masked_result.model_text, masked_result.masked, "success"
+                            ),
                             "masked": masked_result.masked,
                             "offload_path": offload_path,
                             "original_size": masked_result.original_size,
@@ -1249,6 +1255,25 @@ class CoderAgent:
                             tool_call_id=tc.id,
                             name=name,
                             display_type="tool_result",
+                            display_summary=self._tool_display_summary(
+                                name, arguments, masked_result.model_text, "success"
+                            ),
+                            display_result=masked_result.display_text,
+                            display_policy=self._tool_display_policy(
+                                name, masked_result.model_text, masked_result.masked, "success"
+                            ),
+                            display_meta={
+                                "tool_name": name,
+                                "tool_call_id": tc.id,
+                                "status": "success",
+                                "masked": masked_result.masked,
+                                "offload_path": offload_path,
+                                "original_size": masked_result.original_size,
+                                "omitted_chars": masked_result.omitted_chars,
+                                "truncation_kind": "offloaded"
+                                if masked_result.masked
+                                else "inline",
+                            },
                         )
                     )
                     remember_loop_result(name, arguments, masked_result.model_text)
@@ -1264,6 +1289,15 @@ class CoderAgent:
                             tool_call_id=tc.id,
                             name=name,
                             display_type="error",
+                            display_summary=f"{name} failed",
+                            display_result=error_result,
+                            display_policy="error",
+                            display_meta={
+                                "tool_name": name,
+                                "tool_call_id": tc.id,
+                                "status": "error",
+                                "truncation_kind": "inline",
+                            },
                         )
                     )
                     remember_loop_result(name, arguments, error_result)
@@ -1664,6 +1698,40 @@ class CoderAgent:
             offload_path,
         )
 
+    def _tool_display_summary(
+        self, tool_name: str, arguments: dict, result: str, status: str
+    ) -> str:
+        """Build a compact, deterministic UI summary for a tool result."""
+        if tool_name == "file-read":
+            path = arguments.get("path") or arguments.get("file_path") or arguments.get("file")
+            line_count = len(result.splitlines()) if result else 0
+            target = f" {path}" if path else ""
+            return f"{tool_name}{target} · {line_count} lines"
+        if tool_name == "code-search":
+            query = arguments.get("query") or arguments.get("pattern")
+            match_count = len([line for line in result.splitlines() if line.strip()])
+            target = f" {query}" if query else ""
+            return f"{tool_name}{target} · {match_count} matches"
+        if tool_name == "code-edit":
+            path = arguments.get("path") or arguments.get("file_path") or arguments.get("file")
+            target = f" {path}" if path else ""
+            return f"{tool_name}{target} · changes prepared"
+        if tool_name == "command-exec":
+            command = arguments.get("command") or arguments.get("cmd")
+            first_line = str(command).splitlines()[0][:80] if command else ""
+            return f"{tool_name} {first_line}".strip()
+        return f"{tool_name} {status}"
+
+    def _tool_display_policy(self, tool_name: str, result: str, masked: bool, status: str) -> str:
+        """Choose the default UI visibility policy for a tool result."""
+        if status == "error":
+            return "error"
+        if tool_name == "code-edit" and "--- " in result and "+++ " in result:
+            return "expanded"
+        if masked:
+            return "expanded"
+        return "compact"
+
     def _extract_tool_call(self, text: str) -> dict | None:
         """Extract tool call from response text using multi-format parser."""
         result = self.tool_parser.parse(text)
@@ -1708,12 +1776,69 @@ class CoderAgent:
         session = self.session_manager.load_session(session_id)
         if session:
             self.current_session = session
+            session.messages = self._repair_incomplete_tool_exchanges(session.messages)
             # Clear existing context and restore from session
             self.context.clear()
             for msg in session.messages:
                 self.context.add_message(msg)
             return True
         return False
+
+    def _repair_incomplete_tool_exchanges(self, messages: list[Message]) -> list[Message]:
+        """Remove API-invalid assistant/tool pairs left by interrupted sessions."""
+        tool_result_ids = {m.tool_call_id for m in messages if m.role == "tool" and m.tool_call_id}
+        incomplete_call_ids: set[str] = set()
+        repaired: list[Message] = []
+        inserted_warning = False
+
+        for msg in messages:
+            if msg.role == "assistant" and msg.tool_calls:
+                call_ids: list[str] = []
+                for tc in msg.tool_calls:
+                    if not isinstance(tc, dict):
+                        continue
+                    call_id = tc.get("id")
+                    if isinstance(call_id, str):
+                        call_ids.append(call_id)
+                if call_ids and any(call_id not in tool_result_ids for call_id in call_ids):
+                    incomplete_call_ids.update(call_ids)
+                    repaired.append(
+                        Message(
+                            role=msg.role,
+                            content=msg.content,
+                            display_type=msg.display_type,
+                            display_summary=msg.display_summary,
+                            display_result=msg.display_result,
+                            display_policy=msg.display_policy,
+                            display_meta=msg.display_meta,
+                        )
+                    )
+                    if not inserted_warning:
+                        repaired.append(
+                            Message(
+                                role="user",
+                                content=(
+                                    "[SYSTEM] Previous session ended before all tool results were "
+                                    "recorded. SuperCoder removed that incomplete tool exchange "
+                                    "from API replay; re-run any missing checks if needed."
+                                ),
+                                display_type="error",
+                                display_summary="Interrupted tool exchange removed from API replay",
+                                display_policy="error",
+                            )
+                        )
+                        inserted_warning = True
+                    continue
+            repaired.append(msg)
+
+        if not incomplete_call_ids:
+            return messages
+
+        return [
+            msg
+            for msg in repaired
+            if not (msg.role == "tool" and msg.tool_call_id in incomplete_call_ids)
+        ]
 
     def handle_undo(self, restored_files: list[str]) -> None:
         """Handle undo event by updating context."""

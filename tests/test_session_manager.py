@@ -290,7 +290,15 @@ class TestSessionManager:
             Message("user", "Attached", display_type="context_attachment"),
             Message("assistant", "", display_type="tool_call"),
             Message(
-                "tool", "result", tool_call_id="tc1", name="file-read", display_type="tool_result"
+                "tool",
+                "result",
+                tool_call_id="tc1",
+                name="file-read",
+                display_type="tool_result",
+                display_summary="file-read README.md · 10 lines",
+                display_result="Human preview",
+                display_policy="compact",
+                display_meta={"status": "success", "original_size": 123},
             ),
             Message("tool", "ERROR", tool_call_id="tc2", name="code-edit", display_type="error"),
         ]
@@ -308,6 +316,11 @@ class TestSessionManager:
             "tool_result",
             "error",
         ]
+        tool_msg = loaded.messages[5]
+        assert tool_msg.display_summary == "file-read README.md · 10 lines"
+        assert tool_msg.display_result == "Human preview"
+        assert tool_msg.display_policy == "compact"
+        assert tool_msg.display_meta == {"status": "success", "original_size": 123}
 
     def test_display_type_backward_compat(self, tmp_path):
         """Test loading old session without display_type."""
@@ -322,7 +335,19 @@ class TestSessionManager:
 
     def test_display_type_not_in_api_dict(self):
         """Test that to_api_dict() does NOT include display_type."""
-        msg = Message("user", "Hello", display_type="user_input")
+        msg = Message(
+            "user",
+            "Hello",
+            display_type="user_input",
+            display_summary="summary",
+            display_result="preview",
+            display_policy="compact",
+            display_meta={"status": "success"},
+        )
         d = msg.to_api_dict()
         assert "display_type" not in d
+        assert "display_summary" not in d
+        assert "display_result" not in d
+        assert "display_policy" not in d
+        assert "display_meta" not in d
         assert d == {"role": "user", "content": "Hello"}
