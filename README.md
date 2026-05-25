@@ -1,6 +1,6 @@
 # 🤖 SuperCoder
 
-[![Version](https://img.shields.io/badge/version-0.3.9-blue.svg)](https://github.com/Mage212/supercoder)
+[![Version](https://img.shields.io/badge/version-0.3.10-blue.svg)](https://github.com/Mage212/supercoder)
 [![Python](https://img.shields.io/badge/python-3.11+-green.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -8,13 +8,12 @@
 
 ---
 
-## 🆕 What's New in v0.3.9
+## 🆕 What's New in v0.3.10
 
-- **Native Tool-Call Recovery**: If a local/OpenAI-compatible backend writes a tool call as text in native mode, SuperCoder can parse the supported fallback formats and keep the turn moving.
-- **Malformed Tool-Call Retries**: Responses that look like broken tool calls get a short retry correction before the agent gives up.
-- **API-Based Context Usage**: Context usage and auto-compact thresholds now use the latest API `usage.total_tokens` when available, matching proxy/provider accounting more closely.
-- **Interrupt-Safe Compaction**: Double-ESC abort state is reset before manual `/compact`, so an interrupted turn no longer poisons the next compaction request.
-- **Cleaner Terminal UI**: Large tool outputs show user-facing previews instead of internal compact markers, long shell commands get bounded previews with `Show full command`, and Unicode tool arguments render as readable text.
+- **Host-Side Loop Detection**: SuperCoder now detects repeated assistant responses, repeated identical tool calls, repeated tool errors, and repeated no-progress edits before a local model can spin indefinitely.
+- **Corrective-Then-Stop Recovery**: The first loop gets a short corrective instruction so the model can change strategy; repeated loops stop the turn cleanly instead of wasting context.
+- **Configurable Stability Guardrails**: Loop detection is enabled by default and configurable through `loop_detection` thresholds for tool calls, tool errors, no-progress edits, assistant repetition, and corrective attempts.
+- **Checkpoint-Safe Aborts**: If a loop is stopped during an edit-capable turn, active checkpoints are rolled back to avoid partial file changes.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 

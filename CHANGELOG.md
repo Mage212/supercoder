@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v0.3.10
+
+- **Host-Side Loop Detection**: Added deterministic loop detection in the native agent loop to catch repeated assistant responses, repeated identical tool calls, repeated tool errors, and repeated no-progress edits.
+- **Corrective-Then-Stop Policy**: On the first detected loop, SuperCoder injects a short corrective instruction so the model can change strategy; if the loop repeats, the turn stops instead of burning context indefinitely.
+- **Local-Model Stability Defaults**: Loop detection is enabled by default and configurable through `loop_detection`, with separate thresholds for tool calls, tool errors, no-progress edits, assistant repetition, and corrective attempts.
+- **Checkpoint-Safe Loop Abort**: When a loop is stopped during an edit-capable turn, active checkpoints are rolled back so interrupted agent cycles do not leave partial file changes behind.
+
 ## v0.3.9
 
 - **Native Tool-Call Recovery**: Native mode now detects when local/OpenAI-compatible backends emit tool calls as plain text, parses supported SuperCoder/Qwen/XML/JSON-style formats as a fallback, and executes them through the same host-side tool pipeline.
