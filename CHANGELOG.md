@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v0.4.0
+
+- **Cleaner Agent Timeline**: Added compact UI display metadata and clearer spacing between model responses, reasoning, tool calls, tool results, warnings, and restored session history.
+- **Compact Tool Output by Default**: Large masked tool outputs now render as one-line summaries with size/offload metadata by default, while detailed previews remain available in detailed mode.
+- **Session Restore Display Fidelity**: Sessions now persist UI-only summaries, previews, display policies, and metadata without sending them back to the model API.
+- **Interrupted Tool Exchange Repair**: Session loading removes incomplete assistant tool-call exchanges from API replay when a previous run ended before matching tool results were recorded.
+- **Runtime Version Sync**: Updated the package metadata and CLI/runtime `__version__` to `0.4.0`.
+
 ## v0.3.10
 
 - **Host-Side Loop Detection**: Added deterministic loop detection in the native agent loop to catch repeated assistant responses, repeated identical tool calls, repeated tool errors, and repeated no-progress edits.

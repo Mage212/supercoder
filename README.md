@@ -1,6 +1,6 @@
 # 🤖 SuperCoder
 
-[![Version](https://img.shields.io/badge/version-0.3.10-blue.svg)](https://github.com/Mage212/supercoder)
+[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](https://github.com/Mage212/supercoder)
 [![Python](https://img.shields.io/badge/python-3.11+-green.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -8,12 +8,12 @@
 
 ---
 
-## 🆕 What's New in v0.3.10
+## 🆕 What's New in v0.4.0
 
-- **Host-Side Loop Detection**: SuperCoder now detects repeated assistant responses, repeated identical tool calls, repeated tool errors, and repeated no-progress edits before a local model can spin indefinitely.
-- **Corrective-Then-Stop Recovery**: The first loop gets a short corrective instruction so the model can change strategy; repeated loops stop the turn cleanly instead of wasting context.
-- **Configurable Stability Guardrails**: Loop detection is enabled by default and configurable through `loop_detection` thresholds for tool calls, tool errors, no-progress edits, assistant repetition, and corrective attempts.
-- **Checkpoint-Safe Aborts**: If a loop is stopped during an edit-capable turn, active checkpoints are rolled back to avoid partial file changes.
+- **Cleaner Agent Timeline**: Tool calls, tool results, reasoning, warnings, and restored session history now render with clearer spacing and compact summaries so short model responses no longer disappear in terminal noise.
+- **Compact Tool Output by Default**: Large tool outputs are summarized in one line with size and saved-output metadata, while detailed head/tail previews remain available in detailed mode.
+- **Session-Restore Display Metadata**: SuperCoder now stores UI-only summaries, previews, policies, and metadata alongside messages so restored sessions can replay the same clean visual timeline without changing the API payload sent to the model.
+- **Safer Interrupted Session Recovery**: Incomplete tool-call exchanges left by an interrupted session are repaired before API replay, preventing invalid assistant/tool history from breaking the next turn.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
