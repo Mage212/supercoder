@@ -133,6 +133,29 @@ class TestCodeEditTool:
         content = test_file.read_text()
         assert "Hello Universe" in content
 
+    def test_code_edit_aborts_when_checkpoint_backup_fails(self, tmp_path):
+        """Existing files are not written when checkpoint backup cannot be created."""
+
+        class FailingCheckpoint:
+            current = object()
+
+            def backup_file(self, _path):
+                return False
+
+        tool = CodeEditTool(checkpoint_manager=FailingCheckpoint())
+        test_file = tmp_path / "backup_fail.txt"
+        test_file.write_text("Hello World\n")
+
+        result = tool.execute(f'''{{
+            "filepath": "{test_file}",
+            "operation": "search_replace",
+            "search": "Hello World",
+            "replace": "Hello Universe"
+        }}''')
+
+        assert "Could not create checkpoint backup" in result
+        assert test_file.read_text() == "Hello World\n"
+
     def test_code_edit_preview_search_replace_does_not_write(self, tmp_path):
         """Preview builds a diff without changing the file."""
         tool = CodeEditTool()

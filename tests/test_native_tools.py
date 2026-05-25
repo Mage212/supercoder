@@ -583,6 +583,52 @@ class TestChatTurnEventFlow:
         assert [event["content"]["attempt"] for event in retry_events] == [1, 2]
         assert "after 2 retries" in error_event["content"]
 
+    def test_truncated_tool_call_is_not_executed(self, tmp_path):
+        """Truncated tool calls are returned to the model as retryable tool errors."""
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+        from supercoder.tools.file_read import FileReadTool
+
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        tool = FileReadTool()
+        tool.execute = MagicMock(return_value="SHOULD NOT RUN")
+        raw_tool_call = {
+            "id": "call_truncated",
+            "type": "function",
+            "function": {"name": "file-read", "arguments": '{"fileName": "missing.txt"}'},
+        }
+        mock_llm.chat_with_tools_interruptible.side_effect = [
+            CompletionResult(
+                content="",
+                tool_calls=[
+                    NativeToolCall(
+                        id="call_truncated",
+                        name="file-read",
+                        arguments={"fileName": "missing.txt"},
+                    )
+                ],
+                raw_tool_calls=[raw_tool_call],
+                truncated=True,
+            ),
+            CompletionResult(content="Retried safely.", tool_calls=[]),
+        ]
+        agent = CoderAgent(
+            llm=mock_llm,
+            tools=[tool],
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+        )
+
+        events = list(agent.chat_turn("Read missing.txt"))
+        tool_results = [event for event in events if event["type"] == "tool_result"]
+
+        tool.execute.assert_not_called()
+        assert "not executed" in tool_results[0]["content"]["result"]
+        assert mock_llm.chat_with_tools_interruptible.call_count == 2
+
     def test_command_deny_skips_confirmation_and_execution(self, tmp_path, monkeypatch):
         """Denied commands return a tool result without asking the user."""
         from supercoder.agent.coder_agent import CoderAgent

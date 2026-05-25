@@ -119,6 +119,7 @@ class PermissionPolicy:
         """Return allow/ask/deny for a shell command."""
         normalized = self.normalize_command(command)
         lowered = normalized.lower()
+        has_shell_control = self._has_shell_control_operator(command)
 
         for rule in BUILTIN_COMMAND_DENY:
             if self._matches(lowered, rule.lower()):
@@ -158,6 +159,8 @@ class PermissionPolicy:
 
         for rule in self._rules(self.command_rules, "allow"):
             if self._matches(normalized, rule):
+                if has_shell_control:
+                    return self._shell_control_ask_decision(rule, "configured")
                 return PermissionDecision(
                     PermissionAction.ALLOW,
                     f"Command allowed by configured rule: {rule}",
@@ -167,6 +170,8 @@ class PermissionPolicy:
 
         for rule in self._rules(self.persistent_command_rules, "allow"):
             if self._matches(normalized, rule):
+                if has_shell_control:
+                    return self._shell_control_ask_decision(rule, "persistent")
                 return PermissionDecision(
                     PermissionAction.ALLOW,
                     f"Command allowed by persistent rule: {rule}",
@@ -176,6 +181,8 @@ class PermissionPolicy:
 
         for rule in self._rules(self.session_command_rules, "allow"):
             if self._matches(normalized, rule):
+                if has_shell_control:
+                    return self._shell_control_ask_decision(rule, "session")
                 return PermissionDecision(
                     PermissionAction.ALLOW,
                     f"Command allowed by session rule: {rule}",
@@ -212,6 +219,11 @@ class PermissionPolicy:
             raise ValueError("Permission rule scope must be 'session' or 'persistent'")
 
         pattern = self.normalize_command(command)
+        if action == PermissionAction.ALLOW and self._has_shell_control_operator(command):
+            raise ValueError(
+                "Commands with shell control operators cannot be saved as allow rules. "
+                "Run once instead."
+            )
         target = self.session_command_rules if scope == "session" else self.persistent_command_rules
         rules = target.setdefault(action.value, [])
         if pattern not in rules:
@@ -366,6 +378,47 @@ class PermissionPolicy:
 
     def _matches(self, value: str, pattern: str) -> bool:
         return fnmatch.fnmatchcase(value, pattern) or value == pattern
+
+    def _shell_control_ask_decision(self, rule: str, source_label: str) -> PermissionDecision:
+        source = "config" if source_label == "configured" else source_label
+        return PermissionDecision(
+            PermissionAction.ASK,
+            "Command matches an allow rule but contains shell control operators, "
+            "so it requires explicit one-time approval.",
+            matched_rule=rule,
+            source=source,
+        )
+
+    def _has_shell_control_operator(self, command: str) -> bool:
+        """Detect shell chaining/substitution outside single quotes."""
+        in_single = False
+        in_double = False
+        escaped = False
+
+        for idx, ch in enumerate(command):
+            if escaped:
+                escaped = False
+                continue
+            if ch == "\\":
+                escaped = True
+                continue
+            if ch == "'" and not in_double:
+                in_single = not in_single
+                continue
+            if ch == '"' and not in_single:
+                in_double = not in_double
+                continue
+            if in_single:
+                continue
+            if ch == "$" and idx + 1 < len(command) and command[idx + 1] == "(":
+                return True
+            if ch == "`":
+                return True
+            if in_double:
+                continue
+            if ch in {";", "|", "&", "\n", "\r"}:
+                return True
+        return False
 
     def _matches_path(self, rel_path: str, pattern: str) -> bool:
         pattern = pattern.replace("\\", "/")

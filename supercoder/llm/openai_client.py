@@ -44,6 +44,7 @@ class OpenAIClient(BaseLLM):
         )
         self.model = config.model
         self.temperature = config.temperature
+        self.top_p = config.top_p
         self.debug = config.debug
 
     def switch_model(self, profile: ModelProfile) -> None:
@@ -63,6 +64,7 @@ class OpenAIClient(BaseLLM):
         )
         self.model = profile.model
         self.temperature = profile.temperature
+        self.top_p = profile.top_p if profile.top_p is not None else self.config.top_p
 
     # ------------------------------------------------------------------
     # Primary API: non-streaming with native tool calling
@@ -71,11 +73,14 @@ class OpenAIClient(BaseLLM):
     def chat(self, messages: list[Message]) -> str:
         """Send messages and get complete response."""
         api_messages = [m.to_api_dict() for m in messages]
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=api_messages,  # type: ignore[arg-type]
-            temperature=self.temperature,
-        )
+        kwargs: dict = {
+            "model": self.model,
+            "messages": api_messages,  # type: ignore[arg-type]
+            "temperature": self.temperature,
+        }
+        if self.top_p is not None:
+            kwargs["top_p"] = self.top_p
+        response = self.client.chat.completions.create(**kwargs)
         return response.choices[0].message.content or ""
 
     def chat_with_tools(
@@ -96,6 +101,8 @@ class OpenAIClient(BaseLLM):
             "messages": [m.to_api_dict() for m in messages],
             "temperature": self.temperature,
         }
+        if self.top_p is not None:
+            kwargs["top_p"] = self.top_p
         if tools:
             kwargs["tools"] = tools
         if tool_choice is not None:
@@ -189,6 +196,8 @@ class OpenAIClient(BaseLLM):
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        if self.top_p is not None:
+            kwargs["top_p"] = self.top_p
         if tools:
             kwargs["tools"] = tools
         if tool_choice is not None:
@@ -318,12 +327,15 @@ class OpenAIClient(BaseLLM):
             reliable native tool calling instead.
         """
         api_messages = [m.to_api_dict() for m in messages]
-        stream = self.client.chat.completions.create(
-            model=self.model,
-            messages=api_messages,  # type: ignore[arg-type]
-            temperature=self.temperature,
-            stream=True,
-        )
+        kwargs: dict = {
+            "model": self.model,
+            "messages": api_messages,  # type: ignore[arg-type]
+            "temperature": self.temperature,
+            "stream": True,
+        }
+        if self.top_p is not None:
+            kwargs["top_p"] = self.top_p
+        stream = self.client.chat.completions.create(**kwargs)
 
         for chunk in stream:
             if chunk.choices:

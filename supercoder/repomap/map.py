@@ -4,7 +4,9 @@ from pathlib import Path
 
 import networkx as nx
 
+from ..logging import get_logger
 from ..tools.tool_utils import is_ignored_path
+from ..utils.atomic_writer import AtomicFileWriter
 from .tag_extractor import TagExtractor
 
 
@@ -42,9 +44,9 @@ class RepoMap:
         try:
             self._ensure_storage_dir()
             map_file = self.storage_dir / "repo_map.txt"
-            map_file.write_text(repo_map, encoding="utf-8")
-        except Exception:
-            pass  # Fail silently - persistence is a nice-to-have
+            AtomicFileWriter.write(map_file, repo_map)
+        except Exception as e:
+            get_logger().log_error(e)
 
         return repo_map
 

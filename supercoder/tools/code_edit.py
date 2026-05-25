@@ -73,8 +73,13 @@ class CodeEditTool(BaseTool):
             content: Content to write
         """
         # Backup before modifying (if checkpoint is active)
-        if self.checkpoint:
-            self.checkpoint.backup_file(path)
+        if (
+            self.checkpoint
+            and getattr(self.checkpoint, "current", None)
+            and path.exists()
+            and not self.checkpoint.backup_file(path)
+        ):
+            raise RuntimeError(f"Could not create checkpoint backup for {path}; edit aborted.")
 
         # Atomic write
         AtomicFileWriter.write(path, content)

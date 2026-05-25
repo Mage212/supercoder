@@ -744,7 +744,7 @@ class CoderAgent:
                 yield {
                     "type": "warning",
                     "content": "Response was truncated — tool call arguments may be incomplete. "
-                    "3-level recovery attempted to salvage usable data.",
+                    "Tool calls from this response will not be executed until retried.",
                 }
 
             # 1. Reasoning
@@ -856,6 +856,43 @@ class CoderAgent:
                 )
 
             self._save_current_session()
+
+            if result.truncated and effective_tool_calls:
+                retry_messages = [
+                    Message(
+                        "user",
+                        "The previous response was truncated while producing tool calls. "
+                        "SuperCoder did not execute those tool calls because their arguments "
+                        "may be incomplete. Retry the same step with complete native tool calls.",
+                        display_type="tool_retry",
+                    )
+                ]
+                for tc in effective_tool_calls:
+                    name = tc.name
+                    arguments = dict(tc.arguments)
+                    tool_result = (
+                        "Tool call was not executed because the model response was truncated. "
+                        "Retry with a complete native tool call."
+                    )
+                    yield {"type": "tool_call", "content": {"name": name, "arguments": arguments}}
+                    yield {
+                        "type": "tool_result",
+                        "content": {"name": name, "result": tool_result},
+                    }
+                    self.context.add_message(
+                        Message(
+                            role="tool",
+                            content=tool_result,
+                            tool_call_id=tc.id,
+                            name=name,
+                            display_type="tool_result",
+                        )
+                    )
+                self._save_current_session()
+                auto_compact_event = self._auto_compact_if_needed()
+                if auto_compact_event:
+                    yield auto_compact_event
+                continue
 
             # 3. Tool calls
             if not effective_tool_calls:

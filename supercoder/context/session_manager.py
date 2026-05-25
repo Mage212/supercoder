@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from ..llm.base import Message
+from ..utils.atomic_writer import AtomicFileWriter
 
 
 @dataclass
@@ -88,7 +89,6 @@ class SessionManager:
     def _ensure_sessions_dir(self) -> None:
         """Create sessions directory if it doesn't exist."""
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
-        self._ensure_gitignore()
 
     def _ensure_gitignore(self) -> None:
         """Ensure .supercoder/ is listed in the project's .gitignore."""
@@ -98,10 +98,9 @@ class SessionManager:
             if gitignore.exists():
                 content = gitignore.read_text()
                 if ".supercoder/" not in content and ".supercoder" not in content:
-                    with gitignore.open("a") as f:
-                        f.write(entry)
+                    AtomicFileWriter.write(gitignore, content + entry)
             else:
-                gitignore.write_text(entry)
+                AtomicFileWriter.write(gitignore, entry)
         except Exception:
             pass  # Non-critical; don't fail session management over gitignore
 
@@ -147,8 +146,10 @@ class SessionManager:
 
         # Save to file
         session_path = self._get_session_path(session.id)
-        with open(session_path, "w", encoding="utf-8") as f:
-            json.dump(session.to_dict(), f, ensure_ascii=False, indent=2)
+        AtomicFileWriter.write(
+            session_path,
+            json.dumps(session.to_dict(), ensure_ascii=False, indent=2),
+        )
 
         # Cleanup old sessions
         self._cleanup_old_sessions()
@@ -227,8 +228,10 @@ class SessionManager:
 
         # Save updated session
         session_path = self._get_session_path(session.id)
-        with open(session_path, "w", encoding="utf-8") as f:
-            json.dump(session.to_dict(), f, ensure_ascii=False, indent=2)
+        AtomicFileWriter.write(
+            session_path,
+            json.dumps(session.to_dict(), ensure_ascii=False, indent=2),
+        )
 
     def _cleanup_old_sessions(self) -> None:
         """Remove oldest sessions if we exceed MAX_SESSIONS."""

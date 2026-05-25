@@ -103,6 +103,51 @@ def test_model_profile_with_context_limit(tmp_path):
         os.getcwd = original_getcwd
 
 
+def test_model_profile_sampling_and_streaming_fields_load(tmp_path):
+    """Profile-specific sampling and streaming fields are honored."""
+    config_data = {
+        "default_model": "custom",
+        "temperature": 0.2,
+        "top_p": 0.9,
+        "streaming": False,
+        "models": {
+            "custom": {
+                "api_key": "test-key",
+                "model": "test-model",
+                "temperature": 0.7,
+                "top_p": 0.3,
+                "streaming": True,
+            }
+        },
+    }
+
+    config_file = tmp_path / ".supercoder.yaml"
+    with open(config_file, "w") as f:
+        yaml.dump(config_data, f)
+
+    original_getcwd = os.getcwd
+
+    try:
+        os.getcwd = lambda: str(tmp_path)
+        with patch(
+            "os.path.exists",
+            side_effect=lambda p: p == str(config_file) or p == str(tmp_path / ".supercoder.yaml"),
+        ):
+            config = Config.load()
+
+        profile = config.get_model_profile("custom")
+        assert profile is not None
+        assert profile.temperature == 0.7
+        assert profile.top_p == 0.3
+        assert profile.streaming is True
+        assert config.temperature == 0.7
+        assert config.top_p == 0.3
+        assert config.streaming is True
+
+    finally:
+        os.getcwd = original_getcwd
+
+
 def test_permissions_config_loads_from_yaml(tmp_path):
     """Permission rules are loaded as shared configuration."""
     config_data = {

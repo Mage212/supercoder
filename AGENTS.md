@@ -4,7 +4,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## Git Commits
 
-All commits must include `Co-Authored-By: GLM-5.1` (no email) on the last line of the commit message body.
+All commits must include `Co-Authored-By: GPT-5.5` (no email) on the last line of the commit message body.
 
 ## Commands
 

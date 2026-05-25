@@ -28,6 +28,42 @@ def test_command_config_allow_and_default_ask(tmp_path):
     assert policy.check_command("python script.py").action == PermissionAction.ASK
 
 
+def test_command_allow_rule_does_not_auto_allow_shell_chaining(tmp_path):
+    policy = PermissionPolicy(
+        tmp_path,
+        {"command-exec": {"allow": ["uv run pytest*"]}},
+    )
+
+    risky_commands = [
+        "uv run pytest tests/; python cleanup.py",
+        "uv run pytest tests/ && python cleanup.py",
+        "uv run pytest tests/ || python cleanup.py",
+        "uv run pytest tests/ | tee out.txt",
+        "uv run pytest $(python pick_tests.py)",
+        "uv run pytest tests/\npython cleanup.py",
+    ]
+
+    for command in risky_commands:
+        decision = policy.check_command(command)
+        assert decision.action == PermissionAction.ASK
+        assert decision.matched_rule == "uv run pytest*"
+
+
+def test_shell_chaining_cannot_be_saved_as_allow_rule(tmp_path):
+    policy = PermissionPolicy(tmp_path)
+
+    try:
+        policy.add_command_rule(
+            PermissionAction.ALLOW,
+            "uv run pytest tests/ && python cleanup.py",
+            scope="persistent",
+        )
+    except ValueError as exc:
+        assert "shell control operators" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError for risky allow rule")
+
+
 def test_command_config_deny_precedes_allow(tmp_path):
     policy = PermissionPolicy(
         tmp_path,

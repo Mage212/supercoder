@@ -137,6 +137,7 @@ class ModelProfile:
     endpoint: str = "https://api.openai.com/v1"
     model: str = "gpt-4o-mini"
     temperature: float = 0.2
+    top_p: float | None = 0.1
     request_timeout: float = 300.0
     tool_calling_type: str = (
         "supercoder"  # supercoder, qwen_like, json_block, xml_function, glm_tool_call
@@ -233,6 +234,14 @@ class Config:
                         "endpoint", profile_data.get("base_url", "https://api.openai.com/v1")
                     ),
                     model=profile_data.get("model", "gpt-4o-mini"),
+                    temperature=float(
+                        profile_data.get("temperature", config_data.get("temperature", 0.2))
+                    ),
+                    top_p=(
+                        None
+                        if profile_data.get("top_p", config_data.get("top_p", 0.1)) is None
+                        else float(profile_data.get("top_p", config_data.get("top_p", 0.1)))
+                    ),
                     request_timeout=float(
                         profile_data.get(
                             "request_timeout", config_data.get("request_timeout", 60.0)
@@ -240,6 +249,7 @@ class Config:
                     ),
                     tool_calling_type=profile_data.get("tool_calling_type", "supercoder"),
                     max_context_tokens=profile_data.get("max_context_tokens"),
+                    streaming=profile_data.get("streaming", config_data.get("streaming", False)),
                     lean=profile_data.get("lean", False),
                 )
 
@@ -260,7 +270,10 @@ class Config:
             config.api_key = profile.api_key
             config.base_url = profile.endpoint
             config.model = profile.model
+            config.temperature = profile.temperature
+            config.top_p = profile.top_p
             config.request_timeout = profile.request_timeout
+            config.streaming = profile.streaming
             config._current_profile = default_name
             # Apply model-specific context limit if defined
             if profile.max_context_tokens is not None:
@@ -309,7 +322,10 @@ class Config:
         self.api_key = profile.api_key
         self.base_url = profile.endpoint
         self.model = profile.model
+        self.temperature = profile.temperature
+        self.top_p = profile.top_p
         self.request_timeout = profile.request_timeout
+        self.streaming = profile.streaming
         self._current_profile = name
         # Apply model-specific context limit if defined
         if profile.max_context_tokens is not None:

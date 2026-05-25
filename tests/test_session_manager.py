@@ -109,6 +109,46 @@ class TestSessionManager:
         assert len(loaded.messages) == 2
         assert loaded.messages[0].content == "Hello"
 
+    def test_save_session_uses_atomic_writer(self, tmp_path, monkeypatch):
+        """Session JSON is written through AtomicFileWriter."""
+        from supercoder.context import session_manager
+
+        manager = SessionManager(tmp_path)
+        session = manager.create_new_session()
+        original_write = session_manager.AtomicFileWriter.write
+        calls = []
+
+        def spy(path, content, encoding="utf-8"):
+            calls.append((path, content))
+            return original_write(path, content, encoding)
+
+        monkeypatch.setattr(session_manager.AtomicFileWriter, "write", spy)
+
+        manager.save_session(session)
+
+        assert calls
+        assert calls[0][0] == manager._get_session_path(session.id)
+
+    def test_update_session_after_compact_uses_atomic_writer(self, tmp_path, monkeypatch):
+        """Compacted session JSON is written through AtomicFileWriter."""
+        from supercoder.context import session_manager
+
+        manager = SessionManager(tmp_path)
+        session = manager.create_new_session()
+        original_write = session_manager.AtomicFileWriter.write
+        calls = []
+
+        def spy(path, content, encoding="utf-8"):
+            calls.append((path, content))
+            return original_write(path, content, encoding)
+
+        monkeypatch.setattr(session_manager.AtomicFileWriter, "write", spy)
+
+        manager.update_session_after_compact(session, "Summary")
+
+        assert calls
+        assert calls[0][0] == manager._get_session_path(session.id)
+
     def test_save_session_updates_title(self, tmp_path):
         """Test that saving updates title from last user message."""
         manager = SessionManager(tmp_path)
