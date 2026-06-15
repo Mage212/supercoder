@@ -1,6 +1,7 @@
 """Checkpoint system for safe file editing with rollback support."""
 
 import contextlib
+import hashlib
 import json
 import shutil
 import uuid
@@ -112,9 +113,12 @@ class CheckpointManager:
         if str(file_path) in self.current.files:
             return True
 
-        # Create backup with encoded path as filename
-        backup_name = str(file_path.absolute()).replace("/", "__").replace("\\", "__")
-        backup_path = self.checkpoint_dir / self.current.id / backup_name
+        # Hashed backup name avoids collisions (a/b.py vs a__b.py both mapped to
+        # the same "__"-joined string under the old scheme). The original path is
+        # preserved in current.files / metadata.json, so the filename need not be
+        # human-readable.
+        path_hash = hashlib.sha256(str(file_path.absolute()).encode("utf-8")).hexdigest()[:16]
+        backup_path = self.checkpoint_dir / self.current.id / f"{path_hash}.bak"
 
         try:
             shutil.copy2(file_path, backup_path)

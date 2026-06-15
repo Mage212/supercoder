@@ -7,9 +7,15 @@ from typing import Any
 class TokenCounter:
     """Count tokens in text, with optional tiktoken support."""
 
+    # Safety margin applied to cl100k_base estimates for non-OpenAI models
+    # (GLM/Llama/DeepSeek), where the GPT-4 tokenizer under-counts by ~20-30%.
+    # Better to over-estimate (auto-compact early) than under-estimate (overflow).
+    FALLBACK_MARGIN = 1.3
+
     def __init__(self, use_tiktoken: bool = True, model: str = "gpt-4"):
         self.encoder = None
         self.model = model
+        self.is_fallback_encoding = False
 
         if use_tiktoken:
             try:
@@ -19,8 +25,10 @@ class TokenCounter:
                 try:
                     self.encoder = tiktoken.encoding_for_model(model)
                 except KeyError:
-                    # Fallback to cl100k_base (GPT-4 encoding)
+                    # Fallback to cl100k_base (GPT-4 encoding) — inaccurate for
+                    # non-OpenAI models, so apply a safety margin in count().
                     self.encoder = tiktoken.get_encoding("cl100k_base")
+                    self.is_fallback_encoding = True
             except ImportError:
                 # tiktoken not installed, will use estimation
                 pass
@@ -31,7 +39,10 @@ class TokenCounter:
             return 0
 
         if self.encoder:
-            return len(self.encoder.encode(text))
+            raw = len(self.encoder.encode(text))
+            if self.is_fallback_encoding:
+                return int(raw * self.FALLBACK_MARGIN)
+            return raw
 
         # Fallback estimation: ~4 chars per token for English/code
         return self._estimate_tokens(text)
@@ -93,8 +104,8 @@ class TokenCounter:
 
     @property
     def has_accurate_counting(self) -> bool:
-        """Check if we have tiktoken for accurate counting."""
-        return self.encoder is not None
+        """Check if we have an accurate (model-specific) tokenizer."""
+        return self.encoder is not None and not self.is_fallback_encoding
 
 
 # Global instance for convenience

@@ -201,16 +201,7 @@ class ContextWindowManager:
         if not selected:
             return []
 
-        call_owner: dict[str, int] = {}
-        call_results: dict[str, list[int]] = {}
-        for idx, msg in enumerate(self.history):
-            if msg.role == "assistant" and msg.tool_calls:
-                for raw_call in msg.tool_calls:
-                    call_id = raw_call.get("id")
-                    if call_id:
-                        call_owner[call_id] = idx
-            elif msg.role == "tool" and msg.tool_call_id:
-                call_results.setdefault(msg.tool_call_id, []).append(idx)
+        call_owner, call_results = self._build_tool_call_index(self.history)
 
         changed = True
         while changed:
@@ -294,21 +285,63 @@ class ContextWindowManager:
         else:
             self._smart_compress()
 
+    def _build_tool_call_index(
+        self, history: list[Message]
+    ) -> tuple[dict[str, int], dict[str, list[int]]]:
+        """Build call_id -> owner-assistant index and call_id -> result indices.
+
+        Shared between protected-recent selection and sliding compression so that
+        assistant(tool_calls) and their tool(result) messages stay together.
+        """
+        call_owner: dict[str, int] = {}
+        call_results: dict[str, list[int]] = {}
+        for idx, msg in enumerate(history):
+            if msg.role == "assistant" and msg.tool_calls:
+                for raw_call in msg.tool_calls:
+                    call_id = raw_call.get("id")
+                    if call_id:
+                        call_owner[call_id] = idx
+            elif msg.role == "tool" and msg.tool_call_id:
+                call_results.setdefault(msg.tool_call_id, []).append(idx)
+        return call_owner, call_results
+
     def _sliding_window_compress(self) -> None:
-        """Remove oldest messages to fit in context."""
+        """Remove oldest messages to fit in context, keeping tool-call pairs intact."""
         target = self.config.max_tokens * 0.5  # Compress to 50%
 
         while len(self.history) > self.config.min_messages_to_keep:
             stats = self.get_stats()
             if stats.used_tokens <= target:
                 break
+            if len(self.history) <= 1:
+                break
 
-            # Remove the oldest message (after any potential system context)
-            if len(self.history) > 1:
-                self.history.pop(0)
-                if self.config.compression_strategy == "sliding":
-                    # Optionally log what was removed
-                    pass
+            # Drop a cluster, not a single message: if history[0] is an assistant
+            # with tool_calls, drop it together with its results; if it is a tool
+            # result, drop it together with its owner and the owner's other
+            # results. Otherwise just drop the single oldest message.
+            call_owner, call_results = self._build_tool_call_index(self.history)
+            first = self.history[0]
+            to_remove = {0}
+            if first.role == "assistant" and first.tool_calls:
+                for raw_call in first.tool_calls:
+                    call_id = raw_call.get("id")
+                    if isinstance(call_id, str):
+                        for result_idx in call_results.get(call_id, []):
+                            to_remove.add(result_idx)
+            elif first.role == "tool" and first.tool_call_id:
+                owner_idx = call_owner.get(first.tool_call_id)
+                if owner_idx is not None:
+                    to_remove.add(owner_idx)
+                    for raw_call in self.history[owner_idx].tool_calls or []:
+                        call_id = raw_call.get("id")
+                        if isinstance(call_id, str):
+                            for result_idx in call_results.get(call_id, []):
+                                to_remove.add(result_idx)
+
+            for idx in sorted(to_remove, reverse=True):
+                if len(self.history) > self.config.min_messages_to_keep:
+                    self.history.pop(idx)
 
     def _summarize_compress(self) -> None:
         """Summarize old messages instead of removing them.
