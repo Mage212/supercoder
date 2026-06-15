@@ -418,6 +418,8 @@ class PermissionPolicy:
                 continue
             if ch in {";", "|", "&", "\n", "\r"}:
                 return True
+            if ch in (">", "<"):
+                return True
         return False
 
     def _matches_path(self, rel_path: str, pattern: str) -> bool:

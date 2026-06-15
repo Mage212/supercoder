@@ -26,6 +26,7 @@ class _ToolCallBuffer:
     tool_id: str = ""
     tool_name: str = ""
     has_content: bool = False
+    unbalanced: bool = False
 
     def feed_char(self, ch: str) -> None:
         """Process a single character and update parsing state."""
@@ -53,10 +54,12 @@ class _ToolCallBuffer:
                 self.depth += 1
             elif ch in ("}", "]"):
                 self.depth -= 1
+                if self.depth < 0:
+                    self.unbalanced = True
 
     def is_complete(self) -> bool:
         """Check if the JSON arguments are structurally complete."""
-        return self.has_content and self.depth == 0 and not self.in_string
+        return self.has_content and self.depth == 0 and not self.in_string and not self.unbalanced
 
 
 class StreamingToolCallParser:
@@ -76,6 +79,11 @@ class StreamingToolCallParser:
 
     def _get_or_create_buffer(self, index: int, tool_id: str = "") -> _ToolCallBuffer:
         """Get existing buffer or create new one, handling index collisions."""
+        # Prefer routing by tool_id when known — some providers reuse indices
+        # across calls but keep the id stable.
+        if tool_id and tool_id in self._id_to_index:
+            return self._buffers[self._id_to_index[tool_id]]
+
         if index not in self._buffers:
             buf = _ToolCallBuffer()
             self._buffers[index] = buf
@@ -142,7 +150,11 @@ class StreamingToolCallParser:
         finish_reason='stop' but the JSON arguments are still open.
         """
         for buf in self._buffers.values():
-            if buf.tool_name and buf.has_content and (buf.depth > 0 or buf.in_string):
+            if (
+                buf.tool_name
+                and buf.has_content
+                and (buf.depth > 0 or buf.in_string or buf.unbalanced)
+            ):
                 return True
         return False
 

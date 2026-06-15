@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import signal
 import subprocess
 from pathlib import Path
 
@@ -17,6 +18,17 @@ from .tool_utils import (
     relative_display_path,
     resolve_within_root,
 )
+
+# ReDoS protection: bound the Python-fallback regex execution time (Unix SIGALRM).
+_RE_SEARCH_TIMEOUT = 5
+
+
+class _RegexTimeout(Exception):
+    """Raised when the Python regex fallback exceeds its time budget."""
+
+
+def _regex_alarm_handler(signum, frame) -> None:
+    raise _RegexTimeout()
 
 
 class SearchMatch:
@@ -171,46 +183,63 @@ class CodeSearchTool(BaseTool):
         self, query: str, root: Path, max_results: int, file_pattern: str
     ) -> tuple[list[SearchMatch], int, str | None]:
         """Fallback search using Python regex scanning."""
+        armed = hasattr(signal, "SIGALRM")
+        if armed:
+            signal.signal(signal.SIGALRM, _regex_alarm_handler)
+            signal.alarm(_RE_SEARCH_TIMEOUT)
         try:
-            pattern = re.compile(query)
-        except re.error as e:
-            return [], 0, f"Error: invalid regex query: {e}"
-
-        files = [root] if root.is_file() else root.rglob("*")
-        matches: list[SearchMatch] = []
-        total = 0
-
-        for path in files:
-            if not path.is_file():
-                continue
-            if is_ignored_path(path, self.allowed_root):
-                continue
-            if not self._path_allowed(path, "search"):
-                continue
-            if not matches_file_pattern(path, file_pattern, self.allowed_root):
-                continue
             try:
-                if path.stat().st_size > self.MAX_FILE_BYTES or is_binary_file(path):
-                    continue
-                with path.open("r", encoding="utf-8", errors="replace") as f:
-                    for line_number, line in enumerate(f, start=1):
-                        match = pattern.search(line)
-                        if not match:
-                            continue
-                        total += 1
-                        if len(matches) < max_results:
-                            matches.append(
-                                SearchMatch(
-                                    path=path,
-                                    line=line_number,
-                                    column=match.start() + 1,
-                                    text=line.rstrip("\n"),
-                                )
-                            )
-            except OSError:
-                continue
+                pattern = re.compile(query)
+            except re.error as e:
+                return [], 0, f"Error: invalid regex query: {e}"
 
-        return matches, total, None
+            files = [root] if root.is_file() else root.rglob("*")
+            matches: list[SearchMatch] = []
+            total = 0
+
+            for path in files:
+                if not path.is_file():
+                    continue
+                if is_ignored_path(path, self.allowed_root):
+                    continue
+                if not self._path_allowed(path, "search"):
+                    continue
+                if not matches_file_pattern(path, file_pattern, self.allowed_root):
+                    continue
+                try:
+                    if path.stat().st_size > self.MAX_FILE_BYTES or is_binary_file(path):
+                        continue
+                    with path.open("r", encoding="utf-8", errors="replace") as f:
+                        for line_number, line in enumerate(f, start=1):
+                            match = pattern.search(line)
+                            if not match:
+                                continue
+                            total += 1
+                            if len(matches) < max_results:
+                                matches.append(
+                                    SearchMatch(
+                                        path=path,
+                                        line=line_number,
+                                        column=match.start() + 1,
+                                        text=line.rstrip("\n"),
+                                    )
+                                )
+                except OSError:
+                    continue
+
+            return matches, total, None
+        except _RegexTimeout:
+            return (
+                [],
+                0,
+                (
+                    f"Error: regex search timed out after {_RE_SEARCH_TIMEOUT}s "
+                    "(possible catastrophic backtracking)"
+                ),
+            )
+        finally:
+            if armed:
+                signal.alarm(0)
 
     def _parse_rg_line(self, raw_line: str, cwd: Path) -> SearchMatch | None:
         parts = raw_line.split(":", 3)
