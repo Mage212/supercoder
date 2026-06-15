@@ -9,6 +9,7 @@ from typing import Any
 
 from ..llm.base import Message
 from ..utils.atomic_writer import AtomicFileWriter
+from ..utils.secret_scrubber import scrub_secrets
 
 
 @dataclass
@@ -160,7 +161,7 @@ class SessionManager:
         session_path = self._get_session_path(session.id)
         AtomicFileWriter.write(
             session_path,
-            json.dumps(session.to_dict(), ensure_ascii=False, indent=2),
+            json.dumps(scrub_secrets(session.to_dict()), ensure_ascii=False, indent=2),
         )
 
         # Cleanup old sessions
@@ -242,7 +243,7 @@ class SessionManager:
         session_path = self._get_session_path(session.id)
         AtomicFileWriter.write(
             session_path,
-            json.dumps(session.to_dict(), ensure_ascii=False, indent=2),
+            json.dumps(scrub_secrets(session.to_dict()), ensure_ascii=False, indent=2),
         )
 
     def _cleanup_old_sessions(self) -> None:

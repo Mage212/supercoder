@@ -10,6 +10,7 @@ from pathlib import Path
 
 from ..logging import get_logger
 from ..utils.atomic_writer import AtomicFileWriter
+from ..utils.secret_scrubber import scrub_secrets
 
 
 @dataclass(frozen=True)
@@ -98,5 +99,5 @@ class ToolOutputMasker:
             re.sub(r"[^A-Za-z0-9_.-]+", "-", safe_id_source).strip("-") or uuid.uuid4().hex[:8]
         )
         path = self.output_dir / f"{timestamp}-{safe_tool}-{safe_id}.txt"
-        AtomicFileWriter.write(path, output)
+        AtomicFileWriter.write(path, scrub_secrets(output))
         return path

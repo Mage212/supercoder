@@ -6,6 +6,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .utils.secret_scrubber import scrub_secrets
+
 # Log directory
 LOG_DIR = Path.home() / ".supercoder" / "logs"
 
@@ -414,8 +416,9 @@ class ConversationLogger:
             return
         try:
             ensure_log_dir()
+            scrubbed = scrub_secrets(entry)
             with open(self.log_file, "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                f.write(json.dumps(scrubbed, ensure_ascii=False) + "\n")
         except Exception:
             pass  # Fail silently - logging should not break the app
 
