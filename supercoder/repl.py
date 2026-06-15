@@ -428,12 +428,17 @@ class SuperCoderREPL:
 
         # === Post-processing ===
         if rollback_info:
-            files = rollback_info.get("files", [])
+            restored = rollback_info.get("restored", [])
+            failed = rollback_info.get("failed", [])
             reason = rollback_info.get("reason", "Unknown")
-            rollback_content = f"[dim]Reason: {reason}[/]\n" + "\n".join(
-                f"  ✓ Restored: {f}" for f in files
-            )
-            self._print_block(rollback_content, "Files Rolled Back", "cyan", "↩")
+            rollback_lines = [f"[dim]Reason: {reason}[/]"]
+            rollback_lines.extend(f"  ✓ Restored: {f}" for f in restored)
+            rollback_lines.extend(f"  [red]✗ Failed: {f}[/]" for f in failed)
+            rollback_content = "\n".join(rollback_lines)
+            if failed:
+                self._print_block(rollback_content, "PARTIAL ROLLBACK", "yellow", "⚠")
+            else:
+                self._print_block(rollback_content, "Files Rolled Back", "cyan", "↩")
 
         for error in errors:
             self._print_block(f"[red]{error}[/]", "Error", "red", "❌")
@@ -663,12 +668,17 @@ class SuperCoderREPL:
 
         # Display Rollback info
         if rollback_info:
-            files = rollback_info.get("files", [])
+            restored = rollback_info.get("restored", [])
+            failed = rollback_info.get("failed", [])
             reason = rollback_info.get("reason", "Unknown")
-            rollback_content = f"[dim]Reason: {reason}[/]\n" + "\n".join(
-                f"  ✓ Restored: {f}" for f in files
-            )
-            self._print_block(rollback_content, "Files Rolled Back", "cyan", "↩")
+            rollback_lines = [f"[dim]Reason: {reason}[/]"]
+            rollback_lines.extend(f"  ✓ Restored: {f}" for f in restored)
+            rollback_lines.extend(f"  [red]✗ Failed: {f}[/]" for f in failed)
+            rollback_content = "\n".join(rollback_lines)
+            if failed:
+                self._print_block(rollback_content, "PARTIAL ROLLBACK", "yellow", "⚠")
+            else:
+                self._print_block(rollback_content, "Files Rolled Back", "cyan", "↩")
 
         # Display Errors
         for error in errors:
@@ -1895,12 +1905,14 @@ class SuperCoderREPL:
             idx = int(choice) - 1
             if 0 <= idx < len(checkpoints):
                 cp = checkpoints[idx]
-                restored = self.agent.checkpoint_manager.undo_by_id(cp.id)
-                if restored:
-                    self.agent.handle_undo(restored)
+                undo_result = self.agent.checkpoint_manager.undo_by_id(cp.id)
+                if undo_result:
+                    self.agent.handle_undo(undo_result.restored)
                     self.console.print(f"[green]✓ Restored to: {cp.description}[/]")
-                    for f in restored:
+                    for f in undo_result.restored:
                         self.console.print(f"  [dim]Restored: {f}[/]")
+                    for f in undo_result.failed:
+                        self.console.print(f"  [red]Failed to restore: {f}[/]")
                 else:
                     self.console.print("[yellow]No files were restored[/]")
             else:

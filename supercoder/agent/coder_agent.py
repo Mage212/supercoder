@@ -684,6 +684,7 @@ class CoderAgent:
 
         # Create checkpoint for this interaction
         checkpoint_active = False
+        has_file_edits = False
         if user_message:
             self.checkpoint_manager.create(description=user_message[:100])
             checkpoint_active = True
@@ -733,9 +734,16 @@ class CoderAgent:
                 )
             except Exception as e:
                 if checkpoint_active:
-                    restored = self.checkpoint_manager.rollback()
-                    if restored:
-                        yield {"type": "rollback", "content": {"files": restored, "reason": str(e)}}
+                    rollback_result = self.checkpoint_manager.rollback()
+                    if rollback_result:
+                        yield {
+                            "type": "rollback",
+                            "content": {
+                                "restored": rollback_result.restored,
+                                "failed": rollback_result.failed,
+                                "reason": str(e),
+                            },
+                        }
                 yield {"type": "error", "content": str(e)}
                 return
 
@@ -817,12 +825,13 @@ class CoderAgent:
                         continue
 
                     if checkpoint_active:
-                        restored = self.checkpoint_manager.rollback()
-                        if restored:
+                        rollback_result = self.checkpoint_manager.rollback()
+                        if rollback_result:
                             yield {
                                 "type": "rollback",
                                 "content": {
-                                    "files": restored,
+                                    "restored": rollback_result.restored,
+                                    "failed": rollback_result.failed,
                                     "reason": "Malformed tool call after retries",
                                 },
                             }
@@ -926,12 +935,13 @@ class CoderAgent:
                 self._save_current_session()
                 if assistant_loop_decision.stop:
                     if checkpoint_active:
-                        restored = self.checkpoint_manager.rollback()
-                        if restored:
+                        rollback_result = self.checkpoint_manager.rollback()
+                        if rollback_result:
                             yield {
                                 "type": "rollback",
                                 "content": {
-                                    "files": restored,
+                                    "restored": rollback_result.restored,
+                                    "failed": rollback_result.failed,
                                     "reason": assistant_loop_decision.reason,
                                 },
                             }
@@ -946,7 +956,13 @@ class CoderAgent:
             if not effective_tool_calls:
                 # No tool calls — conversation turn is done
                 if checkpoint_active:
-                    self.checkpoint_manager.rollback()
+                    if has_file_edits:
+                        # Preserve successful edits instead of rolling them back.
+                        self.checkpoint_manager.commit()
+                    else:
+                        # Cleanup empty checkpoint (no files to keep).
+                        self.checkpoint_manager.rollback()
+                    checkpoint_active = False
                 auto_compact_event = self._auto_compact_if_needed()
                 if auto_compact_event:
                     yield auto_compact_event
@@ -1020,11 +1036,15 @@ class CoderAgent:
                             )
                         self._save_current_session()
                         if checkpoint_active:
-                            restored = self.checkpoint_manager.rollback()
-                            if restored:
+                            rollback_result = self.checkpoint_manager.rollback()
+                            if rollback_result:
                                 yield {
                                     "type": "rollback",
-                                    "content": {"files": restored, "reason": loop_decision.reason},
+                                    "content": {
+                                        "restored": rollback_result.restored,
+                                        "failed": rollback_result.failed,
+                                        "reason": loop_decision.reason,
+                                    },
                                 }
                         yield {"type": "error", "content": loop_decision.message}
                         return
@@ -1313,24 +1333,29 @@ class CoderAgent:
                         )
                     )
                     remember_loop_result(name, arguments, error_result)
-                    if checkpoint_active:
-                        restored = self.checkpoint_manager.rollback()
-                        if restored:
+                    if checkpoint_active and has_file_edits:
+                        rollback_result = self.checkpoint_manager.rollback()
+                        if rollback_result:
                             yield {
                                 "type": "rollback",
-                                "content": {"files": restored, "reason": str(e)},
+                                "content": {
+                                    "restored": rollback_result.restored,
+                                    "failed": rollback_result.failed,
+                                    "reason": str(e),
+                                },
                             }
                         checkpoint_active = False
 
             if pending_loop_decision:
                 if pending_loop_decision.stop:
                     if checkpoint_active:
-                        restored = self.checkpoint_manager.rollback()
-                        if restored:
+                        rollback_result = self.checkpoint_manager.rollback()
+                        if rollback_result:
                             yield {
                                 "type": "rollback",
                                 "content": {
-                                    "files": restored,
+                                    "restored": rollback_result.restored,
+                                    "failed": rollback_result.failed,
                                     "reason": pending_loop_decision.reason,
                                 },
                             }
@@ -1345,10 +1370,11 @@ class CoderAgent:
                 ]
                 yield {"type": "warning", "content": pending_loop_decision.message}
 
-            # Commit checkpoint after successful file edits
+            # Commit checkpoint after successful file edits, then start a fresh
+            # checkpoint so subsequent edits in the same turn stay protected.
             if checkpoint_active and has_file_edits:
                 self.checkpoint_manager.commit()
-                checkpoint_active = False
+                self.checkpoint_manager.create(description="continued edits")
 
             auto_compact_event = self._auto_compact_if_needed()
             if auto_compact_event:
@@ -1443,11 +1469,15 @@ class CoderAgent:
 
             except AgentAbortedError:
                 if checkpoint_active:
-                    restored = self.checkpoint_manager.rollback()
-                    if restored:
+                    rollback_result = self.checkpoint_manager.rollback()
+                    if rollback_result:
                         yield {
                             "type": "rollback",
-                            "content": {"files": restored, "reason": "Aborted by user"},
+                            "content": {
+                                "restored": rollback_result.restored,
+                                "failed": rollback_result.failed,
+                                "reason": "Aborted by user",
+                            },
                         }
                 yield {"type": "aborted", "content": "Agent interrupted by user (ESC)"}
                 return
@@ -1455,9 +1485,16 @@ class CoderAgent:
             except Exception as e:
                 get_logger().log_error(e)
                 if checkpoint_active:
-                    restored = self.checkpoint_manager.rollback()
-                    if restored:
-                        yield {"type": "rollback", "content": {"files": restored, "reason": str(e)}}
+                    rollback_result = self.checkpoint_manager.rollback()
+                    if rollback_result:
+                        yield {
+                            "type": "rollback",
+                            "content": {
+                                "restored": rollback_result.restored,
+                                "failed": rollback_result.failed,
+                                "reason": str(e),
+                            },
+                        }
                 yield {"type": "error", "content": str(e)}
                 return
 
@@ -1650,11 +1687,15 @@ class CoderAgent:
                         yield {"type": "error", "content": result}
                         all_results.append(f"[{name}]: {result}")
                         if checkpoint_active:
-                            restored = self.checkpoint_manager.rollback()
-                            if restored:
+                            rollback_result = self.checkpoint_manager.rollback()
+                            if rollback_result:
                                 yield {
                                     "type": "rollback",
-                                    "content": {"files": restored, "reason": str(e)},
+                                    "content": {
+                                        "restored": rollback_result.restored,
+                                        "failed": rollback_result.failed,
+                                        "reason": str(e),
+                                    },
                                 }
                             checkpoint_active = False
 

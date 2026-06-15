@@ -24,6 +24,22 @@ class Checkpoint:
     created_files: list = field(default_factory=list)  # list of paths created in this checkpoint
 
 
+@dataclass
+class RollbackResult:
+    """Outcome of a checkpoint rollback or undo.
+
+    Tracks both successfully restored paths and paths that could not be
+    restored (e.g. backup copy failed). Truthy when anything was attempted,
+    so existing ``if restored:`` call sites keep working.
+    """
+
+    restored: list[str] = field(default_factory=list)
+    failed: list[str] = field(default_factory=list)
+
+    def __bool__(self) -> bool:
+        return bool(self.restored or self.failed)
+
+
 class CheckpointManager:
     """Manages checkpoints for safe file editing with rollback capability.
 
@@ -140,21 +156,21 @@ class CheckpointManager:
         self.current = None
         return True
 
-    def rollback(self) -> list[str]:
+    def rollback(self) -> RollbackResult:
         """Rollback current uncommitted checkpoint.
 
         Restores all backed up files to their original state.
 
         Returns:
-            List of restored file paths
+            RollbackResult with restored and failed file paths
         """
         if not self.current:
-            return []
+            return RollbackResult()
 
-        restored = self._restore_files(self.current)
+        restored, failed = self._restore_files(self.current)
         self._delete_checkpoint(self.current.id)
         self.current = None
-        return restored
+        return RollbackResult(restored=restored, failed=failed)
 
     def list_checkpoints(self) -> list[Checkpoint]:
         """List all saved checkpoints, newest first.
@@ -174,7 +190,7 @@ class CheckpointManager:
 
         return sorted(checkpoints, key=lambda c: c.timestamp, reverse=True)
 
-    def undo_by_id(self, checkpoint_id: str) -> list[str]:
+    def undo_by_id(self, checkpoint_id: str) -> RollbackResult:
         """Undo to a specific checkpoint.
 
         Restores files from the specified checkpoint and removes
@@ -184,60 +200,67 @@ class CheckpointManager:
             checkpoint_id: ID of the checkpoint to restore
 
         Returns:
-            List of restored file paths
+            RollbackResult with restored and failed file paths
         """
         meta_path = self.checkpoint_dir / checkpoint_id / "metadata.json"
         if not meta_path.exists():
-            return []
+            return RollbackResult()
 
         try:
             with open(meta_path, encoding="utf-8") as f:
                 checkpoint = Checkpoint(**json.load(f))
         except (json.JSONDecodeError, TypeError, KeyError):
-            return []
+            return RollbackResult()
 
-        restored = self._restore_files(checkpoint)
+        restored, failed = self._restore_files(checkpoint)
 
         # Delete this checkpoint and all newer ones
         for cp in self.list_checkpoints():
             if cp.timestamp >= checkpoint.timestamp:
                 self._delete_checkpoint(cp.id)
 
-        return restored
+        return RollbackResult(restored=restored, failed=failed)
 
-    def undo_last(self) -> list[str]:
+    def undo_last(self) -> RollbackResult:
         """Undo the most recent checkpoint.
 
         Returns:
-            List of restored file paths
+            RollbackResult with restored and failed file paths
         """
         checkpoints = self.list_checkpoints()
         if not checkpoints:
-            return []
+            return RollbackResult()
         return self.undo_by_id(checkpoints[0].id)
 
-    def _restore_files(self, checkpoint: Checkpoint) -> list[str]:
+    def _restore_files(self, checkpoint: Checkpoint) -> tuple[list[str], list[str]]:
         """Restore files from a checkpoint.
 
         Args:
             checkpoint: Checkpoint to restore from
 
         Returns:
-            List of successfully restored file paths
+            Tuple of (restored paths, failed paths). Failed paths are logged
+            via the debug logger so a partial rollback is never silent.
         """
-        restored = []
+        restored: list[str] = []
+        failed: list[str] = []
 
         # Restore modified files
         for original, backup in checkpoint.files.items():
             backup_path = Path(backup)
-            if backup_path.exists():
-                try:
-                    # Ensure parent directory exists (in case it was deleted)
-                    Path(original).parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(backup_path, original)
-                    restored.append(original)
-                except Exception:
-                    continue
+            if not backup_path.exists():
+                failed.append(original)
+                continue
+            try:
+                # Ensure parent directory exists (in case it was deleted)
+                Path(original).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(backup_path, original)
+                restored.append(original)
+            except Exception as exc:
+                failed.append(original)
+                from .logging import get_logger
+
+                get_logger().log_error(exc)
 
         # Delete created files
         for created_path in checkpoint.created_files:
@@ -246,10 +269,13 @@ class CheckpointManager:
                 if p.exists():
                     p.unlink()
                     restored.append(f"{created_path} (deleted)")
-            except Exception:
-                continue
+            except Exception as exc:
+                failed.append(created_path)
+                from .logging import get_logger
 
-        return restored
+                get_logger().log_error(exc)
+
+        return restored, failed
 
     def _save_metadata(self, checkpoint: Checkpoint) -> None:
         """Save checkpoint metadata to disk."""
