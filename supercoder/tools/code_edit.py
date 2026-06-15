@@ -475,7 +475,7 @@ class CodeEditTool(BaseTool):
         if not search:
             return None, "Error: search string is required"
 
-        content_before = path.read_text()
+        content_before = path.read_text(encoding="utf-8")
         match = self._find_best_match(content_before, search)
 
         if not match["found"]:
@@ -521,7 +521,7 @@ class CodeEditTool(BaseTool):
         if not after:
             return None, "Error: 'after' string is required"
 
-        content_before = path.read_text()
+        content_before = path.read_text(encoding="utf-8")
         had_trailing_newline = content_before.endswith("\n")
         lines = content_before.splitlines()
 
@@ -576,7 +576,7 @@ class CodeEditTool(BaseTool):
         if not before:
             return None, "Error: 'before' string is required"
 
-        content_before = path.read_text()
+        content_before = path.read_text(encoding="utf-8")
         had_trailing_newline = content_before.endswith("\n")
         lines = content_before.splitlines()
 
@@ -628,7 +628,7 @@ class CodeEditTool(BaseTool):
         self, path: Path, start: int, end: int, content: str
     ) -> tuple[PreparedEdit | None, str]:
         """Prepare a replace-lines edit without writing it."""
-        content_before = path.read_text()
+        content_before = path.read_text(encoding="utf-8")
         had_trailing_newline = content_before.endswith("\n")
         lines = content_before.splitlines()
         total = len(lines)
@@ -654,7 +654,7 @@ class CodeEditTool(BaseTool):
 
     def _prepare_append(self, path: Path, content: str) -> tuple[PreparedEdit | None, str]:
         """Prepare an append edit without writing it."""
-        content_before = path.read_text()
+        content_before = path.read_text(encoding="utf-8")
         if not content_before.endswith("\n"):
             content_before_normalized = content_before + "\n"
         else:

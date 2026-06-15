@@ -274,14 +274,9 @@ class OpenAIClient(BaseLLM):
                     total_tokens=chunk.usage.total_tokens or 0,
                 )
 
-        except AgentAbortedError:
-            raise
-        except Exception:
-            raise
         finally:
-            if truncated:
-                with contextlib.suppress(Exception):
-                    stream.close()
+            with contextlib.suppress(Exception):
+                stream.close()
 
         # Detect truncated tool calls (provider says 'stop' but JSON incomplete)
         if not truncated and tc_parser.has_incomplete_tool_calls():

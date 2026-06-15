@@ -12,23 +12,6 @@ from queue import Empty, Queue
 
 from .base import BaseTool, ToolDefinition
 
-# Dangerous command patterns
-DANGEROUS_PATTERNS = [
-    "rm -rf /",
-    "rm -rf ~",
-    "rm -rf *",
-    "> /dev/",
-    "sudo ",
-    "mkfs",
-    "dd if=",
-    ":(){:|:&};:",  # fork bomb
-    "chmod -R 777 /",
-    "curl | sh",
-    "curl | bash",
-    "wget | sh",
-    "wget | bash",
-]
-
 # Commands that need confirmation (but are allowed)
 WARN_PATTERNS = [
     "rm ",
@@ -129,15 +112,7 @@ class CommandExecutionTool(BaseTool):
             yield {"type": "error", "content": "Error: command is required"}
             return
 
-        # Safety check for dangerous commands
         command_lower = command.lower()
-        for pattern in DANGEROUS_PATTERNS:
-            if pattern in command_lower:
-                yield {
-                    "type": "error",
-                    "content": f"⛔ Blocked dangerous command: {command}\nThis pattern is not allowed: {pattern}",
-                }
-                return
 
         # Warning for potentially risky commands
         warnings = []

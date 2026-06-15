@@ -100,6 +100,8 @@ def ensure_config_dir() -> Path:
     """Create config directory if it doesn't exist."""
     if not CONFIG_DIR.exists():
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    # Restrict to owner-only (config may hold API keys in plaintext).
+    os.chmod(CONFIG_DIR, 0o700)
     return CONFIG_DIR
 
 

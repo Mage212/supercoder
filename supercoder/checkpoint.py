@@ -8,6 +8,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from .utils.atomic_writer import AtomicFileWriter
+
 MAX_CHECKPOINTS = 10  # Maximum number of checkpoints to retain
 
 
@@ -252,8 +254,10 @@ class CheckpointManager:
     def _save_metadata(self, checkpoint: Checkpoint) -> None:
         """Save checkpoint metadata to disk."""
         meta_path = self.checkpoint_dir / checkpoint.id / "metadata.json"
-        with open(meta_path, "w", encoding="utf-8") as f:
-            json.dump(asdict(checkpoint), f, indent=2, ensure_ascii=False)
+        AtomicFileWriter.write(
+            meta_path,
+            json.dumps(asdict(checkpoint), indent=2, ensure_ascii=False),
+        )
 
     def _delete_checkpoint(self, checkpoint_id: str) -> None:
         """Delete a checkpoint directory."""

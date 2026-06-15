@@ -1,5 +1,6 @@
 """Interactive first-run setup wizard for configuring the LLM provider."""
 
+import os
 from pathlib import Path
 
 from rich import box
@@ -256,6 +257,8 @@ def _write_config(
     from .utils.atomic_writer import AtomicFileWriter
 
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    # Restrict to owner-only (config may hold API keys in plaintext).
+    os.chmod(CONFIG_DIR, 0o700)
 
     # Load existing config data (if any)
     config_data: dict = {}
