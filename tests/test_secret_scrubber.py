@@ -24,6 +24,12 @@ class TestScrubPatterns:
         scrubbed = scrub_secrets("AKIAIOSFODNN7EXAMPLE")
         assert "AKIAIOSFODNN7EXAMPLE" not in scrubbed
 
+    def test_masks_aws_secret_access_key(self):
+        secret = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        scrubbed = scrub_secrets(f'aws_secret_access_key = "{secret}"')
+        assert secret not in scrubbed
+        assert MASK in scrubbed
+
     def test_masks_pem_block(self):
         pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----"
         scrubbed = scrub_secrets(f"cert:\n{pem}\ndone")

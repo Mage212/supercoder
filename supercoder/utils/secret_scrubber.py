@@ -27,6 +27,11 @@ _PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"gho_[A-Za-z0-9]{36}"),  # GitHub OAuth
     re.compile(r"github_pat_[A-Za-z0-9_]{82}"),  # GitHub fine-grained
     re.compile(r"AKIA[0-9A-Z]{16}"),  # AWS access key id
+    # AWS secret access key (40 chars, base64 incl. /+=) — anchored on key name
+    re.compile(
+        r"(?i)(?:aws_secret_access_key|secret_access_key)\s*[:=]\s*"
+        r"[\"']?[A-Za-z0-9/+=]{20,}[\"']?"
+    ),
     re.compile(r"xoxb-[0-9]+-[0-9]+-[A-Za-z0-9]+"),  # Slack bot token
     # PEM private key block (multi-line, non-greedy)
     re.compile(r"-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----"),
