@@ -23,7 +23,7 @@ class ContextConfig:
     auto_compact_threshold: float = 0.75  # Trigger auto-compact at this total-context utilization
     protected_recent_steps: int = 6  # Exact recent messages to keep after compact
     min_messages_to_keep: int = 4  # Always keep at least this many messages
-    compression_strategy: Literal["sliding", "summarize", "smart"] = "sliding"
+    compression_strategy: Literal["sliding", "smart"] = "sliding"
 
 
 @dataclass
@@ -280,8 +280,6 @@ class ContextWindowManager:
         self._last_response_total_tokens = None
         if self.config.compression_strategy == "sliding":
             self._sliding_window_compress()
-        elif self.config.compression_strategy == "summarize":
-            self._summarize_compress()
         else:
             self._smart_compress()
 
@@ -343,79 +341,133 @@ class ContextWindowManager:
                 if len(self.history) > self.config.min_messages_to_keep:
                     self.history.pop(idx)
 
-    def _summarize_compress(self) -> None:
-        """Summarize old messages instead of removing them.
-
-        Note: Full implementation would use LLM to summarize.
-        For now, falls back to sliding window.
-        """
-        # This would require an LLM call to summarize
-        # For MVP, fall back to sliding window
-        self._sliding_window_compress()
-
     def _smart_compress(self) -> None:
         """Smart compression that keeps important messages.
 
-        Prioritizes:
-        - Recent messages
-        - Messages with tool results
-        - Messages with code
+        Prioritizes recent messages, tool results, and code. Tool-call parity
+        is a hard invariant (D-036): an assistant(tool_calls) is always kept
+        together with its tool(result) messages, and vice versa. The same
+        pairing logic as get_protected_recent_messages / _sliding_window_compress
+        is reused via _build_tool_call_index.
         """
         if len(self.history) <= self.config.min_messages_to_keep:
             return
 
-        # Score messages by importance
-        scored = []
+        # Always protect the most recent min_messages_to_keep messages. The
+        # rest are candidates for dropping.
+        history_len = len(self.history)
+        protected = {
+            history_len - 1 - i for i in range(min(self.config.min_messages_to_keep, history_len))
+        }
+
+        # Score messages by importance. Scoring is display_type-driven (D-017)
+        # so it works in native mode; the streaming-only <@TOOL_RESULT> marker
+        # is intentionally not matched.
+        scores: dict[int, float] = {}
         for i, msg in enumerate(self.history):
-            score = 0
+            score = i / history_len * 50.0  # recency
 
-            # Recent messages are more important
-            recency_score = i / len(self.history) * 50
-            score += recency_score
-
-            # Tool results are important
-            if "<@TOOL_RESULT>" in msg.content:
+            if msg.display_type == "tool_result" or msg.role == "tool":
                 score += 30
-
-            # Code blocks are important
-            if "```" in msg.content or "def " in msg.content or "class " in msg.content:
-                score += 20
-
-            # Errors are important
-            if "error" in msg.content.lower() or "Error" in msg.content:
+            if msg.display_type == "error":
                 score += 25
+            if msg.role == "tool" and "```" in msg.content:
+                score += 20
+            if msg.role == "assistant" and ("def " in msg.content or "class " in msg.content):
+                score += 10
+            scores[i] = score
 
-            scored.append((score, i, msg))
+        # Seed kept set with protected messages.
+        kept_indices: set[int] = set(protected)
 
-        # Sort by score (keep highest)
-        scored.sort(key=lambda x: x[0], reverse=True)
-
-        # Keep top messages that fit
+        # Add non-protected messages by descending score until the target is
+        # reached. This is the "prefer important messages" selection.
         target = self.config.max_tokens * 0.5
-        kept_indices = set()
         current_tokens = self._system_tokens
-
-        for _score, idx, msg in scored:
+        for i in sorted(
+            (idx for idx in range(history_len) if idx not in protected),
+            key=lambda idx: scores[idx],
+            reverse=True,
+        ):
+            msg = self.history[i]
             msg_tokens = self.counter.count(msg.content)
             if current_tokens + msg_tokens <= target:
-                kept_indices.add(idx)
+                kept_indices.add(i)
                 current_tokens += msg_tokens
 
-        # Always keep the most recent min_messages_to_keep messages
-        for i in range(min(self.config.min_messages_to_keep, len(self.history))):
-            kept_indices.add(len(self.history) - 1 - i)
+        # Close tool-call pairs iteratively: for every kept tool(result) pull
+        # in its assistant(tool_calls) owner, and for every kept assistant
+        # (tool_calls) pull in all its results. Mirrors get_protected_recent
+        # _messages (lines 204-242).
+        call_owner, call_results = self._build_tool_call_index(self.history)
+        changed = True
+        while changed:
+            changed = False
+            for idx in list(kept_indices):
+                msg = self.history[idx]
+                if msg.role == "tool" and msg.tool_call_id:
+                    owner_idx = call_owner.get(msg.tool_call_id)
+                    if owner_idx is not None and owner_idx not in kept_indices:
+                        kept_indices.add(owner_idx)
+                        changed = True
+                if msg.role == "assistant" and msg.tool_calls:
+                    for raw_call in msg.tool_calls:
+                        call_id = raw_call.get("id")
+                        if isinstance(call_id, str):
+                            for result_idx in call_results.get(call_id, []):
+                                if result_idx not in kept_indices:
+                                    kept_indices.add(result_idx)
+                                    changed = True
 
-        # Preserve message pairs so the conversation stays coherent:
-        # - if we keep an assistant message, also keep the preceding user message
-        # - if we keep a user message, also keep the following assistant message
-        history_len = len(self.history)
-        paired: set[int] = set()
-        for idx in kept_indices:
-            if idx > 0 and self.history[idx].role == "assistant":
-                paired.add(idx - 1)
-            if idx + 1 < history_len and self.history[idx].role == "user":
-                paired.add(idx + 1)
-        kept_indices.update(paired)
+        # Budget-aware trimming: if we are still over max_tokens, drop whole
+        # tool-call clusters (never single members) by ascending score, but
+        # only clusters whose members are all non-protected. Parity is
+        # preserved at the cost of the budget (D-036).
+        def cluster_of(idx: int) -> set[int]:
+            msg = self.history[idx]
+            members = {idx}
+            if msg.role == "tool" and msg.tool_call_id:
+                owner_idx = call_owner.get(msg.tool_call_id)
+                if owner_idx is not None:
+                    members.add(owner_idx)
+                    for raw_call in self.history[owner_idx].tool_calls or []:
+                        cid = raw_call.get("id")
+                        if isinstance(cid, str):
+                            members.update(call_results.get(cid, []))
+            elif msg.role == "assistant" and msg.tool_calls:
+                for raw_call in msg.tool_calls:
+                    cid = raw_call.get("id")
+                    if isinstance(cid, str):
+                        members.update(call_results.get(cid, []))
+            return members
+
+        def current_total() -> int:
+            return self._system_tokens + sum(
+                self.counter.count(self.history[i].content) for i in kept_indices
+            )
+
+        # Build per-cluster grouping of droppable (all non-protected) kept
+        # clusters, sorted by lowest member score (drop least important first).
+        seen: set[int] = set()
+        droppable_clusters: list[tuple[float, set[int]]] = []
+        for idx in sorted(kept_indices):
+            if idx in seen or idx in protected:
+                continue
+            members = cluster_of(idx)
+            if any(m in protected for m in members):
+                # Crossing into protected: cannot drop without breaking parity
+                # of a protected message. Skip whole cluster.
+                seen.update(members)
+                continue
+            seen.update(members)
+            cluster_score = min(scores[m] for m in members)
+            droppable_clusters.append((cluster_score, members))
+
+        droppable_clusters.sort(key=lambda c: c[0])
+
+        while current_total() > self.config.max_tokens and droppable_clusters:
+            _score, members = droppable_clusters.pop(0)
+            kept_indices -= members
 
         # Rebuild history in order
         self.history = [msg for i, msg in enumerate(self.history) if i in kept_indices]
