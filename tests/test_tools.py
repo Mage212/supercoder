@@ -529,3 +529,33 @@ class TestGlobTool:
 
         assert "README.md" in result
         assert "credentials.json" not in result
+
+
+class TestGlobPatternSafety:
+    """L2 (code-review-2026-06-23): glob must return a clear error for absolute
+    or '..'-containing patterns instead of crashing with an unhandled
+    NotImplementedError from Path.rglob. (code_search via rg does not crash —
+    it returns an empty result — so this guard is glob-only.)"""
+
+    def test_glob_absolute_pattern_returns_error_not_crash(self, tmp_path):
+        tool = GlobTool(allowed_root=tmp_path)
+        result = tool.execute('{"pattern": "/etc/hosts"}')
+        assert result.startswith("Error")
+        assert "absolute" in result.lower() or "relative" in result.lower()
+
+    def test_glob_dotdot_pattern_returns_error_not_crash(self, tmp_path):
+        tool = GlobTool(allowed_root=tmp_path)
+        result = tool.execute('{"pattern": "../secret.txt"}')
+        assert result.startswith("Error")
+
+
+class TestGlobNormalUseStillWorks:
+    """Guard: the safety check must not break valid relative globs."""
+
+    def test_glob_relative_pattern_finds_file(self, tmp_path):
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "sub" / "mod.py").write_text("y = 2\n")
+        tool = GlobTool(allowed_root=tmp_path)
+        result = tool.execute('{"pattern": "**/*.py"}')
+        assert "mod.py" in result
+        assert result.startswith("Glob:")

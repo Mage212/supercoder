@@ -83,6 +83,17 @@ class GlobTool(BaseTool):
         if not root.is_dir():
             return f"Error: Path '{search_path}' is not a directory"
 
+        if pattern.startswith("/") or pattern.startswith("\\") or Path(pattern).is_absolute():
+            return (
+                "Error: glob pattern must be relative to the search path "
+                f"(got absolute pattern '{pattern}')."
+            )
+        if ".." in Path(pattern).parts:
+            return (
+                f"Error: glob pattern '{pattern}' must not escape the search path "
+                "via '..' segments."
+            )
+
         matches: list[Path] = []
         truncated = False
 
@@ -98,7 +109,7 @@ class GlobTool(BaseTool):
                 if len(matches) >= max_results:
                     truncated = True
                     break
-        except ValueError as e:
+        except (ValueError, NotImplementedError) as e:
             return f"Error: Invalid glob pattern '{pattern}': {e}"
         except OSError as e:
             return f"Error running glob: {e}"
