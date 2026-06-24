@@ -1948,3 +1948,48 @@ class TestNativeAbortBetweenTools:
         )
         # The second LLM call must not have happened — abort stopped the turn.
         assert call_count["n"] == 1, "abort should have stopped the turn before the 2nd LLM call"
+
+
+class TestSessionSavedOnLLMError:
+    """L3 (code-review-2026-06-23): when chat_with_tools_interruptible raises a
+    non-abort exception, the session file must still be persisted so /continue
+    does not lose the user message that triggered the failure."""
+
+    def test_session_persisted_after_llm_error(self, tmp_path):
+        from unittest.mock import MagicMock
+
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+        from supercoder.tools.file_read import FileReadTool
+
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+
+        def boom(messages, tools, abort_controller, **kw):
+            raise RuntimeError("LLM down")
+
+        mock_llm.chat_with_tools_interruptible.side_effect = boom
+
+        agent = CoderAgent(
+            llm=mock_llm,
+            tools=[FileReadTool()],
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+        )
+        agent.start_new_session()
+
+        events = list(agent.chat_turn("important question"))
+        assert any(e.get("type") == "error" for e in events)
+
+        # The session file on disk must contain the user message.
+        sessions = agent.session_manager.list_sessions()
+        assert sessions, "session file should exist on disk"
+        loaded = agent.session_manager.load_session(sessions[0]["id"])
+        assert loaded is not None
+        assert any(
+            m.role == "user" and "important question" in m.content for m in loaded.messages
+        ), "user message that triggered the error was not persisted"

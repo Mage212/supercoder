@@ -753,6 +753,24 @@ class CoderAgent:
                     self.abort_controller,
                     on_chunk=self._chunk_callback,
                 )
+            except AgentAbortedError:
+                # Abort raised during LLM streaming. Do NOT save the session:
+                # rollback just reverted in-memory edits, and the session file
+                # should reflect the pre-turn state. Re-raise so the loop-top
+                # handler (or REPL) surfaces it as a clean 'aborted' event.
+                if checkpoint_active:
+                    rollback_result = self.checkpoint_manager.rollback()
+                    if rollback_result:
+                        yield {
+                            "type": "rollback",
+                            "content": {
+                                "restored": rollback_result.restored,
+                                "failed": rollback_result.failed,
+                                "reason": "Aborted by user",
+                            },
+                        }
+                yield {"type": "aborted", "content": "Agent interrupted by user (ESC)"}
+                return
             except Exception as e:
                 if checkpoint_active:
                     rollback_result = self.checkpoint_manager.rollback()
@@ -765,6 +783,9 @@ class CoderAgent:
                                 "reason": str(e),
                             },
                         }
+                # Persist the in-memory context (user message + any attachment)
+                # so /continue does not lose the turn that triggered the error.
+                self._save_current_session()
                 yield {"type": "error", "content": str(e)}
                 return
 
