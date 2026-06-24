@@ -37,10 +37,17 @@ _PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----"),
     # Bearer authorization header
     re.compile(r"Bearer\s+[A-Za-z0-9._\-]+"),
-    # Generic key=value assignment (api_key, secret, token, password, ...)
+    # Generic key=value assignment (api_key, secret, token, password, ...).
+    # Requires mixed letters+digits AND length >= 10 to look like a real
+    # generated key. This avoids masking ordinary source code (function-call
+    # RHS like get_token_from_request, all-letter placeholders, short literals
+    # such as "abcdef12"/"changeme") per the module docstring: a masked
+    # commit/PR description is worse than a missed random token. Format-specific
+    # regexes above handle exact shapes (OpenAI, GitHub, AWS, PEM, Bearer).
     re.compile(
-        r"(?i)(?:api_key|apikey|secret|token|password|passwd|pwd)\s*[:=]\s*"
-        r"[\"']?[A-Za-z0-9_\-]{8,}[\"']?"
+        r"(?i)(?:api_key|apikey|secret|token|password|passwd|pwd)\s*[:=]\s*[\"']?"
+        r"(?=[A-Za-z0-9_\-]{10,})(?=.*\d)(?=.*[A-Za-z])[A-Za-z0-9_\-]{10,}"
+        r"[\"']?"
     ),
 ]
 

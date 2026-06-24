@@ -91,3 +91,34 @@ class TestScrubRecursion:
     def test_empty_and_none(self):
         assert scrub_secrets("") == ""
         assert scrub_secrets(None) is None
+
+
+class TestGenericSecretRegexFalsePositives:
+    """M4 (code-review-2026-06-23): the generic key=value regex must not mask
+    ordinary source-code identifiers, short placeholders, or function-call RHS.
+    False positives make tool-result logs unreadable; the module docstring states
+    a masked description is worse than a missed random token."""
+
+    def test_does_not_mask_function_call_rhs(self):
+        assert (
+            scrub_secrets("token = get_token_from_request()") == "token = get_token_from_request()"
+        )
+        assert scrub_secrets("secret = generate_secret()") == "secret = generate_secret()"
+
+    def test_does_not_mask_placeholder_literal(self):
+        assert scrub_secrets('token = "placeholder"') == 'token = "placeholder"'
+        assert scrub_secrets('password = "changeme"') == 'password = "changeme"'
+
+    def test_does_not_mask_short_alnum_literal(self):
+        # Short, no digit+letter mix that signals a real secret.
+        assert scrub_secrets('api_key = "abcdef12"') == 'api_key = "abcdef12"'
+
+    def test_still_masks_realistic_mixed_secret(self):
+        # Mixed letters+digits, >= 12 chars — looks like a real generated key.
+        assert MASK in scrub_secrets('api_key = "akLive9xK7mQ2wZ4"')
+        assert MASK in scrub_secrets('token = "sk_live_42AbCdEf9999"')
+
+    def test_still_masks_long_high_entropy(self):
+        # Long enough (>=20) that it is secret-like regardless of mix.
+        long_val = "abcdefghijklmnopqrstuvwxyz1234"
+        assert MASK in scrub_secrets(f'secret = "{long_val}"')
