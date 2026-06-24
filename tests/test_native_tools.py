@@ -1893,3 +1893,58 @@ class TestSessionSerialization:
         assert session.messages[0].tool_call_id is None
         assert session.messages[0].tool_calls is None
         assert session.messages[0].name is None
+
+
+class TestNativeAbortBetweenTools:
+    """M5 (code-review-2026-06-23): double-ESC must be able to abort a native
+    chat_turn between tool iterations, not only during LLM streaming. A long-
+    running command-exec (timeout up to 120s) would otherwise block the abort."""
+
+    def test_abort_surfaces_as_aborted_event(self, tmp_path):
+        from unittest.mock import MagicMock
+
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+        from supercoder.llm.base import CompletionResult, NativeToolCall
+        from supercoder.tools.file_read import FileReadTool
+
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+        # First call returns a tool call so the loop iterates; the second call
+        # (which must NOT be reached if abort works) returns plain text.
+        call_count = {"n": 0}
+
+        def fake_chat(messages, tools, abort_controller, **kw):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                # Arm abort during the first LLM call (simulating a double-ESC
+                # that arrives while the first tool result is processed). The
+                # check at the top of the next loop iteration must fire.
+                abort_controller.abort()
+                return CompletionResult(
+                    content="",
+                    tool_calls=[NativeToolCall(id="c1", name="file-read", arguments={})],
+                    usage=None,
+                )
+            return CompletionResult(content="done", tool_calls=[], usage=None)
+
+        mock_llm.chat_with_tools_interruptible.side_effect = fake_chat
+
+        agent = CoderAgent(
+            llm=mock_llm,
+            tools=[FileReadTool()],
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+        )
+
+        events = list(agent.chat_turn("hi"))
+        types = [e.get("type") for e in events]
+        assert "aborted" in types, (
+            f"expected an 'aborted' event between tool iterations, got {types}"
+        )
+        # The second LLM call must not have happened — abort stopped the turn.
+        assert call_count["n"] == 1, "abort should have stopped the turn before the 2nd LLM call"

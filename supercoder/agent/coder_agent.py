@@ -709,6 +709,27 @@ class CoderAgent:
         loop_guard = AgentLoopGuard.from_config(self.loop_detection)
 
         while True:
+            # Surface a pending double-ESC abort between tool iterations, not
+            # only during LLM streaming. Otherwise a long-running command-exec
+            # (timeout up to 120s) would block interruption. Mirrors the
+            # streaming path: rollback + 'aborted' event (chat_stream L1470).
+            try:
+                self.abort_controller.check()
+            except AgentAbortedError:
+                if checkpoint_active:
+                    rollback_result = self.checkpoint_manager.rollback()
+                    if rollback_result:
+                        yield {
+                            "type": "rollback",
+                            "content": {
+                                "restored": rollback_result.restored,
+                                "failed": rollback_result.failed,
+                                "reason": "Aborted by user",
+                            },
+                        }
+                yield {"type": "aborted", "content": "Agent interrupted by user (ESC)"}
+                return
+
             if tool_iterations >= MAX_TOOL_ITERATIONS:
                 if checkpoint_active:
                     self.checkpoint_manager.rollback()
