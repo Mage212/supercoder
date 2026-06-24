@@ -341,6 +341,27 @@ class ContextWindowManager:
                 if len(self.history) > self.config.min_messages_to_keep:
                     self.history.pop(idx)
 
+    def _kept_payload_tokens(self, kept_indices: set[int]) -> int:
+        """Estimate real API payload tokens for the kept messages + system + tools.
+
+        Uses TokenCounter.count_api_payload so tool_calls, tool_call_id, name
+        and tools-schema overhead are all counted (D-031). This is the same
+        shape chat_with_tools() sends, so the budget check reflects what the
+        API actually sees.
+        """
+        kept = [
+            Message(
+                self.history[i].role,
+                self.history[i].content,
+                tool_calls=self.history[i].tool_calls,
+                tool_call_id=self.history[i].tool_call_id,
+                name=self.history[i].name,
+            )
+            for i in sorted(kept_indices)
+        ]
+        system = [Message("system", self._system_prompt)] if self._system_prompt else []
+        return self.counter.count_api_payload([*system, *kept], self._tools_schema)
+
     def _smart_compress(self) -> None:
         """Smart compression that keeps important messages.
 
@@ -381,19 +402,17 @@ class ContextWindowManager:
         kept_indices: set[int] = set(protected)
 
         # Add non-protected messages by descending score until the target is
-        # reached. This is the "prefer important messages" selection.
+        # reached. This is the "prefer important messages" selection. Budget is
+        # measured via count_api_payload (D-031) so tool_calls overhead counts.
         target = self.config.max_tokens * 0.5
-        current_tokens = self._system_tokens
         for i in sorted(
             (idx for idx in range(history_len) if idx not in protected),
             key=lambda idx: scores[idx],
             reverse=True,
         ):
-            msg = self.history[i]
-            msg_tokens = self.counter.count(msg.content)
-            if current_tokens + msg_tokens <= target:
+            trial = kept_indices | {i}
+            if self._kept_payload_tokens(trial) <= target:
                 kept_indices.add(i)
-                current_tokens += msg_tokens
 
         # Close tool-call pairs iteratively: for every kept tool(result) pull
         # in its assistant(tool_calls) owner, and for every kept assistant
@@ -442,9 +461,9 @@ class ContextWindowManager:
             return members
 
         def current_total() -> int:
-            return self._system_tokens + sum(
-                self.counter.count(self.history[i].content) for i in kept_indices
-            )
+            # Count the real API payload (system + kept messages + tools schema)
+            # so tool_calls/tool_call_id/name overhead is included (D-031).
+            return self._kept_payload_tokens(kept_indices)
 
         # Build per-cluster grouping of droppable (all non-protected) kept
         # clusters, sorted by lowest member score (drop least important first).

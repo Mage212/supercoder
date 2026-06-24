@@ -270,7 +270,7 @@ class TestSmartCompressionScoring:
             Message("user", "q recent"),
             Message("assistant", "final answer"),
         ]
-        cm = _make_cm(history, max_tokens=40, min_keep=2)
+        cm = _make_cm(history, max_tokens=140, min_keep=2)
         cm._smart_compress()
         # The tool result (or its whole cluster) must have survived — it is
         # the single highest-value non-recent message in native mode.
@@ -292,7 +292,7 @@ class TestSmartCompressionScoring:
             Message("user", "q recent"),
             Message("assistant", "final answer"),
         ]
-        cm = _make_cm(history, max_tokens=40, min_keep=2)
+        cm = _make_cm(history, max_tokens=120, min_keep=2)
         cm._smart_compress()
         has_error = any(m.display_type == "error" for m in cm.history)
         assert has_error, "display_type='error' message was dropped despite being high-value"
@@ -312,7 +312,7 @@ class TestSmartCompressionScoring:
             Message("user", "q recent"),
             Message("assistant", "final answer"),
         ]
-        cm = _make_cm(history, max_tokens=35, min_keep=2)
+        cm = _make_cm(history, max_tokens=140, min_keep=2)
         cm._smart_compress()
         # The substring-based reasoning message should not displace the tool
         # result. At minimum, if kept, it must not be the sole survivor over
@@ -321,4 +321,66 @@ class TestSmartCompressionScoring:
         assert has_tool_result, (
             "tool_result dropped in favor of an 'error'-word reasoning message "
             "(old +25 'error' heuristic regression)"
+        )
+
+
+# ── C1 (code-review-2026-06-23): budget must count the real API payload ──
+
+
+class TestSmartCompressionBudgetWithToolCalls:
+    """_smart_compress underestimates the budget when messages carry
+    tool_calls/tool_call_id overhead, because the old implementation counted
+    only msg.content. After compression the history MUST be at or below
+    max_tokens (measured via count_api_payload, the real API shape — D-031),
+    unless the only remaining messages are protected parity pairs (D-036)."""
+
+    def test_drops_tool_call_clusters_to_fit_real_payload(self):
+        tc = TokenCounter(model="some-unknown-local")
+        # Each assistant has a FAT tool_calls JSON but tiny content.
+        # Content-only counting massively underestimates the real payload,
+        # so a naive compressor thinks everything already fits.
+        history = [Message("user", "q0")]
+        for i in range(20):
+            history.append(
+                Message(
+                    role="assistant",
+                    content=f"t{i}",
+                    tool_calls=[
+                        {
+                            "id": f"c{i:03d}",
+                            "type": "function",
+                            "function": {
+                                "name": "code-edit",
+                                "arguments": '{"content":"' + ("A" * 300) + '"}',
+                            },
+                        }
+                    ],
+                    display_type="response",
+                )
+            )
+            history.append(
+                Message(
+                    role="tool",
+                    content="B" * 50,
+                    tool_call_id=f"c{i:03d}",
+                    name="code-edit",
+                    display_type="tool_result",
+                )
+            )
+        cm = _make_cm(history, max_tokens=400, min_keep=2, protected_steps=2)
+        # Tools schema must be set BEFORE compressing: count_api_payload counts it.
+        tools_schema = [
+            {
+                "type": "function",
+                "function": {"name": "x", "description": "d" * 200, "parameters": {}},
+            }
+        ]
+        cm.set_tools_schema(tools_schema)
+
+        cm._smart_compress()
+
+        real_tokens = tc.count_api_payload(cm.get_messages_for_api(), tools_schema)
+        assert real_tokens <= cm.config.max_tokens, (
+            f"history {real_tokens} tokens still exceeds max_tokens "
+            f"{cm.config.max_tokens} after smart_compress (parity-safe trimming expected)"
         )
