@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v0.4.2
+
+- **TUI Phase 2 — Personality**: Animated ASCII startup banner (hand-crafted logo with a ~1.5s brand color-cycling wave; `--no-banner` skips it, non-TTY/dumb terminals get a static panel). Wave-gradient loading text: the "Generating..." line now animates per tick with a teal ramp (`BRAND_RAMP`) and degrades to a solid color on 16-color terminals. Braille spinner frames and per-phase config centralized in `supercoder/ui/spinners.py`. Easter eggs (10% chance per turn, with Halloween/December seasonal pools) replace the generic loading label for a turn.
+- **Animation Config in Theme**: `theme.BRAND_RAMP` (5-step teal palette), `GRADIENT_REFRESH_PER_SECOND` (10 FPS), `EASTER_EGG_PROBABILITY` (0.10), and `terminal_supports_truecolor()` for graceful degradation are now single-knob tuning points in `theme.py`.
+- **Accent-Bar Deferred**: The left-only accent bar on the assistant panel (opencode SplitBorder look) is deferred to the Textual migration; rich's custom Box cannot render a Panel title against a left-only border cleanly. The title-less startup banner already uses an accent-bar box.
+- **Runtime Version Sync**: Updated the package metadata and CLI/runtime `__version__` to `0.4.2`.
+
 - **Reasoning Block Visibility**: The reasoning/thinking block now renders in italic magenta instead of the previous dim style. The old dim treatment made the whole block too faint to read and easy to mistake for a muted fragment of the response; italic magenta keeps it readable while the italic slant signals "internal monologue" rather than a direct answer.
 - **Tool-Name Alias Resolution (Native Path)**: The native agent loop now applies the shared `TOOL_ALIASES` map before the unknown-tool check, matching the streaming path. Models that call `read`/`edit`/`grep`/`bash`/`ls` (names they learned from other agents' toolsets) instead of the canonical `file-read`/`code-edit`/etc. now reach the correct tool instead of producing an `Unknown tool` error. The alias map moved to `supercoder/tools/__init__.py` as the single source of truth and gained common synonyms.
 
