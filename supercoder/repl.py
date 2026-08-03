@@ -1017,7 +1017,7 @@ class SuperCoderREPL:
                     Syntax(
                         command,
                         "bash",
-                        theme="monokai",
+                        theme=theme.SYNTAX_THEME,
                         word_wrap=True,
                         background_color="default",
                     ),
@@ -1124,7 +1124,7 @@ class SuperCoderREPL:
         syntax = Syntax(
             preview_text,
             "bash",
-            theme="monokai",
+            theme=theme.SYNTAX_THEME,
             line_numbers=False,
             word_wrap=False,
             background_color="default",
@@ -1198,7 +1198,7 @@ class SuperCoderREPL:
             header.append(message, style="green")
 
         syntax = Syntax(
-            diff, "diff", theme="monokai", line_numbers=False, background_color="default"
+            diff, "diff", theme=theme.SYNTAX_THEME, line_numbers=False, background_color="default"
         )
         return Group(header, syntax)
 
@@ -1399,11 +1399,18 @@ class SuperCoderREPL:
             args_str = json.dumps(args, indent=2, ensure_ascii=False)
 
         if not getattr(self, "_show_agent_details", False):
-            self.console.print(f"[yellow]-> {self._tool_call_summary(name, args_obj)}[/]")
+            icon = theme.TOOL_ICONS.get(name, theme.TOOL_ICON_DEFAULT)
+            self.console.print(f"[yellow]{icon} {self._tool_call_summary(name, args_obj)}[/]")
             return
 
         self._print_block(
-            Syntax(args_str, "json", theme="monokai", word_wrap=True, background_color="default"),
+            Syntax(
+                args_str,
+                "json",
+                theme=theme.SYNTAX_THEME,
+                word_wrap=True,
+                background_color="default",
+            ),
             f"Tool Call: {name}",
             "yellow",
             "🔧",
@@ -1481,7 +1488,7 @@ class SuperCoderREPL:
             syntax = Syntax(
                 display,
                 "text",
-                theme="monokai",
+                theme=theme.SYNTAX_THEME,
                 line_numbers=True,
                 background_color="default",
             )
@@ -1494,7 +1501,7 @@ class SuperCoderREPL:
             syntax = Syntax(
                 display,
                 "bash",
-                theme="monokai",
+                theme=theme.SYNTAX_THEME,
                 line_numbers=False,
                 background_color="default",
             )
@@ -1540,7 +1547,11 @@ class SuperCoderREPL:
         if diff_text:
             diff_text = self._bounded_diff_text(diff_text)
             syntax = Syntax(
-                diff_text, "diff", theme="monokai", line_numbers=False, background_color="default"
+                diff_text,
+                "diff",
+                theme=theme.SYNTAX_THEME,
+                line_numbers=False,
+                background_color="default",
             )
             self._print_block(syntax, "Changes", "cyan", "📝")
 
@@ -1610,7 +1621,7 @@ class SuperCoderREPL:
         syntax = Syntax(
             text,
             "text",
-            theme="monokai",
+            theme=theme.SYNTAX_THEME,
             line_numbers=False,
             word_wrap=True,
             background_color="default",
