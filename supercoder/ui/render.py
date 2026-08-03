@@ -68,6 +68,15 @@ def render_assistant_message(
     so code blocks render without thick padding and h1 headings get a heavy
     frame (reusing the existing customization from mdstream.py).
 
+    Border: a full ``box.ROUNDED`` in the brand color. The spec (Task 2.5)
+    called for a left-only accent bar (opencode SplitBorder look) on the
+    assistant panel specifically. That is deferred to the Textual migration:
+    rich's custom ``Box`` cannot render a title against a left-only border
+    cleanly (the title sits in the blanked top edge), and an ``_ACCENT_BAR``
+    box already works for the title-less banner. A Textual widget can apply
+    ``border-left`` via CSS while keeping the title, so the accent-bar look
+    lands there without a rich compromise.
+
     Args:
         content: The assistant response text (markdown).
         model: Optional model name tag for the header.
