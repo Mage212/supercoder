@@ -28,6 +28,12 @@ console = Console()
     default=False,
     help="Enable deprecated streaming mode (default: off, uses native tool calls)",
 )
+@click.option(
+    "--no-banner",
+    is_flag=True,
+    default=False,
+    help="Skip the animated startup banner",
+)
 @click.version_option(version=__version__)
 def main(
     model: str,
@@ -37,6 +43,7 @@ def main(
     max_context: int,
     repo_map: bool,
     stream: bool,
+    no_banner: bool,
 ):
     """SuperCoder - AI Coding Assistant for the Terminal."""
 
@@ -165,7 +172,7 @@ def main(
     # Start REPL
     from .repl import SuperCoderREPL
 
-    repl = SuperCoderREPL(agent)
+    repl = SuperCoderREPL(agent, no_banner=no_banner)
     repl.run()
 
 

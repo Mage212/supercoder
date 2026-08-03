@@ -27,16 +27,17 @@ from .agent.agent_modes import MODE_CONFIGS, MODE_CYCLE, AgentMode
 from .context.references import summarize_attachment_content, summarize_context_attachment
 from .logging import get_logger
 from .permissions import PermissionAction
-from .ui import render, spinners, theme
+from .ui import banner, render, spinners, theme
 from .utils import format_relative_time
 
 
 class SuperCoderREPL:
     """Interactive Read-Eval-Print Loop for SuperCoder."""
 
-    def __init__(self, agent):
+    def __init__(self, agent, *, no_banner: bool = False):
         self.agent = agent
         self.console = Console()
+        self.no_banner = no_banner
 
         # Initialize commands BEFORE session setup (session uses commands for autocomplete)
         self.commands = {
@@ -150,21 +151,36 @@ class SuperCoderREPL:
 
     def run(self):
         """Start the REPL loop."""
-        # Beautiful startup header
-        header = Text()
-        header.append("🚀 SuperCoder CLI", style="bold green")
-        header.append(f" v{__version__}\n", style="dim")
-        header.append("Model: ", style="dim")
-        header.append(f"{self.agent.llm.model}", style="cyan bold")
-        header.append(f" • Context: {self.agent.context.config.max_tokens:,}", style="dim")
-        header.append(f" • Tools: {len(self.agent.tools)}\n", style="dim")
-        header.append("/help", style="cyan")
-        header.append(" for commands • ", style="dim")
-        header.append("ESC×2", style="yellow")  # noqa: RUF001
-        header.append(" to interrupt • ", style="dim")
-        header.append("{ }", style="cyan")
-        header.append(" for multiline", style="dim")
-        self.console.print(Panel(header, border_style="green", box=box.ROUNDED))
+        # Startup banner. The animated ASCII art runs a short brand
+        # color-cycling wave; --no-banner skips it (and non-TTY output falls
+        # back to a static panel inside animate_banner).
+        if not self.no_banner:
+            banner.animate_banner(
+                self.console,
+                version=__version__,
+                model=self.agent.llm.model,
+                context_tokens=self.agent.context.config.max_tokens,
+                tools_count=len(self.agent.tools),
+            )
+        else:
+            self.console.print(
+                banner.render_banner(
+                    version=__version__,
+                    model=self.agent.llm.model,
+                    context_tokens=self.agent.context.config.max_tokens,
+                    tools_count=len(self.agent.tools),
+                )
+            )
+
+        # One-line controls hint (kept from the old header).
+        hint = Text()
+        hint.append("/help", style="cyan")
+        hint.append(" for commands  •  ", style="dim")
+        hint.append("ESC×2", style="yellow")  # noqa: RUF001
+        hint.append(" to interrupt  •  ", style="dim")
+        hint.append("{ }", style="cyan")
+        hint.append(" for multiline", style="dim")
+        self.console.print(hint)
 
         # Start a new session on fresh start
         self.agent.start_new_session()
