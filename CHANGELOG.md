@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Reasoning Block Visibility**: The reasoning/thinking block now renders in italic magenta instead of the previous dim style. The old dim treatment made the whole block too faint to read and easy to mistake for a muted fragment of the response; italic magenta keeps it readable while the italic slant signals "internal monologue" rather than a direct answer.
+- **Tool-Name Alias Resolution (Native Path)**: The native agent loop now applies the shared `TOOL_ALIASES` map before the unknown-tool check, matching the streaming path. Models that call `read`/`edit`/`grep`/`bash`/`ls` (names they learned from other agents' toolsets) instead of the canonical `file-read`/`code-edit`/etc. now reach the correct tool instead of producing an `Unknown tool` error. The alias map moved to `supercoder/tools/__init__.py` as the single source of truth and gained common synonyms.
+
 ## v0.4.1
 
 - **TUI Redesign Phase 1 — Design System**: Introduced `supercoder/ui/` as a pure rendering layer with a central theme module (`theme.py`) holding all design tokens (brand colors, role colors, per-mode color/icon, per-tool icons, unified progress-bar config, syntax theme). The module is structured to become Textual CSS variables verbatim in a future migration.

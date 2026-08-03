@@ -19,6 +19,7 @@ from ..logging import get_logger
 from ..permissions import PermissionAction, PermissionDecision, PermissionPolicy
 from ..repomap import RepoMap
 from ..rules_loader import SupercoderRulesLoader
+from ..tools import TOOL_ALIASES
 from ..tools.base import BaseTool
 from ..tools.code_edit import CodeEditTool
 from ..tools.code_search import CodeSearchTool
@@ -1027,6 +1028,10 @@ class CoderAgent:
 
             for call_index, tc in enumerate(effective_tool_calls):
                 name = tc.name
+                # Normalize invented tool names (e.g. 'read', 'edit', 'grep') that
+                # models hallucinate instead of the canonical kebab-case names.
+                # Shared with the streaming path via tools.TOOL_ALIASES.
+                name = TOOL_ALIASES.get(name, name)
                 arguments = dict(tc.arguments)
                 loop_decision = loop_guard.observe_tool_call(name, arguments)
                 if loop_decision:
@@ -1559,20 +1564,8 @@ class CoderAgent:
                     name = str(tool_call_data.get("name") or "")
                     args = tool_call_data.get("arguments", "")
 
-                    # Normalize invented tool names that small models hallucinate
-                    TOOL_ALIASES: dict[str, str] = {
-                        "file-create": "code-edit",  # qwen3.5 invents this
-                        "file-write": "code-edit",
-                        "create-file": "code-edit",
-                        "write-file": "code-edit",
-                        "file_read": "file-read",  # underscore variants
-                        "file_edit": "code-edit",
-                        "code_edit": "code-edit",
-                        "code_search": "code-search",
-                        "run-command": "command-exec",
-                        "run_command": "command-exec",
-                        "execute": "command-exec",
-                    }
+                    # Normalize invented tool names (shared with native path via
+                    # tools.TOOL_ALIASES).
                     name = TOOL_ALIASES.get(name, name)
 
                     if name not in self.tools:
