@@ -8,6 +8,8 @@ instructions are sent in-band only when the mode changes.
 from dataclasses import dataclass
 from enum import Enum
 
+from ..ui import theme
+
 
 class AgentMode(Enum):
     """Operating modes for the coding agent."""
@@ -27,6 +29,9 @@ class ModeConfig:
     allowed_tools: list[str] | None  # None means all tools allowed
     toolbar: str
     prompt_label: str
+    # Presentation tokens sourced from ui.theme.MODE_STYLE (single source of truth).
+    color: str = ""
+    icon: str = ""
 
 
 READ_ONLY_TOOLS = [
@@ -57,6 +62,8 @@ MODE_CONFIGS = {
         allowed_tools=ASK_MODE_TOOLS,
         toolbar="read/search only; no edits or shell",
         prompt_label="ask",
+        color=theme.MODE_STYLE["ASK"]["color"],
+        icon=theme.MODE_STYLE["ASK"]["icon"],
     ),
     AgentMode.PLAN: ModeConfig(
         name="plan",
@@ -68,6 +75,8 @@ MODE_CONFIGS = {
         allowed_tools=PLAN_MODE_TOOLS,
         toolbar="read/search; plans only in .supercoder/plans",
         prompt_label="plan",
+        color=theme.MODE_STYLE["PLAN"]["color"],
+        icon=theme.MODE_STYLE["PLAN"]["icon"],
     ),
     AgentMode.CODE: ModeConfig(
         name="code",
@@ -79,6 +88,8 @@ MODE_CONFIGS = {
         allowed_tools=None,
         toolbar="read/search; shell/edit ask",
         prompt_label="code",
+        color=theme.MODE_STYLE["CODE"]["color"],
+        icon=theme.MODE_STYLE["CODE"]["icon"],
     ),
     AgentMode.ACCEPT_EDITS: ModeConfig(
         name="accept-edits",
@@ -89,5 +100,7 @@ MODE_CONFIGS = {
         allowed_tools=None,
         toolbar="edits allowed; shell still asks",
         prompt_label="accept",
+        color=theme.MODE_STYLE["ACCEPT_EDITS"]["color"],
+        icon=theme.MODE_STYLE["ACCEPT_EDITS"]["icon"],
     ),
 }

@@ -144,8 +144,15 @@ def test_repl_bottom_toolbar_shows_current_mode():
 
     toolbar = repl._get_bottom_toolbar()
 
-    assert "accept-edits" in toolbar
-    assert "Shift+Tab" in toolbar
+    # Toolbar is now a list of (style, text) tuples so prompt_toolkit can color
+    # the mode token. Flatten to a single string for substring assertions.
+    flat = " ".join(text for _style, text in toolbar)
+    assert "ACCEPT-EDITS" in flat
+    assert "Shift+Tab" in flat
+    # The mode color (yellow for ACCEPT_EDITS per theme) must be applied to the
+    # mode token specifically.
+    mode_styles = [style for style, text in toolbar if "ACCEPT-EDITS" in text]
+    assert mode_styles and "yellow" in mode_styles[0]
 
 
 def test_repl_edit_preview_omits_full_long_content():

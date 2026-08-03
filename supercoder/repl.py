@@ -1660,22 +1660,63 @@ class SuperCoderREPL:
     # Commands
 
     def _get_prompt(self) -> str:
-        """Get prompt string with model tag and current mode."""
+        """Get prompt string with model tag and current mode icon.
+
+        The prompt color is applied via the prompt_toolkit ``PromptStyle``
+        (see _setup_session / _refresh_prompt_style), NOT via rich markup —
+        prompt_toolkit does not interpret rich markup strings.
+        """
         model_tag = self.agent.llm.config.model.split("/")[-1][:15]
-        mode_label = MODE_CONFIGS[self.agent.mode].prompt_label
-        return f"[{model_tag}] {mode_label}> "
+        config = MODE_CONFIGS[self.agent.mode]
+        return f"[{model_tag}] {config.icon} "
 
     def _get_bottom_toolbar(self):
-        """Return the prompt bottom toolbar with the active mode."""
+        """Return the prompt bottom toolbar with the active mode.
+
+        Returns a list of (style, text) tuples so prompt_toolkit can render
+        the mode token in the mode color while keeping the rest dim.
+        """
         config = MODE_CONFIGS[self.agent.mode]
-        return f" Mode: {config.name} | {config.toolbar} | Shift+Tab cycles modes "
+        return [
+            ("class:bottom-toolbar", " "),
+            (f"fg:{config.color} bold", f"{config.icon} {config.name.upper()}"),
+            ("class:bottom-toolbar", f"  ·  {config.toolbar}  ·  Shift+Tab cycles"),
+        ]
+
+    def _refresh_prompt_style(self) -> None:
+        """Rebuild the prompt_toolkit style so the prompt color tracks the mode.
+
+        Called after every mode change (_cycle_mode, cmd_* setters) because
+        PromptStyle is built once at session setup and does not observe mode
+        changes on its own.
+        """
+        if not getattr(self, "session", None):
+            return
+        config = MODE_CONFIGS[self.agent.mode]
+        from prompt_toolkit.styles import Style as PtStyle
+
+        self.session.style = PtStyle.from_dict(
+            {
+                "prompt": f"fg:{config.color} bold",
+                "bottom-toolbar": "#666666",
+            }
+        )
 
     def _cycle_mode(self) -> AgentMode:
         """Switch to the next mode in the keyboard cycle."""
         current_idx = MODE_CYCLE.index(self.agent.mode)
         next_mode = MODE_CYCLE[(current_idx + 1) % len(MODE_CYCLE)]
-        self.agent.set_mode(next_mode)
+        self._set_mode(next_mode)
         return next_mode
+
+    def _set_mode(self, mode: AgentMode) -> None:
+        """Switch the agent mode and refresh prompt_toolkit styling to match.
+
+        Centralizes the mode switch so every entry point (Shift+Tab cycle,
+        /ask, /plan, /code, /accept-edits) keeps the prompt color in sync.
+        """
+        self.agent.set_mode(mode)
+        self._refresh_prompt_style()
 
     def cmd_ask(self, user_input: str):
         """Switch to ask mode or ask a question without editing.
@@ -1690,14 +1731,14 @@ class SuperCoderREPL:
         if question:
             # One-shot ask: execute in ask mode, then return
             original_mode = self.agent.mode
-            self.agent.set_mode(AgentMode.ASK)
+            self._set_mode(AgentMode.ASK)
             try:
                 self._handle_chat(question)
             finally:
-                self.agent.set_mode(original_mode)
+                self._set_mode(original_mode)
         else:
             # Sticky switch to ask mode
-            self.agent.set_mode(AgentMode.ASK)
+            self._set_mode(AgentMode.ASK)
             self.console.print("[cyan]Switched to ask mode[/] - questions only, no edits")
             self.console.print("[dim]Use /plan, /code, or /accept-edits to switch modes[/]")
         return False
@@ -1709,13 +1750,13 @@ class SuperCoderREPL:
 
         if request:
             original_mode = self.agent.mode
-            self.agent.set_mode(AgentMode.PLAN)
+            self._set_mode(AgentMode.PLAN)
             try:
                 self._handle_chat(request)
             finally:
-                self.agent.set_mode(original_mode)
+                self._set_mode(original_mode)
         else:
-            self.agent.set_mode(AgentMode.PLAN)
+            self._set_mode(AgentMode.PLAN)
             self.console.print("[cyan]Switched to plan mode[/] - read/search plus dated plans only")
         return False
 
@@ -1731,14 +1772,14 @@ class SuperCoderREPL:
         if request:
             # One-shot code request
             original_mode = self.agent.mode
-            self.agent.set_mode(AgentMode.CODE)
+            self._set_mode(AgentMode.CODE)
             try:
                 self._handle_chat(request)
             finally:
-                self.agent.set_mode(original_mode)
+                self._set_mode(original_mode)
         else:
             # Sticky switch to code mode
-            self.agent.set_mode(AgentMode.CODE)
+            self._set_mode(AgentMode.CODE)
             self.console.print("[cyan]Switched to code mode[/] - edits ask for approval")
             self.console.print("[dim]Use /accept-edits to apply edits without per-edit prompts[/]")
         return False
@@ -1750,13 +1791,13 @@ class SuperCoderREPL:
 
         if request:
             original_mode = self.agent.mode
-            self.agent.set_mode(AgentMode.ACCEPT_EDITS)
+            self._set_mode(AgentMode.ACCEPT_EDITS)
             try:
                 self._handle_chat(request)
             finally:
-                self.agent.set_mode(original_mode)
+                self._set_mode(original_mode)
         else:
-            self.agent.set_mode(AgentMode.ACCEPT_EDITS)
+            self._set_mode(AgentMode.ACCEPT_EDITS)
             self.console.print("[cyan]Switched to accept-edits mode[/] - file edits are enabled")
         return False
 
