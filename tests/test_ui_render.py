@@ -75,6 +75,31 @@ class TestReasoning:
         text = _render_to_text(result)
         assert "thinking" in text.lower()
 
+    def test_content_is_not_dim(self):
+        """Reasoning content must NOT use the 'dim' style.
+
+        Regression guard for the live-test finding that the reasoning block
+        was visually indistinguishable from the response: 'dim' made the
+        whole block faint and easy to mistake for a muted fragment of the
+        answer. Italic magenta keeps it readable while still distinguishing
+        it (italic slant = internal monologue, not a direct answer).
+        """
+        from rich.text import Text
+
+        # Inspect the Panel's renderable directly.
+        panel = render.render_reasoning("some reasoning text")
+        body = panel.renderable
+        assert isinstance(body, Text)
+        style_str = str(body.style) if body.style is not None else ""
+        assert "dim" not in style_str.lower(), (
+            f"reasoning content style '{style_str}' contains 'dim' — "
+            "use italic magenta instead so the block stays readable"
+        )
+        assert "italic" in style_str.lower(), (
+            f"reasoning content style '{style_str}' should be italic to "
+            "distinguish internal monologue from a direct response"
+        )
+
 
 class TestToolCallCompact:
     def test_uses_tool_icon(self):

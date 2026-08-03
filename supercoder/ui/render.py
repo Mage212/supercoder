@@ -102,6 +102,13 @@ def render_assistant_message(
 def render_reasoning(content: str, streaming: bool = False) -> Panel:
     """Render a reasoning/thinking block as a magenta rounded panel.
 
+    The content is rendered in italic magenta (not dim) so the block is
+    visually distinct from a plain assistant response: the shared magenta
+    hue ties it to the "💭 Reasoning" header, while the italic slant signals
+    "internal monologue" rather than a direct answer. ``dim`` was previously
+    used but made the block too faint to read and easy to mistake for a
+    muted fragment of the response.
+
     Args:
         content: The reasoning text.
         streaming: If True, append a "thinking…" suffix to the title.
@@ -116,7 +123,7 @@ def render_reasoning(content: str, streaming: bool = False) -> Panel:
         (suffix, "dim magenta"),
     )
     return Panel(
-        Text(content, style="dim"),
+        Text(content, style="italic magenta"),
         title=title,
         title_align="left",
         border_style=theme.ROLE_COLORS["reasoning"],
