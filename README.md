@@ -1,6 +1,6 @@
 # 🤖 SuperCoder
 
-[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](https://github.com/Mage212/supercoder)
+[![Version](https://img.shields.io/badge/version-0.4.2-blue.svg)](https://github.com/Mage212/supercoder)
 [![Python](https://img.shields.io/badge/python-3.11+-green.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -8,11 +8,13 @@
 
 ---
 
-## 🆕 What's New in v0.4.0
+## 🆕 What's New in v0.4.2
 
-- **Cleaner Agent Timeline**: Tool calls, tool results, reasoning, warnings, and restored session history now render with clearer spacing and compact summaries so short model responses no longer disappear in terminal noise.
-- **Compact Tool Output by Default**: Large tool outputs are summarized in one line with size and saved-output metadata, while detailed head/tail previews remain available in detailed mode.
-- **Session-Restore Display Metadata**: SuperCoder now stores UI-only summaries, previews, policies, and metadata alongside messages so restored sessions can replay the same clean visual timeline without changing the API payload sent to the model.
+- **TUI Redesign — Design System (Phase 1)**: A central theme module (`supercoder/ui/`) now holds all design tokens (brand colors, role colors, per-mode color/icon, per-tool icons, unified progress-bar config). Assistant responses render in a branded rounded panel with a model/duration header; reasoning blocks use italic magenta so they're clearly distinct from direct answers; user messages share one style for live echo and restored history.
+- **TUI Redesign — Personality (Phase 2)**: An animated ASCII startup banner (figlet "Supercoder" logo with a ~1.5s brand color-cycling wave; skip with `--no-banner`). The "Generating..." loading line animates per tick with a teal wave-gradient. Easter eggs (10% chance per turn, with Halloween/December seasonal pools) occasionally replace the generic loading label.
+- **Mode-Colored Prompt and Toolbar**: Each mode (ASK/PLAN/CODE/ACCEPT-EDITS) now has a distinct prompt glyph and color (ASK=blue `?`, PLAN=magenta `☰`, CODE=green `❯`, ACCEPT=yellow `⚡`), applied via a `PromptStyle` that refreshes on every mode change.
+- **Tool-Name Alias Resolution**: Models that call tools by names learned from other agents' toolsets (`read`, `edit`, `grep`, `bash`, `ls`, ...) now reach the correct canonical tool instead of producing an "Unknown tool" error. A shared `TOOL_ALIASES` map is applied in both native and streaming paths.
+- **Cleaner Agent Timeline**: Tool calls, tool results, reasoning, warnings, and restored session history render with clearer spacing and compact summaries so short model responses no longer disappear in terminal noise.
 - **Safer Interrupted Session Recovery**: Incomplete tool-call exchanges left by an interrupted session are repaired before API replay, preventing invalid assistant/tool history from breaking the next turn.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
@@ -250,6 +252,7 @@ supercoder --debug                     # Enable debug mode
 supercoder --no-repo-map               # Disable RepoMap
 supercoder --max-context 16000         # Override context token limit
 supercoder --stream                    # Enable deprecated text-streaming mode
+supercoder --no-banner                 # Skip the animated startup banner
 ```
 
 ### Slash Commands
@@ -329,6 +332,7 @@ supercoder/
 ├── llm/              # LLM providers (OpenAI-compatible endpoints)
 ├── repomap/          # Repository mapping logic (tree-sitter)
 ├── tools/            # Core tools (Search, Edit, Structure, Exec)
+├── ui/               # TUI rendering layer (theme, render, banner, spinners)
 ├── rules_loader.py   # Supercoder Rules loading logic
 ├── config.py         # Configuration management
 ├── logging.py        # Conversation logging (JSONL → ~/.supercoder/logs/)
