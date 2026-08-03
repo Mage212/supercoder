@@ -27,6 +27,7 @@ from .agent.agent_modes import MODE_CONFIGS, MODE_CYCLE, AgentMode
 from .context.references import summarize_attachment_content, summarize_context_attachment
 from .logging import get_logger
 from .permissions import PermissionAction
+from .ui import render, theme
 from .utils import format_relative_time
 
 
@@ -234,7 +235,7 @@ class SuperCoderREPL:
                 for _ in range(visual_lines):
                     sys.stdout.write("\033[A\033[2K")  # Move up + clear line
                 sys.stdout.flush()
-                self.console.print(f"[bold green]{self._get_prompt()}[/][on grey23]{user_input}[/]")
+                self.console.print(render.render_user_message(user_input, live=True))
                 self._handle_chat(user_input)
 
             except KeyboardInterrupt:
@@ -305,15 +306,17 @@ class SuperCoderREPL:
                 if event_type == "thinking":
                     spinner.stop()
                     self._print_output_spacer()
-                    self._print_block(content.strip(), "Reasoning", "magenta", "💭")
+                    self.console.print(render.render_reasoning(content.strip()))
                     spinner.update("[bold blue]SuperCoder is thinking...[/]")
                     spinner.start()
 
                 elif event_type == "response":
                     spinner.stop()
                     self._print_output_spacer()
-                    # Full response — render as Markdown
-                    self.console.print(Markdown(content))
+                    # Full response — render in a branded panel with a model header.
+                    self.console.print(
+                        render.render_assistant_message(content, model=self.agent.llm.config.model)
+                    )
                     spinner.update("[bold blue]SuperCoder is thinking...[/]")
                     spinner.start()
 
@@ -731,29 +734,20 @@ class SuperCoderREPL:
                     pass
 
     def _display_status_footer(self, touched_files):
-        """Display a status footer with mini progress bar, token usage, and active files."""
+        """Display a status footer with the unified progress bar and active files."""
         stats = self.agent.context.get_stats()
-
-        # Mini progress bar (8 chars)
-        bar_w = 8
-        filled = int(bar_w * stats.utilization_percent / 100)
-        empty = bar_w - filled
-        color = (
-            "green"
-            if stats.utilization_percent < 50
-            else "yellow"
-            if stats.utilization_percent < 80
-            else "red"
+        bar = render.render_context_bar(
+            stats.used_tokens, stats.total_tokens, width=theme.BAR_WIDTH_FOOTER
         )
-        bar = f"[{color}]{'━' * filled}[/][dim]{'━' * empty}[/]"
-
-        parts = [f"{bar} [dim]{stats.used_tokens:,}/{stats.total_tokens:,} tokens[/]"]
-
+        # render_context_bar already includes the "used/total tokens" label, so we
+        # append the active-files segment separately with a separator.
         if touched_files:
             files_str = ", ".join(sorted(touched_files))
-            parts.append(f"[dim]Active: {files_str}[/]")
-
-        self.console.print(" │ ".join(parts), justify="right")
+            self.console.print(
+                Group(bar, Text(f"Active: {files_str}", style="dim")), justify="right"
+            )
+        else:
+            self.console.print(bar, justify="right")
 
     def _render_session_history(self, messages: list) -> None:
         """Render session messages visually after restore.
@@ -792,18 +786,22 @@ class SuperCoderREPL:
 
             if dt == "user_input":
                 self._print_output_spacer()
-                self._print_block(msg.content, "You", "cyan", "👤")
+                self.console.print(render.render_user_message(msg.content, live=False))
 
             elif dt == "thinking":
                 text = msg.content[:500] + ("..." if len(msg.content) > 500 else "")
                 self._print_output_spacer()
-                self._print_block(text, "Reasoning", "magenta", "💭")
+                self.console.print(render.render_reasoning(text))
 
             elif dt in ("response", "tool_call"):
                 # Render text content
                 if msg.content and msg.content.strip():
                     self._print_output_spacer()
-                    self.console.print(Markdown(msg.content))
+                    self.console.print(
+                        render.render_assistant_message(
+                            msg.content, model=self.agent.llm.config.model
+                        )
+                    )
 
                 # Interleave: tool_call → matching tool_result
                 if msg.tool_calls:
@@ -865,10 +863,14 @@ class SuperCoderREPL:
                 # Fallback for old sessions without display_type
                 if msg.role == "user" and msg.content:
                     self._print_output_spacer()
-                    self._print_block(msg.content, "You", "cyan", "👤")
+                    self.console.print(render.render_user_message(msg.content, live=False))
                 elif msg.role == "assistant" and msg.content:
                     self._print_output_spacer()
-                    self.console.print(Markdown(msg.content))
+                    self.console.print(
+                        render.render_assistant_message(
+                            msg.content, model=self.agent.llm.config.model
+                        )
+                    )
                 elif msg.role == "tool":
                     self._print_output_spacer()
                     self._display_tool_result({"name": msg.name or "tool", "result": msg.content})
@@ -917,18 +919,16 @@ class SuperCoderREPL:
         return payload
 
     def _print_block(self, content, title: str, color: str, icon: str = ""):
-        """Print content in a panel with horizontal lines only (no vertical borders).
+        """Print content in a rounded panel (unified with the ui.render style).
 
         Args:
             content: Rich renderable (Text, Markdown, Syntax, str)
             title: Block title (e.g. "Reasoning", "Tool Call")
-            color: Color for the lines (e.g. "magenta", "yellow")
+            color: Color for the border (e.g. "magenta", "yellow")
             icon: Optional emoji icon
         """
         full_title = f"[bold {color}]{icon} {title}[/]" if icon else f"[bold {color}]{title}[/]"
-        self.console.print(
-            Panel(content, title=full_title, border_style=color, box=box.HORIZONTALS)
-        )
+        self.console.print(Panel(content, title=full_title, border_style=color, box=box.ROUNDED))
 
     def _print_output_spacer(self) -> None:
         """Separate consecutive agent outputs in terminal scrollback."""
@@ -2074,22 +2074,14 @@ class SuperCoderREPL:
         table.add_column("Label", style="cyan", min_width=10)
         table.add_column("Value")
 
-        # Progress bar
-        bar_width = 20
-        filled = int(bar_width * stats.utilization_percent / 100)
-        empty = bar_width - filled
-        color = (
-            "green"
-            if stats.utilization_percent < 50
-            else "yellow"
-            if stats.utilization_percent < 80
-            else "red"
+        # Progress bar (unified renderer; stats uses the wider width).
+        bar = render.render_context_bar(
+            stats.used_tokens, stats.total_tokens, width=theme.BAR_WIDTH_STATS
         )
-        bar = f"[{color}]{'━' * filled}[/][dim]{'━' * empty}[/]"
 
         table.add_row(
             "Context",
-            f"{bar}  {stats.utilization_percent:.1f}%   {stats.used_tokens:,} / {stats.total_tokens:,}",
+            f"{bar}  {stats.utilization_percent:.1f}%",
         )
         table.add_row("Messages", str(stats.message_count))
         table.add_row("Available", f"{stats.available_tokens:,} tokens")
