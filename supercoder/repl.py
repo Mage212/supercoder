@@ -300,13 +300,20 @@ class SuperCoderREPL:
         _gen_stop = threading.Event()
         _gen_phase = ["response"]  # "response" or "tool_call"
         _gen_frame = [0]  # wave-gradient tick counter
+        # Roll a whimsical loading label once per turn (Task 2.4). If an egg
+        # comes up, it replaces the "Generating <phase>..." prefix for the
+        # whole turn; otherwise None keeps the generic label.
+        _egg = spinners.maybe_easter_egg()
 
         def _tick():
             while not _gen_stop.wait(1.0 / theme.GRADIENT_REFRESH_PER_SECOND):
                 elapsed = int(time.monotonic() - _gen_start)
                 n = _gen_tokens[0]
                 label = _gen_phase[0]
-                text = f"Generating {label}... {n:,} tokens ({elapsed}s)"
+                if _egg:
+                    text = f"{_egg}... {n:,} tokens ({elapsed}s)"
+                else:
+                    text = f"Generating {label}... {n:,} tokens ({elapsed}s)"
                 spinner.update(spinners.wave_gradient_for(self.console, text, _gen_frame[0]))
                 _gen_frame[0] += 1
 

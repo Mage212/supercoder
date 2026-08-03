@@ -113,3 +113,74 @@ def wave_gradient_for(console, text: str, frame: int, palette: list[str] | None 
         palette=palette,
         supports_truecolor=theme.terminal_supports_truecolor(console),
     )
+
+
+# ---------------------------------------------------------------------------
+# Easter eggs (Task 2.4)
+# ---------------------------------------------------------------------------
+# Whimsical loading labels that replace "Generating..." with a small chance.
+# Seasonal pools (Halloween / December) are layered on top of the base pool
+# on their dates. Pattern adapted from mistral-vibe's loading.py.
+
+EASTER_EGGS: list[str] = [
+    "Compiling the universe",
+    "Petting the rubber duck",
+    "Counting semicolons",
+    "Asking the compiler nicely",
+    "Herding threads",
+    "Untangling the call graph",
+    "Negotiating with the linker",
+    "Reticulating splines",
+    "Defragmenting the stack",
+    "Optimizing the optimizer",
+]
+
+# (month, day) -> seasonal phrases. day=None means the whole month.
+SEASONAL_EGGS: dict[tuple[int, int | None], list[str]] = {
+    (10, 31): [  # Halloween
+        "Summoning spirits",
+        "Carving pumpkins",
+        "Petting the rubber bat",
+        "Brewing potions",
+    ],
+    (12, None): [  # All of December
+        "Wrapping presents",
+        "Decorating the tree",
+        "Drinking hot cocoa",
+        "Building snowmen",
+    ],
+}
+
+
+def _seasonal_pool(now) -> list[str]:
+    """Return the seasonal phrase additions active on the given date."""
+    pool: list[str] = []
+    for (month, day), eggs in SEASONAL_EGGS.items():
+        if now.month == month and (day is None or now.day == day):
+            pool.extend(eggs)
+    return pool
+
+
+def maybe_easter_egg(rng=None, *, now=None) -> str | None:
+    """Return a whimsical loading label, or None.
+
+    With probability ``theme.EASTER_EGG_PROBABILITY`` (default 10%) a phrase
+    is chosen from the base pool, plus any seasonal pool active on ``now``.
+    Returns None the rest of the time so the caller keeps the generic label.
+
+    Args:
+        rng: Optional random.Random instance (inject for deterministic tests).
+        now: Optional datetime (inject for seasonal tests). Defaults to now.
+    """
+    import random
+    from datetime import datetime
+
+    rng = rng if rng is not None else random
+    now = now if now is not None else datetime.now()
+
+    if rng.random() >= theme.EASTER_EGG_PROBABILITY:
+        return None
+
+    pool = list(EASTER_EGGS)
+    pool.extend(_seasonal_pool(now))
+    return rng.choice(pool)

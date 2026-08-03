@@ -1,4 +1,9 @@
-"""Tests for the spinner frames and wave-gradient loader (Tasks 2.1, 2.2)."""
+"""Tests for the spinner frames, wave-gradient loader, and easter eggs.
+
+Covers Tasks 2.1, 2.2, and 2.4.
+"""
+
+from datetime import datetime
 
 from rich.console import Console
 from rich.text import Text
@@ -90,3 +95,78 @@ class TestWaveGradient:
         colors = {str(s.style) if s.style else "" for s in spans}
         assert colors <= {"#ff0000", "#00ff00"}
         assert len(colors) == 2  # both colors appear
+
+
+class TestEasterEggs:
+    """maybe_easter_egg() returns a whimsical label with low probability."""
+
+    def test_returns_none_above_probability_threshold(self):
+        # A deterministic rng whose random() is above EASTER_EGG_PROBABILITY
+        # must yield None.
+        class HighRng:
+            def random(self):
+                return theme.EASTER_EGG_PROBABILITY + 0.01
+
+            def choice(self, seq):
+                return seq[0]
+
+        assert spinners.maybe_easter_egg(HighRng()) is None
+
+    def test_returns_base_phrase_below_threshold(self):
+        class LowRng:
+            def __init__(self):
+                self.calls = 0
+
+            def random(self):
+                return 0.0  # always below threshold
+
+            def choice(self, seq):
+                return seq[0]
+
+        egg = spinners.maybe_easter_egg(LowRng())
+        assert egg is not None
+        assert egg in spinners.EASTER_EGGS
+
+    def test_halloween_eggs_added_on_oct_31(self):
+        class LowRng:
+            def random(self):
+                return 0.0
+
+            def choice(self, seq):
+                return seq[-1]  # pick the last (a seasonal one if added)
+
+        halloween = datetime(2026, 10, 31)
+        egg = spinners.maybe_easter_egg(LowRng(), now=halloween)
+        assert egg in spinners.SEASONAL_EGGS[(10, 31)]
+
+    def test_december_eggs_added_all_month(self):
+        class LowRng:
+            def random(self):
+                return 0.0
+
+            def choice(self, seq):
+                return seq[-1]
+
+        mid_dec = datetime(2026, 12, 15)
+        egg = spinners.maybe_easter_egg(LowRng(), now=mid_dec)
+        assert egg in spinners.SEASONAL_EGGS[(12, None)]
+
+    def test_no_seasonal_eggs_in_july(self):
+        class LowRng:
+            def random(self):
+                return 0.0
+
+            def choice(self, seq):
+                # If seasonal eggs were wrongly added, the pool would be
+                # larger; assert the pool is exactly the base list by
+                # choosing index past the base length and expecting IndexError.
+                raise AssertionError("seasonal eggs leaked into a non-seasonal date")
+
+        july = datetime(2026, 7, 4)
+        # choice is only called when an egg fires; on a non-seasonal date the
+        # pool should equal EASTER_EGGS. Verify via _seasonal_pool directly.
+        assert spinners._seasonal_pool(july) == []
+
+    def test_easter_eggs_are_non_empty_strings(self):
+        for egg in spinners.EASTER_EGGS:
+            assert isinstance(egg, str) and egg
