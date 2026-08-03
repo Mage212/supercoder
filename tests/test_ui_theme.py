@@ -87,3 +87,49 @@ class TestBrandAndBarTokens:
 
     def test_syntax_theme_is_string(self):
         assert isinstance(theme.SYNTAX_THEME, str) and theme.SYNTAX_THEME
+
+
+class TestBrandRamp:
+    """BRAND_RAMP drives the wave-gradient loader and banner color-cycling."""
+
+    def test_ramp_has_enough_steps_for_smooth_wave(self):
+        # At least 3 steps so the cyclic offset produces a visible wave rather
+        # than an alternating two-color blink.
+        assert len(theme.BRAND_RAMP) >= 3
+
+    def test_every_step_is_hex_color(self):
+        for step in theme.BRAND_RAMP:
+            assert isinstance(step, str), f"{step} must be a string"
+            assert step.startswith("#"), f"{step} should be a hex color"
+            assert len(step) == 7, f"{step} should be #RRGGBB"
+
+    def test_ramp_is_brand_palette(self):
+        # The ramp must be built from the brand colors (not an imported palette
+        # like mistral-vibe orange) so the gradient reinforces the identity.
+        assert theme.BRAND in theme.BRAND_RAMP
+        assert theme.BRAND_DIM in theme.BRAND_RAMP
+        assert theme.BRAND_BRIGHT in theme.BRAND_RAMP
+
+
+class TestAnimationConfig:
+    def test_gradient_refresh_rate_is_positive(self):
+        assert isinstance(theme.GRADIENT_REFRESH_PER_SECOND, int)
+        assert theme.GRADIENT_REFRESH_PER_SECOND > 0
+
+    def test_easter_egg_probability_in_range(self):
+        assert 0.0 <= theme.EASTER_EGG_PROBABILITY <= 1.0
+
+    def test_terminal_supports_truecolor_detects_color_system(self):
+        # A truecolor console reports it; a monochrome one does not.
+        class TruecolorConsole:
+            color_system = "truecolor"
+
+        class StandardConsole:
+            color_system = "standard"
+
+        class MonoConsole:
+            color_system = None
+
+        assert theme.terminal_supports_truecolor(TruecolorConsole()) is True
+        assert theme.terminal_supports_truecolor(StandardConsole()) is False
+        assert theme.terminal_supports_truecolor(MonoConsole()) is False

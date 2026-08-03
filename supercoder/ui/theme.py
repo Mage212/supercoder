@@ -18,6 +18,13 @@ BRAND = "#00d7af"
 BRAND_DIM = "#00875f"
 BRAND_BRIGHT = "#5fffdf"
 
+# 5-step teal ramp for the wave-gradient loading text (Task 2.2) and the
+# animated startup banner (Task 2.3). Each step cycles a per-character color
+# offset, so a single ramp yields a smooth traveling wave. The ramp is the
+# brand palette itself (no imported orange like mistral-vibe), so the
+# gradient reinforces the SuperCoder identity rather than borrowing one.
+BRAND_RAMP: list[str] = [BRAND_BRIGHT, "#00d7af", BRAND, "#00997a", BRAND_DIM]
+
 # Semantic background tones (used for message containers).
 BG_PANEL = "grey15"
 BG_ELEMENT = "grey23"
@@ -82,3 +89,28 @@ BAR_THRESHOLDS = {"green": 50, "yellow": 80}  # <50 green, <80 yellow, >=80 red
 # per-mode or per-model without touching renderer code.
 # ---------------------------------------------------------------------------
 SYNTAX_THEME = "monokai"
+
+# ---------------------------------------------------------------------------
+# Animation configuration (Phase 2 — personality).
+# Wave-gradient loader, banner color-cycling, and spinner phase refresh all
+# share these knobs. Kept here so tuning is a one-line change.
+# ---------------------------------------------------------------------------
+# Refresh rate for the wave-gradient loader and banner color-cycling.
+# Matches mistral-vibe's 10 FPS; 0.1s feels animated without burning CPU.
+GRADIENT_REFRESH_PER_SECOND = 10
+
+# Probability (per turn) that a whimsical "easter egg" replaces the generic
+# "Generating..." label. Seasonal eggs (Halloween/December) are added on top
+# of this pool on their dates.
+EASTER_EGG_PROBABILITY = 0.10
+
+
+def terminal_supports_truecolor(console) -> bool:
+    """Return True if the console can render per-character hex colors.
+
+    Used for graceful degradation: the wave gradient and banner color-cycling
+    fall back to a solid brand color on 16-color ANSI / monochrome terminals
+    so they don't render as flickering default-color text.
+    """
+    color_system = getattr(console, "color_system", None)
+    return color_system in ("truecolor", "256")
