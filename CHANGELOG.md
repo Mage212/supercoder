@@ -4,6 +4,13 @@
 
 ## v0.4.1
 
+- **TUI Redesign Phase 1 — Design System**: Introduced `supercoder/ui/` as a pure rendering layer with a central theme module (`theme.py`) holding all design tokens (brand colors, role colors, per-mode color/icon, per-tool icons, unified progress-bar config, syntax theme). The module is structured to become Textual CSS variables verbatim in a future migration.
+- **Unified Message Rendering**: Assistant responses now render in a branded rounded panel with a model/duration header (was bare Markdown); reasoning blocks use a dedicated magenta rounded renderer; user messages use a unified style for both live echo and restored session history, fixing a previous visual inconsistency.
+- **Mode-Colored Prompt and Toolbar**: Each agent mode (ASK/PLAN/CODE/ACCEPT-EDITS) now has a distinct prompt glyph and color, applied via a `PromptStyle` that refreshes on every mode change. The bottom toolbar highlights the mode token in the mode color.
+- **Rounded Panels**: Replaced `box.HORIZONTALS` (top/bottom lines only) with `box.ROUNDED` across all panels so blocks no longer look unfinished.
+- **Questionary Command Menu**: The interactive-process (command-stalled) menu now uses the same arrow-key questionary dialog as command/edit confirmations, replacing the raw `sys.stdin.readline()` prompt.
+- **Per-Tool Icons**: Compact tool-call summaries now show a per-tool icon (file-read, code-search, glob, code-edit, project-structure, command-exec) instead of a generic arrow.
+- **Unified Progress Bar**: The three ad-hoc progress-bar renderers (footer, `/stats`, streaming) are replaced by a single `render_context_bar` driven by theme tokens; the syntax theme is now a single knob (`theme.SYNTAX_THEME`) instead of seven hardcoded `monokai` literals.
 - **Runtime Version Sync**: Updated the package metadata and CLI/runtime `__version__` to `0.4.1`.
 
 ## v0.4.0
