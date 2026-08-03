@@ -27,7 +27,7 @@ from .agent.agent_modes import MODE_CONFIGS, MODE_CYCLE, AgentMode
 from .context.references import summarize_attachment_content, summarize_context_attachment
 from .logging import get_logger
 from .permissions import PermissionAction
-from .ui import render, theme
+from .ui import render, spinners, theme
 from .utils import format_relative_time
 
 
@@ -267,24 +267,32 @@ class SuperCoderREPL:
         rollback_info = None
         touched_files = set()
 
-        spinner = self.console.status("[bold blue]SuperCoder is thinking...[/]", spinner="dots")
+        spinner = self.console.status(
+            "[bold blue]SuperCoder is thinking...[/]",
+            spinner=spinners.DEFAULT_SPINNER_NAME,
+        )
         spinner.start()
 
-        # Live token counter + elapsed timer for generation progress
+        # Live token counter + elapsed timer for generation progress.
         # The timer thread ensures the spinner always shows activity,
         # even when the provider (e.g. LMStudio) buffers tool call arguments
-        # and doesn't stream chunks incrementally.
+        # and doesn't stream chunks incrementally. The label is painted with
+        # the brand wave-gradient so the loading line animates per tick
+        # (Task 2.2); it falls back to a solid color on 16-color terminals.
         _gen_tokens = [0]
         _gen_start = time.monotonic()
         _gen_stop = threading.Event()
         _gen_phase = ["response"]  # "response" or "tool_call"
+        _gen_frame = [0]  # wave-gradient tick counter
 
         def _tick():
-            while not _gen_stop.wait(0.7):
+            while not _gen_stop.wait(1.0 / theme.GRADIENT_REFRESH_PER_SECOND):
                 elapsed = int(time.monotonic() - _gen_start)
                 n = _gen_tokens[0]
                 label = _gen_phase[0]
-                spinner.update(f"[bold blue]Generating {label}... {n:,} tokens ({elapsed}s)[/]")
+                text = f"Generating {label}... {n:,} tokens ({elapsed}s)"
+                spinner.update(spinners.wave_gradient_for(self.console, text, _gen_frame[0]))
+                _gen_frame[0] += 1
 
         _tick_thread = threading.Thread(target=_tick, daemon=True)
         _tick_thread.start()
