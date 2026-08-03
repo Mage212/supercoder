@@ -1262,7 +1262,11 @@ class SuperCoderREPL:
         return value[:limit] + "\n... truncated ..."
 
     def _handle_command_waiting(self, event):
-        """Handle a command that appears to be waiting for input."""
+        """Handle a command that appears to be waiting for input.
+
+        Uses the same questionary arrow-key menu as command/edit confirmation
+        (replaces the former raw sys.stdin.readline() prompt).
+        """
         content = event.get("content", "")
         process = event.get("process")
         event.get("tool_name", "command-exec")
@@ -1270,42 +1274,29 @@ class SuperCoderREPL:
         # Display warning
         self._print_block(f"[yellow]{content}[/]", "Process Stalled", "yellow", "⚠️")
 
-        # Simple stdin-based menu (most reliable across terminals)
-        self.console.print("\n[bold]Options:[/]")
-        self.console.print("  [cyan]k[/] - Kill the process")
-        self.console.print("  [cyan]w[/] - Wait longer (continue until timeout)")
+        choice = self._select_confirmation_action(
+            "Process stalled — choose action",
+            options=[
+                ("Kill process", "kill"),
+                ("Wait longer (continue until timeout)", "wait"),
+            ],
+            cancel_value="kill",  # ESC / Ctrl+C defaults to kill for safety
+        )
 
-        try:
-            import sys
-
-            self.console.print("\n[bold cyan]Action [k/w]>[/] ", end="")
-            choice = sys.stdin.readline().strip().lower()
-
-            if choice.startswith("k"):
-                if process and hasattr(process, "kill"):
-                    try:
-                        process.kill()
-                        process.wait(timeout=5)
-                        self.console.print("[green]✓ Process killed[/]")
-                        return "killed"
-                    except Exception as e:
-                        self.console.print(f"[red]Failed to kill process: {e}[/]")
-                        return f"error: {e}"
-                return "killed"
-            else:
-                self.console.print("[dim]Continuing to wait for process...[/]")
-                return "wait"
-
-        except (KeyboardInterrupt, EOFError):
-            # User pressed Ctrl+C - kill the process
+        if choice == "kill":
             if process and hasattr(process, "kill"):
                 try:
                     process.kill()
                     process.wait(timeout=5)
-                    self.console.print("\n[green]✓ Process killed (interrupted)[/]")
-                except Exception:
-                    pass
+                    self.console.print("[green]✓ Process killed[/]")
+                    return "killed"
+                except Exception as e:
+                    self.console.print(f"[red]Failed to kill process: {e}[/]")
+                    return f"error: {e}"
             return "killed"
+        else:
+            self.console.print("[dim]Continuing to wait for process...[/]")
+            return "wait"
 
     @staticmethod
     def _strip_nested_json(prefix_pattern: str, text: str, flags: int = 0) -> str:
