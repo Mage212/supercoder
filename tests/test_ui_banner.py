@@ -20,9 +20,9 @@ class TestRenderBanner:
             tools_count=6,
         )
         text = _render_to_text(result)
-        # The art renders "SuperCoder" visually (not as a literal substring),
-        # so check for a distinctive art glyph + the meta fields.
-        assert "█" in text  # filled block glyph from the Block logo
+        # The Standard figlet logo renders "Supercoder" as stroke ASCII art
+        # (not a literal substring), so check for a distinctive art row + meta.
+        assert "____" in text  # top row of the figlet Standard "S"
         assert "0.4.2" in text
         assert "gpt-4o" in text
 
@@ -32,14 +32,12 @@ class TestRenderBanner:
         assert "32,000" in text
         assert "6" in text
 
-    def test_banner_art_is_multiline_block_style(self):
+    def test_banner_art_is_multiline_ascii(self):
         assert isinstance(banner.BANNER_ART, str)
         assert banner.BANNER_ART.count("\n") >= 3  # several rows
-        # The Block logo uses filled-block glyphs (U+2588) and box-drawing
-        # corner serifs (U+2550..U+255E). Assert the signature glyph is present
-        # so a regression to plain ASCII is caught.
-        assert "█" in banner.BANNER_ART
-        assert "╗" in banner.BANNER_ART or "╝" in banner.BANNER_ART
+        # Pure ASCII so the logo renders on every terminal regardless of
+        # font support (no box-drawing / filled-block glyphs).
+        assert all(ord(ch) < 128 for ch in banner.BANNER_ART.replace("\n", ""))
         # Fits an 80-column terminal (the most common width).
         assert max(len(line) for line in banner.BANNER_ART.split("\n")) <= 80
 
@@ -52,7 +50,7 @@ class TestAnimateBanner:
         console = Console(record=True, width=100)  # not a real terminal
         banner.animate_banner(console, "0.4.2", "gpt-4o", 128000, 6, duration=0.1)
         text = console.export_text()
-        assert "█" in text  # filled block glyph from the Block logo
+        assert "____" in text  # figlet Standard art row present
 
     def test_paint_art_with_wave_truecolor_produces_spans(self):
         art = banner._paint_art_with_wave(frame=0, supports_truecolor=True)
