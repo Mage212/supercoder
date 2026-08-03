@@ -1,15 +1,18 @@
-"""Animated ASCII startup banner for SuperCoder (Task 2.3).
+"""Animated startup banner for SuperCoder (Task 2.3).
 
 Pure data + functions: no imports from agent/context/repl. The banner art
 and the color-cycling animate() port cleanly to a Textual widget later.
 
 Design
 ------
-- ``BANNER_ART`` is a hand-crafted ASCII logo (fits ~80 columns). It is kept
-  as a single multi-line string so it renders the same in any font.
-- ``render_banner()`` produces a static branded Panel (model/context/tools
-  meta). Used as the non-animated fallback and after the animation settles.
-- ``animate_banner()`` runs a short color-cycling wave over the ASCII art via
+- ``BANNER_ART`` is a hand-crafted "Block"-style logo using filled-block
+  glyphs (U+2588) and box-drawing corner serifs (U+2550..U+255E). It fits
+  in 80 columns. On terminals missing those glyphs the art degrades to
+  replacement characters but the surrounding panel layout is unaffected.
+- ``render_banner()`` produces a static branded Panel (rounded frame, brand
+  border, model/context/tools meta). Used as the non-animated fallback and
+  after the animation settles.
+- ``animate_banner()`` runs a short color-cycling wave over the art via
   ``rich.live.Live``. On non-TTY or monochrome terminals it falls back to
   printing the static panel.
 """
@@ -19,7 +22,7 @@ from __future__ import annotations
 import os
 import time
 
-from rich.box import Box
+from rich import box
 from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
@@ -27,29 +30,22 @@ from rich.text import Text
 
 from . import theme
 
-# Custom box: only a left accent bar (the opencode/mistral-vibe "SplitBorder"
-# look). rich's Box expects exactly 8 lines following the same layout as the
-# built-in boxes (see rich.box.ROUNDED). We blank every glyph except the left
-# border so the panel renders a single vertical accent bar with no frame.
-_ACCENT_BAR = Box(
-    "    \n"  # top edge (4 blanks)
-    "    \n"  # top junction
-    "    \n"  # top-right corner
-    "    \n"  # right border
-    "    \n"  # bottom-right corner
-    "    \n"  # bottom edge
-    "    \n"  # bottom junction
-    "│   \n",  # left border (the only visible glyph)
-)
-
 # Hand-crafted ASCII logo. ~44 columns wide; fits comfortably in 80-col terms.
-BANNER_ART = r"""
-  ____             _         ____                 _ _
- / ___|  ___   ___| | _____ / ___| ___   ___   __| | |__
- \___ \ / _ \ / __| |/ / __| |  _ / _ \ / _ \ / _` | '_ \
-  ___) | (_) | (__|   <\__ \ |_| | (_) | (_) | (_| | |_) |
- |____/ \___/ \___|_|\_\___/\____|\___/ \___/ \__,_|_.__/
-""".strip("\n")
+# Hand-crafted "Block"-style logo with corner serifs (╗╝╔╚). ~71 columns
+# wide; fits 80-col terminals. Uses filled-block + box-drawing glyphs (U+2588,
+# U+2550..U+255E) rather than plain ASCII so the logo reads as a solid mark.
+# On terminals without these glyphs the art degrades to replacement chars but
+# the panel layout (rounded frame + meta line) is unaffected.
+BANNER_ART = "\n".join(
+    [
+        "  ███████╗ ███████╗ ███████╗██╗ ███╗   ███╗ ██████╗ ███╗   ███╗███████╗",
+        "  ██╔════╝ ██╔════╝ ██╔════╝██║ ████╗ ████║██╔═══██╗████╗ ████║██╔════╝",
+        "  ███████╗ ███████╗ █████╗  ██║ ██╔████╔██║██║   ██║██╔████╔██║███████╗",
+        "  ╚════██║ ██╔════╝ ██╔══╝  ██║ ██║╚██╔╝██║██║   ██║██║╚██╔╝██║╚════██║",
+        "  ███████║ ███████╗ ██║     ██║ ██║ ╚═╝ ██║╚██████╔╝██║ ╚═╝ ██║███████║",
+        "  ╚══════╝ ╚══════╝ ╚═╝     ╚═╝ ╚═╝     ╚═╝ ╚═════╝ ╚═╝     ╚═╝╚══════╝",
+    ]
+)
 
 
 def _meta_text(version: str, model: str, context_tokens: int, tools_count: int) -> Text:
@@ -90,7 +86,7 @@ def render_banner(
     body = Group(art_renderable, Text(""), _meta_text(version, model, context_tokens, tools_count))
     return Panel(
         body,
-        box=_ACCENT_BAR,
+        box=box.ROUNDED,
         border_style=theme.BRAND,
         padding=(0, 1),
     )
