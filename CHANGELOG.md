@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.4.1
+
+- **Runtime Version Sync**: Updated the package metadata and CLI/runtime `__version__` to `0.4.1`.
+
 ## v0.4.0
 
 - **Cleaner Agent Timeline**: Added compact UI display metadata and clearer spacing between model responses, reasoning, tool calls, tool results, warnings, and restored session history.
