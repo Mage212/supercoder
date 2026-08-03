@@ -6,6 +6,6 @@ It must NOT import from ``supercoder.agent``, ``supercoder.context``, or
 migration a 1:1 widget swap (see docs/ui-redesign-2026-08-03.md).
 """
 
-from . import render, theme
+from . import render, spinners, theme
 
-__all__ = ["render", "theme"]
+__all__ = ["render", "spinners", "theme"]
