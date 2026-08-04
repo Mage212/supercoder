@@ -61,6 +61,21 @@ class TestRepoTrustStore:
         dotted = real / ".." / "real"
         assert store.is_trusted(dotted)
 
+    def test_newline_in_path_cannot_inject_entries(self, tmp_path):
+        """A path containing a newline must not inject a second trusted entry.
+
+        The store is newline-delimited; without validation a crafted path like
+        "attacker\\n<victim>" would write two lines, silently pre-trusting the
+        victim path for future runs.
+        """
+        store = RepoTrustStore(tmp_path / "trusted")
+        victim = tmp_path / "victim"
+        victim.mkdir()
+        crafted = Path("attacker\n" + str(victim.resolve()))
+        store.trust(crafted)
+        # The victim must NOT become trusted via the injected line.
+        assert store.is_trusted(victim) is False
+
 
 # ── Sensitive-field detection / filtering ──
 

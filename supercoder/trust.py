@@ -28,7 +28,17 @@ TRUST_STORE_FILE = CONFIG_DIR / "trusted-repos"
 
 
 def _normalize(repo_path: str | Path) -> str:
-    """Return the canonical absolute string for a repo path."""
+    """Return the canonical absolute string for a repo path.
+
+    Rejects paths containing a newline: the trust store is newline-delimited,
+    so a path with an embedded ``\\n`` would otherwise inject a second entry on
+    write (e.g. ``"attacker\\n<victim>"`` pre-trusts ``<victim>``). Newlines in
+    directory names are technically possible on POSIX but never legitimate for a
+    project root.
+    """
+    raw = str(repo_path)
+    if "\n" in raw or "\r" in raw:
+        raise ValueError(f"Repository path contains a newline and cannot be trusted: {raw!r}")
     return str(Path(repo_path).resolve())
 
 
@@ -57,18 +67,35 @@ class RepoTrustStore:
 
     def is_trusted(self, repo_path: str | Path) -> bool:
         """Return True iff ``repo_path`` has been explicitly trusted."""
-        return _normalize(repo_path) in self._load()
+        try:
+            key = _normalize(repo_path)
+        except ValueError:
+            # Path contains a newline (or otherwise invalid) — never trusted.
+            return False
+        return key in self._load()
 
     def trust(self, repo_path: str | Path) -> None:
-        """Mark ``repo_path`` as trusted (idempotent)."""
+        """Mark ``repo_path`` as trusted (idempotent).
+
+        Silently ignores paths containing a newline (they cannot be stored
+        safely in the newline-delimited format and are never legitimate repo
+        roots).
+        """
+        try:
+            key = _normalize(repo_path)
+        except ValueError:
+            return
         entries = self._load()
-        entries.add(_normalize(repo_path))
+        entries.add(key)
         self._save(sorted(entries))
 
     def untrust(self, repo_path: str | Path) -> bool:
         """Remove ``repo_path`` from the trust store. Return True if it was present."""
+        try:
+            target = _normalize(repo_path)
+        except ValueError:
+            return False
         entries = self._load()
-        target = _normalize(repo_path)
         if target not in entries:
             return False
         entries.discard(target)
