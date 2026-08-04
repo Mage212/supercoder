@@ -218,8 +218,14 @@ class KeyboardListener:
                         # ESC detected - handle it
                         self.interrupt_handler.handle_esc()
 
-        except Exception:
-            pass  # Silently ignore errors in background thread
+        except Exception as exc:
+            # D-008 (fail loudly): never silently swallow errors. This thread
+            # manipulates terminal state (termios); a swallowed failure here
+            # would leave the terminal in a broken state with no diagnostic.
+            # Lazy import avoids a circular dependency at module load.
+            from .logging import get_logger
+
+            get_logger().log_error(exc)
 
         finally:
             # Restore terminal settings
