@@ -105,15 +105,33 @@ BUILTIN_PATH_DENY = [
 class PermissionPolicy:
     """Evaluate host-side permissions for commands and paths."""
 
-    def __init__(self, repo_root: Path, config: dict[str, Any] | None = None):
+    def __init__(
+        self,
+        repo_root: Path,
+        config: dict[str, Any] | None = None,
+        *,
+        allow_persistent: bool = True,
+    ):
         self.repo_root = repo_root.resolve()
         self.config = config or {}
         self.persistent_path = self.repo_root / ".supercoder" / "permissions.yaml"
-        self.persistent_config = self._load_persistent_config()
+        # C2: .supercoder/permissions.yaml lives in the repo and is therefore
+        # untrusted input. The host (main.py) resolves repo trust and only passes
+        # allow_persistent=True once the user has trusted the repo; until then a
+        # planted permissions.yaml with allow rules cannot auto-approve commands.
+        self.persistent_config = self._load_persistent_config() if allow_persistent else {}
         self.session_command_rules: dict[str, list[str]] = {"allow": [], "deny": []}
         self.command_rules = self._section(self.config, "command-exec")
         self.persistent_command_rules = self._section(self.persistent_config, "command-exec")
         self.path_rules = self._section(self.config, "paths")
+
+    def has_persistent_rules_file(self) -> bool:
+        """Return True iff a repo-local .supercoder/permissions.yaml exists.
+
+        Used by the host (main.py) to detect whether a trust prompt is needed
+        before honoring persistent command rules from a possibly-untrusted repo.
+        """
+        return self.persistent_path.exists()
 
     def check_command(self, command: str) -> PermissionDecision:
         """Return allow/ask/deny for a shell command."""

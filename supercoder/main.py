@@ -1,5 +1,7 @@
 """SuperCoder CLI entry point."""
 
+import sys
+
 import click
 from rich.console import Console
 
@@ -12,6 +14,78 @@ from .logging import init_logger
 from .tools import ALL_TOOLS
 
 console = Console()
+
+
+def _prompt_repo_trust(repo_path, *, sensitive_config: bool, has_local_perms: bool) -> bool:
+    """Ask the user whether to trust local config from ``repo_path``.
+
+    Returns True if the user trusts the repo (sensitive local config / persistent
+    command rules will be honored on this and future runs). Returns False if the
+    user declines or dismisses the prompt — safe tuning fields are still applied,
+    but endpoint/credential/permission overrides are dropped.
+    """
+    import questionary
+
+    console.print(
+        f"\n[yellow]⚠ Local configuration detected in:[/] [cyan]{repo_path}[/]\n"
+        "This repository contains files that can redirect credentials or override\n"
+        "command permissions. Review them before trusting.\n"
+    )
+    if sensitive_config:
+        console.print("  • [cyan].supercoder.yaml[/] overrides endpoint / model / permissions")
+    if has_local_perms:
+        console.print("  • [cyan].supercoder/permissions.yaml[/] adds persistent command rules")
+    console.print()
+
+    try:
+        choice = questionary.select(
+            "Trust this repository's local configuration?",
+            choices=[
+                "Trust (honor local config now and in future runs)",
+                "Do not trust (ignore sensitive overrides this session)",
+                "Show local config files",
+            ],
+            use_arrow_keys=True,
+        ).ask()
+    except (KeyboardInterrupt, EOFError):
+        return False
+
+    if choice is None:
+        return False
+    if choice.startswith("Show"):
+        _show_local_config(repo_path)
+        # Re-ask once after showing.
+        try:
+            choice = questionary.select(
+                "Trust this repository's local configuration?",
+                choices=[
+                    "Trust (honor local config now and in future runs)",
+                    "Do not trust (ignore sensitive overrides this session)",
+                ],
+                use_arrow_keys=True,
+            ).ask()
+        except (KeyboardInterrupt, EOFError):
+            return False
+        if choice is None:
+            return False
+    return choice.startswith("Trust")
+
+
+def _show_local_config(repo_path) -> None:
+    """Print the contents of local config files for review."""
+    from pathlib import Path
+
+    for rel in (".supercoder.yaml", ".supercoder/permissions.yaml"):
+        p = Path(repo_path) / rel
+        if p.exists():
+            console.print(f"\n[cyan]── {rel} ──[/]")
+            try:
+                content = p.read_text(encoding="utf-8", errors="replace")
+            except OSError as exc:
+                console.print(f"[red]  (could not read: {exc})[/]")
+                continue
+            for line in content.splitlines():
+                console.print(f"  {line}")
 
 
 @click.command()
@@ -47,8 +121,50 @@ def main(
 ):
     """SuperCoder - AI Coding Assistant for the Terminal."""
 
-    # Load config
-    config = Config.load()
+    # C1/C2: load config defensively. A local .supercoder.yaml in the cwd is
+    # untrusted (a cloned malicious repo can plant one to redirect credentials
+    # or override permissions). Load with sensitive local fields filtered out,
+    # and re-load with them honored only once the user trusts the repo.
+    from pathlib import Path
+
+    from .permissions import PermissionPolicy
+    from .trust import RepoTrustStore
+
+    repo_path = Path.cwd()
+    trust_store = RepoTrustStore()
+    # A persistent permissions file in the repo is also untrusted; detect it
+    # without loading (loading would honor the rules).
+    has_local_perms = PermissionPolicy(
+        repo_path, allow_persistent=False
+    ).has_persistent_rules_file()
+
+    config = Config.load(allow_sensitive_local=False)
+    # repo_trusted gates whether the agent may honor .supercoder/permissions.yaml.
+    repo_trusted = trust_store.is_trusted(repo_path) or not has_local_perms
+
+    if config.local_config_sensitive or has_local_perms:
+        if repo_trusted and config.local_config_sensitive:
+            # Already trusted on a previous run: honor sensitive local config.
+            config = Config.load(allow_sensitive_local=True)
+        elif sys.stdin.isatty():
+            # Interactive: ask the user whether to trust this repository.
+            if _prompt_repo_trust(
+                repo_path,
+                sensitive_config=config.local_config_sensitive,
+                has_local_perms=has_local_perms,
+            ):
+                trust_store.trust(repo_path)
+                repo_trusted = True
+                config = Config.load(allow_sensitive_local=True)
+            else:
+                repo_trusted = not has_local_perms
+        else:
+            # Non-interactive (e.g. piped input): stay safe, keep filtering.
+            repo_trusted = not has_local_perms
+            console.print(
+                "[yellow]Warning:[/] local config overrides ignored (untrusted repo, "
+                "non-interactive session). Trust it via an interactive run.\n"
+            )
     if model:  # noqa: SIM102
         # If the model name matches an existing profile, switch to it
         if not config.switch_to_model(model):
@@ -162,6 +278,7 @@ def main(
             lean=lean,
             permissions=config.permissions,
             loop_detection=config.loop_detection,
+            allow_persistent_permissions=repo_trusted,
         )
         agent.set_debug(debug)
     except Exception as e:

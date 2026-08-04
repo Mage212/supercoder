@@ -59,13 +59,16 @@ class CoderAgent:
         lean: bool = False,
         permissions: dict | None = None,
         loop_detection: dict | bool | None = None,
+        allow_persistent_permissions: bool = True,
     ):
         self.llm = llm
         self.repo_root = Path(repo_root).resolve()
         self.streaming = streaming  # False = native API (default), True = deprecated streaming
         self.lean = lean  # Shorter prompts for weak/local models
         self.output_masker = ToolOutputMasker(self.repo_root)
-        self.permission_policy = PermissionPolicy(self.repo_root, permissions)
+        self.permission_policy = PermissionPolicy(
+            self.repo_root, permissions, allow_persistent=allow_persistent_permissions
+        )
         self.loop_detection = loop_detection
         self.freshness_tracker = FileFreshnessTracker(self.repo_root)
 

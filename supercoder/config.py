@@ -198,18 +198,37 @@ class Config:
     default_model: str = "default"
     models: dict = field(default_factory=dict)
     _current_profile: str = ""
+    # C1/C2: True when a local .supercoder.yaml in the cwd carries sensitive
+    # fields (endpoint/credentials/models/permissions). The host uses this to
+    # decide whether to prompt for repo trust before honoring those fields.
+    local_config_sensitive: bool = False
 
     @classmethod
-    def load(cls) -> "Config":
+    def load(cls, allow_sensitive_local: bool = True) -> "Config":
         """Load configuration from file and environment variables.
 
         Config priority (later overrides earlier):
         1. ~/.supercoder/config.yaml (global)
         2. .supercoder.yaml (local project)
         3. Environment variables
+
+        Args:
+            allow_sensitive_local: When False, sensitive fields
+                (api_key/base_url/model/models/default_model/permissions/streaming)
+                from a local ``.supercoder.yaml`` are dropped so an untrusted
+                cloned repo cannot redirect credentials or override permissions.
+                Safe tuning fields (temperature, max_context_tokens, ...) are
+                always honored. The caller (main.py) resolves repo trust and
+                reloads with allow_sensitive_local=True once trusted.
         """
+        from .trust import (
+            filter_sensitive_config,
+            local_config_has_sensitive_fields,
+        )
+
         config_data = {}
         models_data = {}
+        local_sensitive_detected = False
 
         # Ensure global config exists (creates template on first run)
         ensure_config_file()
@@ -227,6 +246,15 @@ class Config:
 
                     with open(path) as f:
                         file_data = yaml.safe_load(f) or {}
+
+                        # C1/C2: local file (second path) may be untrusted.
+                        is_local = path != str(CONFIG_FILE)
+                        if is_local and local_config_has_sensitive_fields(file_data):
+                            local_sensitive_detected = True
+                            if not allow_sensitive_local:
+                                # Drop endpoint/credentials/models/permissions;
+                                # keep safe tuning fields only.
+                                file_data = filter_sensitive_config(file_data)
 
                         # Extract models dict
                         if "models" in file_data:
@@ -279,6 +307,7 @@ class Config:
         }
         config = cls(**valid_fields)
         config.models = models
+        config.local_config_sensitive = local_sensitive_detected
 
         # Set default model profile as active
         default_name = config_data.get("default_model", "default")
