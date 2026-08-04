@@ -109,20 +109,27 @@ class CheckpointManager:
         if not file_path.exists():
             return False  # New file, nothing to backup
 
+        # Normalize the dedup key to the resolved absolute path. Previously the
+        # membership check used ``str(file_path)`` (raw, possibly relative) while
+        # storage used ``str(file_path.absolute())``, so the same file passed
+        # once relative and once absolute bypassed the dedup and the second
+        # (possibly already-edited) copy clobbered the pristine backup.
+        key = str(file_path.resolve())
+
         # Already backed up in this checkpoint
-        if str(file_path) in self.current.files:
+        if key in self.current.files:
             return True
 
         # Hashed backup name avoids collisions (a/b.py vs a__b.py both mapped to
         # the same "__"-joined string under the old scheme). The original path is
         # preserved in current.files / metadata.json, so the filename need not be
         # human-readable.
-        path_hash = hashlib.sha256(str(file_path.absolute()).encode("utf-8")).hexdigest()[:16]
+        path_hash = hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
         backup_path = self.checkpoint_dir / self.current.id / f"{path_hash}.bak"
 
         try:
             shutil.copy2(file_path, backup_path)
-            self.current.files[str(file_path.absolute())] = str(backup_path)
+            self.current.files[key] = str(backup_path)
             return True
         except Exception:
             return False
@@ -134,7 +141,7 @@ class CheckpointManager:
             file_path: Path to the new file
         """
         if self.current:
-            path_str = str(Path(file_path).absolute())
+            path_str = str(Path(file_path).resolve())
             if path_str not in self.current.created_files:
                 self.current.created_files.append(path_str)
 

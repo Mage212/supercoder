@@ -9,6 +9,7 @@ Covers the rollback fixes from docs/code-review-2026-06-15.md:
   checkpoint keeps subsequent edits protected).
 """
 
+from pathlib import Path
 from unittest.mock import MagicMock
 
 from supercoder.agent.agent_modes import AgentMode
@@ -83,6 +84,45 @@ class TestRollbackResultContract:
 
 
 # ── B1: rollback only on actual file edits ──
+
+
+class TestBackupFileDedup:
+    def test_backup_file_dedup_relative_and_absolute(self, tmp_path, monkeypatch):
+        """backup_file must dedup on a normalized key, not mix relative/absolute.
+
+        Regression: the membership check used ``str(file_path)`` while storage
+        used ``str(file_path.absolute())``. Calling backup_file twice on the
+        same file — once relative, once absolute — missed the existing entry and
+        re-copied the (possibly already-edited) file over the pristine backup,
+        silently destroying rollback. Normalize the key in both places.
+        """
+        cm = CheckpointManager(tmp_path)
+        cm.create("dedup test")
+        src = tmp_path / "src.py"
+        src.write_text("pristine\n")
+
+        # Run from tmp_path so a relative path resolves to the same file.
+        monkeypatch.chdir(tmp_path)
+
+        # First backup with an absolute path.
+        assert cm.backup_file(src) is True
+        backup_entries_before = dict(cm.current.files)
+
+        # Simulate an edit happening to the file between the two backup calls.
+        src.write_text("modified\n")
+
+        # Second backup with a relative path (different str(), same file on disk).
+        assert cm.backup_file(Path("src.py")) is True
+
+        # No new backup entry should have been created, and the stored backup
+        # must still hold the pristine content (not the modified version).
+        assert cm.current.files == backup_entries_before, (
+            "second backup_file call created a duplicate or clobbered the key"
+        )
+        backup_path = Path(next(iter(cm.current.files.values())))
+        assert backup_path.read_text() == "pristine\n", (
+            "pristine backup was overwritten by the second (post-edit) backup_file call"
+        )
 
 
 class TestRollbackOnlyOnEdits:
