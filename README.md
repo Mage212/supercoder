@@ -1,6 +1,6 @@
 # 🤖 SuperCoder
 
-[![Version](https://img.shields.io/badge/version-0.4.2-blue.svg)](https://github.com/Mage212/supercoder)
+[![Version](https://img.shields.io/badge/version-0.4.3-blue.svg)](https://github.com/Mage212/supercoder)
 [![Python](https://img.shields.io/badge/python-3.11+-green.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -8,14 +8,19 @@
 
 ---
 
-## 🆕 What's New in v0.4.2
+## 🆕 What's New in v0.4.3
 
-- **TUI Redesign — Design System (Phase 1)**: A central theme module (`supercoder/ui/`) now holds all design tokens (brand colors, role colors, per-mode color/icon, per-tool icons, unified progress-bar config). Assistant responses render in a branded rounded panel with a model/duration header; reasoning blocks use italic magenta so they're clearly distinct from direct answers; user messages share one style for live echo and restored history.
-- **TUI Redesign — Personality (Phase 2)**: An animated ASCII startup banner (figlet "Supercoder" logo with a ~1.5s brand color-cycling wave; skip with `--no-banner`). The "Generating..." loading line animates per tick with a teal wave-gradient. Easter eggs (10% chance per turn, with Halloween/December seasonal pools) occasionally replace the generic loading label.
-- **Mode-Colored Prompt and Toolbar**: Each mode (ASK/PLAN/CODE/ACCEPT-EDITS) now has a distinct prompt glyph and color (ASK=blue `?`, PLAN=magenta `☰`, CODE=green `❯`, ACCEPT=yellow `⚡`), applied via a `PromptStyle` that refreshes on every mode change.
-- **Tool-Name Alias Resolution**: Models that call tools by names learned from other agents' toolsets (`read`, `edit`, `grep`, `bash`, `ls`, ...) now reach the correct canonical tool instead of producing an "Unknown tool" error. A shared `TOOL_ALIASES` map is applied in both native and streaming paths.
-- **Cleaner Agent Timeline**: Tool calls, tool results, reasoning, warnings, and restored session history render with clearer spacing and compact summaries so short model responses no longer disappear in terminal noise.
-- **Safer Interrupted Session Recovery**: Incomplete tool-call exchanges left by an interrupted session are repaired before API replay, preventing invalid assistant/tool history from breaking the next turn.
+This is a **security and correctness** release prompted by a full code review. It closes several attack vectors that mattered when running SuperCoder inside a **cloned or untrusted repository**, plus a number of correctness bugs.
+
+- **Per-Repository Trust Gate**: files inside a repository (`.supercoder.yaml`, `.supercoder/permissions.yaml`, `.supercoder/rules/*.md`, `.supercoder/sessions/*.json`) are now treated as **untrusted input** by default. A cloned malicious repo can no longer silently redirect your credentials (via a planted `base_url`), auto-approve arbitrary shell commands (via planted permission rules), or inject prompt instructions (via planted rules or a planted session replayed on `/continue`). On the first run in a repo that carries any of these, SuperCoder shows what would be overridden and asks whether to trust it; the answer is remembered in `~/.supercoder/trusted-repos`. Non-interactive sessions stay safe. Safe tuning fields (`temperature`, `max_context_tokens`, `loop_detection`, …) are always honored from local config.
+- **Shell-Injection Hardening (allow rules)**: the shell-control-operator detector now follows POSIX quoting — backslash is literal inside single quotes. A command like `git status'\'; rm -rf ~` previously matched a `git status*` allow rule, was reported as having no control operator, and was auto-approved while the real shell executed the payload after `;`. The detector now flags it correctly.
+- **Subprocess Secret Scrubbing**: spawned commands no longer inherit secret environment variables (`*_API_KEY`, `*_KEY`, `*_TOKEN`, `*_SECRET`, `OPENAI_*`, `SUPERCODER_*`, …), so `env` / `printenv` can no longer exfiltrate live credentials into tool output.
+- **`/undo` Path Containment**: checkpoint metadata is untrusted; `/undo` now refuses to restore or delete any path that resolves outside the repo root, blocking a planted-checkpoint attack that could overwrite `~/.zshrc` or delete arbitrary files.
+- **Secret Scrubber Coverage**: `sk-proj-…` / `sk-ant-api03-…` (OpenAI/Anthropic, since 2024), Google AI (`AIza…`), and Replicate (`r8_…`) tokens are now redacted in bare form — not only when preceded by a `key=` field name.
+- **CRLF Preservation on Edits**: all `code-edit` operations (`search_replace`, `insert_after`, `insert_before`, `replace_lines`, `append`) now preserve Windows line endings — previously a single `search_replace` was fixed while the other four silently rewrote CRLF files to LF.
+- **Other Fixes**: lean prompt is now correctly rebuilt when switching models that differ only in the `lean` flag; double-ESC abort shows the "Interrupted" panel in native mode; checkpoint backup dedup no longer clobbers the pristine backup when a path is passed both relative and absolute; loop-guard status-word classification is scoped to the first line so reading a docs file that mentions "denied" no longer trips a false-positive loop stop.
+
+See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
@@ -57,7 +62,7 @@ Modifies your codebase seamlessly using diff-based operations. Every edit is **a
 - **Operations**: `search_replace`, `insert_after`, `insert_before`, `replace_lines`, `append`, and `create`.
 
 ### 📜 Supercoder Rules (Custom rules)
-Leverage project-specific rules to guide the agent. Place `.md` files in `.supercoder/rules/` and they will be automatically loaded into the agent's context. In lean mode, rules are compacted but still included.
+Leverage project-specific rules to guide the agent. Place `.md` files in `.supercoder/rules/` and they will be automatically loaded into the agent's context. In lean mode, rules are compacted but still included. Rules are injected into the system prompt, so in an **untrusted repository** they are gated behind the [repository trust](#-repository-trust-untrusted-repos) decision.
 
 ### 🗺️ RepoMap Support
 Uses `tree-sitter` and `networkx` to generate a high-level map of your repository, helping the LLM understand relationships between files and symbols. Runtime artifacts, virtual environments, cache folders, and `.supercoder` internals are ignored to avoid prompt pollution.
@@ -79,6 +84,7 @@ Run with `--debug` to write JSONL logs to `~/.supercoder/logs/`. Logs include na
 - **Visual History**: Restored sessions render full conversation with original styling — tool calls, reasoning, markdown responses.
 - **Session Storage**: Up to 10 sessions stored in `.supercoder/sessions/`.
 - **Compact Integration**: When you `/compact`, the session file is also updated with the summary.
+- **Trust-Aware Loading**: In an **untrusted repository**, planted session files are neither listed in the picker nor loaded — a session is replayed verbatim into the model context on `/continue`, so loading is gated behind the [repository trust](#-repository-trust-untrusted-repos) decision.
 
 ---
 
@@ -313,6 +319,20 @@ Command:
 Use the arrow-key menu to choose whether to approve once, inspect the full command when it is long, allow the exact command for the current process, save a project-local allow rule, save a project-local deny rule, or cancel with `Esc`.
 
 Use `/permissions` to inspect, remove, or clear project-local command approval rules.
+
+### 🔐 Repository Trust (untrusted repos)
+SuperCoder auto-loads several files from the current repository. Because those files live **inside** the repo, a cloned or untrusted repository can plant them. To stay safe, the following are treated as **untrusted input** until you explicitly trust the repo:
+
+| File | What it can do if honored blindly |
+|---|---|
+| `.supercoder.yaml` | Redirect your credentials to an attacker-controlled `base_url` / endpoint |
+| `.supercoder/permissions.yaml` | Auto-approve arbitrary shell commands via planted allow rules |
+| `.supercoder/rules/*.md` | Inject prompt instructions ("you MUST follow …") into the system prompt |
+| `.supercoder/sessions/*.json` | Replay a crafted transcript into the model context on `/continue` |
+
+On the first run in a repo that contains any of these, SuperCoder shows exactly what would be overridden and asks whether to trust it. Trusted repos are recorded in `~/.supercoder/trusted-repos` and honored silently afterwards. Non-interactive sessions (piped input) keep the safe defaults. Safe tuning fields (`temperature`, `max_context_tokens`, `loop_detection`, `auto_compact`, …) are always honored from `.supercoder.yaml` regardless of trust.
+
+To revoke trust later, remove the repo path from `~/.supercoder/trusted-repos`.
 
 ### Interruption (ESC-ESC)
 Press **ESC twice** to abort at any time — during generation, tool calls, or streaming.
