@@ -282,6 +282,7 @@ class SuperCoderREPL:
         errors = []
         rollback_info = None
         touched_files = set()
+        was_aborted = False
 
         spinner = self.console.status(
             "[bold blue]SuperCoder is thinking...[/]",
@@ -415,6 +416,10 @@ class SuperCoderREPL:
                 elif event_type == "rollback":
                     rollback_info = content
 
+                elif event_type == "aborted":
+                    was_aborted = True
+                    spinner.stop()
+
                 elif event_type == "command_confirm":
                     spinner.stop()
                     if hasattr(self, "keyboard_listener"):
@@ -473,6 +478,15 @@ class SuperCoderREPL:
                 self._print_block(rollback_content, "PARTIAL ROLLBACK", "yellow", "⚠")
             else:
                 self._print_block(rollback_content, "Files Rolled Back", "cyan", "↩")
+
+        # Display Abort notification (mirrors the streaming handler).
+        if was_aborted:
+            self._print_block(
+                "[bold yellow]Agent execution was interrupted by user (ESC)[/]",
+                "Interrupted",
+                "yellow",
+                "⚠",
+            )
 
         for error in errors:
             self._print_block(f"[red]{error}[/]", "Error", "red", "❌")
