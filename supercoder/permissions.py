@@ -390,12 +390,27 @@ class PermissionPolicy:
         )
 
     def _has_shell_control_operator(self, command: str) -> bool:
-        """Detect shell chaining/substitution outside single quotes."""
+        """Detect shell chaining/substitution outside single quotes.
+
+        POSIX quoting rules: a backslash is a literal character inside single
+        quotes (no escape effect), and only acts as an escape outside single
+        quotes. Previously this method honored ``escaped`` globally, which made
+        ``git status'\\'; rm -rf ~`` look like the ``;`` stayed inside quotes —
+        but the real shell closes the quote at the ``'\\'`` idiom and executes
+        the payload after ``;``. We therefore only set/consume ``escaped`` when
+        not inside single quotes.
+        """
         in_single = False
         in_double = False
         escaped = False
 
         for idx, ch in enumerate(command):
+            if in_single:
+                # Inside single quotes every character (including backslash) is
+                # literal. Only an unescaped closing quote changes state.
+                if ch == "'":
+                    in_single = False
+                continue
             if escaped:
                 escaped = False
                 continue
@@ -403,12 +418,10 @@ class PermissionPolicy:
                 escaped = True
                 continue
             if ch == "'" and not in_double:
-                in_single = not in_single
+                in_single = True
                 continue
             if ch == '"' and not in_single:
                 in_double = not in_double
-                continue
-            if in_single:
                 continue
             if ch == "$" and idx + 1 < len(command) and command[idx + 1] == "(":
                 return True
