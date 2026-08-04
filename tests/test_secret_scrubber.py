@@ -38,6 +38,19 @@ class TestScrubPatterns:
         scrubbed = scrub_secrets(traceback)
         assert _OPENAI_PROJ_KEY not in scrubbed
 
+    def test_masks_google_ai_key_bare(self):
+        """R2-6: Google AI / GCP key (AIza...) in bare form (no key= context)."""
+        google_key = "AIzaSyA1234567890abcdefghijklmnopqrstuv"
+        scrubbed = scrub_secrets(f"Error: auth failed for {google_key}")
+        assert google_key not in scrubbed
+        assert MASK in scrubbed
+
+    def test_masks_replicate_token_bare(self):
+        """R2-6: Replicate API token (r8_...) in bare form."""
+        replicate_token = "r8_abcDEF1234567890ghijklmnop"
+        scrubbed = scrub_secrets(f"token rejected: {replicate_token}")
+        assert replicate_token not in scrubbed
+
     def test_masks_github_pat(self):
         scrubbed = scrub_secrets(f"token={_GITHUB_PAT}")
         assert _GITHUB_PAT not in scrubbed

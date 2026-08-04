@@ -392,8 +392,8 @@ class CodeEditTool(BaseTool):
 
         if search_lines and content_lines_for_fuzzy:
             s = difflib.SequenceMatcher(None, search_lines, content_lines_for_fuzzy)
-            _ = s.get_matching_blocks()  # Force full computation
-            # Use find_longest_match as anchor, then expand
+            # find_longest_match computes its own state; no need to call
+            # get_matching_blocks first (it is a no-op, previously misleading).
             match = s.find_longest_match(0, len(search_lines), 0, len(content_lines_for_fuzzy))
             if match.size > 0:
                 # Expand around the longest match to cover full search span
@@ -417,12 +417,11 @@ class CodeEditTool(BaseTool):
                         best_j = el
 
                 if best_ratio >= threshold and best_i >= 0:
-                    # M4: compute char offsets from keepends splitlines so CRLF
-                    # separators are counted correctly, then slice the matched
-                    # region out of the original content (preserving \r\n).
-                    ke = content.splitlines(keepends=True)
-                    start_char = sum(len(ln) for ln in ke[:best_i])
-                    end_char = start_char + sum(len(ln) for ln in ke[best_i:best_j])
+                    # M4: char offsets from the keepends splitlines (computed once
+                    # as content_lines_ke above), then slice the matched region
+                    # out of the original content (preserving \r\n).
+                    start_char = sum(len(ln) for ln in content_lines_ke[:best_i])
+                    end_char = start_char + sum(len(ln) for ln in content_lines_ke[best_i:best_j])
                     matched_text = content[start_char:end_char]
                     result.update(
                         found=True,
@@ -438,10 +437,10 @@ class CodeEditTool(BaseTool):
                 # Store best ratio for error reporting
                 result["best_ratio"] = best_ratio
                 if best_i >= 0:
-                    ke = content.splitlines(keepends=True)
-                    result["start"] = sum(len(ln) for ln in ke[:best_i])
+                    result["start"] = sum(len(ln) for ln in content_lines_ke[:best_i])
                     result["matched_text"] = content[
-                        result["start"] : result["start"] + sum(len(ln) for ln in ke[best_i:best_j])
+                        result["start"] : result["start"]
+                        + sum(len(ln) for ln in content_lines_ke[best_i:best_j])
                     ]
                     result["end"] = result["start"] + len(result["matched_text"])
 

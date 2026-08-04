@@ -37,6 +37,8 @@ _PATTERNS: list[re.Pattern[str]] = [
         r"[\"']?[A-Za-z0-9/+=]{20,}[\"']?"
     ),
     re.compile(r"xoxb-[0-9]+-[0-9]+-[A-Za-z0-9]+"),  # Slack bot token
+    re.compile(r"AIza[0-9A-Za-z_-]{30,}"),  # Google AI / GCP API key
+    re.compile(r"r8_[A-Za-z0-9]{20,}"),  # Replicate API token
     # PEM private key block (multi-line, non-greedy)
     re.compile(r"-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----"),
     # Bearer authorization header
