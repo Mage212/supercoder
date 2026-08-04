@@ -202,3 +202,51 @@ def test_loop_detection_config_loads_from_yaml(tmp_path, monkeypatch):
 
     assert config.loop_detection["enabled"] is False
     assert config.loop_detection["identical_tool_call_threshold"] == 4
+
+
+class TestResultClassificationScope:
+    """Loop-guard result classification must be scoped to the first line.
+
+    Regression: _result_class matched ``"denied" in lower`` / ``"not allowed"
+    in lower`` / etc. against the WHOLE result text, so reading a documentation
+    file whose body mentions "denied" classified the read as a denied result —
+    and reading the same file 3x tripped identical_tool_error. Classification of
+    status words must look only at the first line (which carries the actual
+    status header), not the body.
+    """
+
+    def _guard(self):
+        return AgentLoopGuard(LoopGuardConfig())
+
+    def test_denied_in_body_not_classified_as_denied(self):
+        guard = self._guard()
+        result = (
+            "File: docs/access-control.md\n"
+            "    1: # Access Control\n"
+            "    2: Requests can be denied when permissions are missing.\n"
+        )
+        cls = guard._result_class(result)
+        assert cls is None, f"body-only 'denied' must not classify as denied (got {cls!r})"
+
+    def test_denied_on_first_line_still_classified(self):
+        guard = self._guard()
+        # A denial that does not start with "error" (which would classify as
+        # error: first) must still be recognized as denied.
+        cls = guard._result_class("Permission denied for write")
+        assert cls is not None
+        assert cls.startswith("denied:")
+
+    def test_not_allowed_in_body_not_classified(self):
+        guard = self._guard()
+        result = "File: policy.md\n    1: Some operations are not allowed in production.\n"
+        assert guard._result_class(result) is None
+
+    def test_cancelled_in_body_not_classified(self):
+        guard = self._guard()
+        result = "File: changelog.md\n    1: The cancelled feature was removed in v2.\n"
+        assert guard._result_class(result) is None
+
+    def test_error_on_first_line_still_classified(self):
+        guard = self._guard()
+        cls = guard._result_class("Error executing tool: boom")
+        assert cls is not None and cls.startswith("error:")

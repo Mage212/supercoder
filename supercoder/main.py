@@ -1,5 +1,8 @@
 """SuperCoder CLI entry point."""
 
+import sys
+from dataclasses import dataclass
+
 import click
 from rich.console import Console
 
@@ -12,6 +15,146 @@ from .logging import init_logger
 from .tools import ALL_TOOLS
 
 console = Console()
+
+
+@dataclass(frozen=True)
+class TrustDecision:
+    """Outcome of resolving per-repository trust at startup.
+
+    Two independent axes (BYPASS A regression): ``config_trusted`` gates
+    sensitive .supercoder.yaml fields (endpoint/credentials/models), and
+    ``perms_trusted`` gates .supercoder/permissions.yaml persistent command
+    rules. Both default to False for an untrusted repo and flip to True only on
+    an explicit user trust grant (or a prior trust-store entry).
+    """
+
+    config_trusted: bool
+    perms_trusted: bool
+    prompt_needed: bool
+
+
+def resolve_repo_trust(
+    *,
+    trusted_in_store: bool,
+    has_local_perms: bool,
+    local_config_sensitive: bool,
+    is_tty: bool,
+    user_trusts: bool | None,
+) -> TrustDecision:
+    """Pure decision function for the startup trust resolution.
+
+    Args:
+        trusted_in_store: whether the repo is already in the trust store.
+        has_local_perms: whether .supercoder/permissions.yaml exists in the repo.
+        local_config_sensitive: whether .supercoder.yaml carries sensitive keys.
+        is_tty: whether the session is interactive (can show a prompt).
+        user_trusts: the user's answer if a prompt was shown (None before asking).
+
+    Returns:
+        TrustDecision with the two independent trust axes and whether a prompt
+        is needed to decide. The caller re-asks resolve_repo_trust with
+        user_trusts set after prompting.
+
+    Semantics:
+        - A repo is fully trusted only via the trust store or an explicit grant.
+        - When there is nothing untrusted to honor (no sensitive config, no
+          local perms, or already trusted), no prompt is needed.
+        - A prompt is shown only in interactive sessions with something at stake.
+    """
+    if trusted_in_store:
+        # Already trusted: honor everything, no prompt.
+        return TrustDecision(config_trusted=True, perms_trusted=True, prompt_needed=False)
+
+    # Untrusted repo: both axes start False.
+    something_at_stake = local_config_sensitive or has_local_perms
+    if not something_at_stake:
+        # Nothing planted that requires trust — stay safe, no prompt.
+        return TrustDecision(config_trusted=False, perms_trusted=False, prompt_needed=False)
+
+    if not is_tty:
+        # Non-interactive: cannot prompt, stay safe.
+        return TrustDecision(config_trusted=False, perms_trusted=False, prompt_needed=False)
+
+    if user_trusts is None:
+        # Interactive, something at stake, not yet answered: prompt needed.
+        return TrustDecision(config_trusted=False, perms_trusted=False, prompt_needed=True)
+
+    # User answered.
+    if user_trusts:
+        return TrustDecision(config_trusted=True, perms_trusted=True, prompt_needed=False)
+    return TrustDecision(config_trusted=False, perms_trusted=False, prompt_needed=False)
+
+
+def _prompt_repo_trust(repo_path, *, sensitive_config: bool, has_local_perms: bool) -> bool:
+    """Ask the user whether to trust local config from ``repo_path``.
+
+    Returns True if the user trusts the repo (sensitive local config / persistent
+    command rules will be honored on this and future runs). Returns False if the
+    user declines or dismisses the prompt — safe tuning fields are still applied,
+    but endpoint/credential/permission overrides are dropped.
+    """
+    import questionary
+
+    console.print(
+        f"\n[yellow]⚠ Local configuration detected in:[/] [cyan]{repo_path}[/]\n"
+        "This repository contains files that can redirect credentials or override\n"
+        "command permissions. Review them before trusting.\n"
+    )
+    if sensitive_config:
+        console.print("  • [cyan].supercoder.yaml[/] overrides endpoint / model / permissions")
+    if has_local_perms:
+        console.print("  • [cyan].supercoder/permissions.yaml[/] adds persistent command rules")
+    console.print()
+
+    try:
+        choice = questionary.select(
+            "Trust this repository's local configuration?",
+            choices=[
+                "Trust (honor local config now and in future runs)",
+                "Do not trust (ignore sensitive overrides this session)",
+                "Show local config files",
+            ],
+            use_arrow_keys=True,
+        ).ask()
+    except (KeyboardInterrupt, EOFError):
+        return False
+
+    if choice is None:
+        return False
+    if choice.startswith("Show"):
+        _show_local_config(repo_path)
+        # Re-ask once after showing.
+        try:
+            choice = questionary.select(
+                "Trust this repository's local configuration?",
+                choices=[
+                    "Trust (honor local config now and in future runs)",
+                    "Do not trust (ignore sensitive overrides this session)",
+                ],
+                use_arrow_keys=True,
+            ).ask()
+        except (KeyboardInterrupt, EOFError):
+            return False
+        if choice is None:
+            return False
+    return choice.startswith("Trust")
+
+
+def _show_local_config(repo_path) -> None:
+    """Print the contents of local config files for review."""
+    from pathlib import Path
+
+    for rel in (".supercoder.yaml", ".supercoder/permissions.yaml"):
+        p = Path(repo_path) / rel
+        if p.exists():
+            console.print(f"\n[cyan]── {rel} ──[/]")
+            try:
+                content = p.read_text(encoding="utf-8", errors="replace")
+            except OSError as exc:
+                console.print(f"[red]  (could not read: {exc})[/]")
+                continue
+            for line in content.splitlines():
+                console.print(f"  {line}")
 
 
 @click.command()
@@ -47,8 +190,67 @@ def main(
 ):
     """SuperCoder - AI Coding Assistant for the Terminal."""
 
-    # Load config
-    config = Config.load()
+    # C1/C2: load config defensively. A local .supercoder.yaml in the cwd is
+    # untrusted (a cloned malicious repo can plant one to redirect credentials
+    # or override permissions). Load with sensitive local fields filtered out,
+    # and re-load with them honored only once the user trusts the repo.
+    from pathlib import Path
+
+    from .permissions import PermissionPolicy
+    from .trust import RepoTrustStore
+
+    repo_path = Path.cwd()
+    trust_store = RepoTrustStore()
+    # A persistent permissions file in the repo is also untrusted; detect it
+    # without loading (loading would honor the rules).
+    has_local_perms = PermissionPolicy(
+        repo_path, allow_persistent=False
+    ).has_persistent_rules_file()
+
+    config = Config.load(allow_sensitive_local=False)
+
+    # Resolve per-repository trust (BYPASS A): config_trusted and perms_trusted
+    # are INDEPENDENT axes. Previously a single ``repo_trusted`` defaulted to
+    # True when no permissions.yaml existed, which silently honored a planted
+    # .supercoder.yaml endpoint redirect with no prompt. See resolve_repo_trust.
+    decision = resolve_repo_trust(
+        trusted_in_store=trust_store.is_trusted(repo_path),
+        has_local_perms=has_local_perms,
+        local_config_sensitive=config.local_config_sensitive,
+        is_tty=sys.stdin.isatty(),
+        user_trusts=None,
+    )
+    if decision.prompt_needed:
+        granted = _prompt_repo_trust(
+            repo_path,
+            sensitive_config=config.local_config_sensitive,
+            has_local_perms=has_local_perms,
+        )
+        decision = resolve_repo_trust(
+            trusted_in_store=trust_store.is_trusted(repo_path),
+            has_local_perms=has_local_perms,
+            local_config_sensitive=config.local_config_sensitive,
+            is_tty=sys.stdin.isatty(),
+            user_trusts=granted,
+        )
+        if granted:
+            trust_store.trust(repo_path)
+    elif (
+        (config.local_config_sensitive or has_local_perms)
+        and not sys.stdin.isatty()
+        and not decision.config_trusted
+    ):
+        # Non-interactive with untrusted local files: inform the user.
+        console.print(
+            "[yellow]Warning:[/] local config overrides ignored (untrusted repo, "
+            "non-interactive session). Trust it via an interactive run.\n"
+        )
+
+    # Honor sensitive local config only when the config axis is trusted.
+    if decision.config_trusted and config.local_config_sensitive:
+        config = Config.load(allow_sensitive_local=True)
+    # The permissions axis is threaded into the agent (allow_persistent_permissions).
+    perms_trusted = decision.perms_trusted
     if model:  # noqa: SIM102
         # If the model name matches an existing profile, switch to it
         if not config.switch_to_model(model):
@@ -162,6 +364,9 @@ def main(
             lean=lean,
             permissions=config.permissions,
             loop_detection=config.loop_detection,
+            allow_persistent_permissions=perms_trusted,
+            allow_project_rules=decision.config_trusted,
+            allow_session_load=decision.config_trusted,
         )
         agent.set_debug(debug)
     except Exception as e:

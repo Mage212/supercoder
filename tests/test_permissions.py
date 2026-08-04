@@ -64,6 +64,54 @@ def test_shell_chaining_cannot_be_saved_as_allow_rule(tmp_path):
         raise AssertionError("Expected ValueError for risky allow rule")
 
 
+def test_shell_control_detector_backslash_in_single_quote_bypass(tmp_path):
+    """Backslash must NOT act as an escape inside single quotes (POSIX).
+
+    Regression for M1: the detector honored ``escaped`` globally, so a command
+    like ``git status'\\'; rm -rf ~`` was parsed as keeping the ``;`` inside the
+    (already-closed-by-shell) single quotes, yielding has_shell_control=False and
+    an ALLOW decision. The real shell closes the quote at the ``\\`` idiom and
+    executes the payload after ``;``. The detector must reflect that.
+    """
+    policy = PermissionPolicy(
+        tmp_path,
+        {"command-exec": {"allow": ["git status*"]}},
+    )
+
+    # The bypass vector: matches "git status*" allow rule, but the shell executes
+    # the part after `;` because `'\''` closes+reopens the single quote.
+    bypass = "git status'\\'; rm -rf ~"
+    decision = policy.check_command(bypass)
+    assert decision.action == PermissionAction.ASK, (
+        f"backslash-in-single-quote bypass: expected ASK, got {decision.action}/{decision.source}; "
+        f"has_shell_control={policy._has_shell_control_operator(bypass)}"
+    )
+
+    # Benign single-quote usages must still ALLOW (the idiom is legitimate in shell).
+    for benign in [
+        "git status",
+        "git status -sb",
+    ]:
+        d = policy.check_command(benign)
+        assert d.action == PermissionAction.ALLOW, f"benign {benign!r} should still be ALLOW"
+
+
+def test_shell_control_detector_plain_control_operators_still_caught(tmp_path):
+    """Sanity: ordinary control operators (no quote tricks) are still detected."""
+    policy = PermissionPolicy(
+        tmp_path,
+        {"command-exec": {"allow": ["git status*"]}},
+    )
+    for cmd in [
+        "git status; rm -rf ~",
+        "git status && echo x",
+        "git status | tee out",
+        "git status$(rm -rf ~)",
+        "git status`rm -rf ~`",
+    ]:
+        assert policy._has_shell_control_operator(cmd), f"missed control op in {cmd!r}"
+
+
 def test_command_config_deny_precedes_allow(tmp_path):
     policy = PermissionPolicy(
         tmp_path,

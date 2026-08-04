@@ -225,15 +225,24 @@ class AgentLoopGuard:
         first_line = lower.splitlines()[0][:240]
         if lower.startswith("error") or lower.startswith("error executing tool"):
             return f"error:{first_line}"
-        if "unknown tool" in lower:
+        if "unknown tool" in first_line:
             return "error:unknown_tool"
-        if "permission denied" in lower or "denied" in lower or "not allowed" in lower:
+        # Scope status-word matches to the first line only. The body of a tool
+        # result (e.g. a file the model reads) may legitimately contain words
+        # like "denied" or "not allowed" in prose; matching against the whole
+        # text caused false-positive loop detection (reading the same docs file
+        # 3x tripped identical_tool_error).
+        if (
+            "permission denied" in first_line
+            or "denied" in first_line
+            or "not allowed" in first_line
+        ):
             return f"denied:{first_line}"
-        if "cancelled" in lower or "canceled" in lower:
+        if "cancelled" in first_line or "canceled" in first_line:
             return f"cancelled:{first_line}"
-        if "no changes" in lower or "no edits made" in lower:
+        if "no changes" in first_line or "no edits made" in first_line:
             return f"no_progress:{first_line}"
-        if lower.startswith("failed") or " failed" in lower:
+        if first_line.startswith("failed") or " failed" in first_line:
             return f"failed:{first_line}"
         return None
 

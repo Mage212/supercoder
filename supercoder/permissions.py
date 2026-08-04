@@ -105,15 +105,33 @@ BUILTIN_PATH_DENY = [
 class PermissionPolicy:
     """Evaluate host-side permissions for commands and paths."""
 
-    def __init__(self, repo_root: Path, config: dict[str, Any] | None = None):
+    def __init__(
+        self,
+        repo_root: Path,
+        config: dict[str, Any] | None = None,
+        *,
+        allow_persistent: bool = True,
+    ):
         self.repo_root = repo_root.resolve()
         self.config = config or {}
         self.persistent_path = self.repo_root / ".supercoder" / "permissions.yaml"
-        self.persistent_config = self._load_persistent_config()
+        # C2: .supercoder/permissions.yaml lives in the repo and is therefore
+        # untrusted input. The host (main.py) resolves repo trust and only passes
+        # allow_persistent=True once the user has trusted the repo; until then a
+        # planted permissions.yaml with allow rules cannot auto-approve commands.
+        self.persistent_config = self._load_persistent_config() if allow_persistent else {}
         self.session_command_rules: dict[str, list[str]] = {"allow": [], "deny": []}
         self.command_rules = self._section(self.config, "command-exec")
         self.persistent_command_rules = self._section(self.persistent_config, "command-exec")
         self.path_rules = self._section(self.config, "paths")
+
+    def has_persistent_rules_file(self) -> bool:
+        """Return True iff a repo-local .supercoder/permissions.yaml exists.
+
+        Used by the host (main.py) to detect whether a trust prompt is needed
+        before honoring persistent command rules from a possibly-untrusted repo.
+        """
+        return self.persistent_path.exists()
 
     def check_command(self, command: str) -> PermissionDecision:
         """Return allow/ask/deny for a shell command."""
@@ -390,12 +408,27 @@ class PermissionPolicy:
         )
 
     def _has_shell_control_operator(self, command: str) -> bool:
-        """Detect shell chaining/substitution outside single quotes."""
+        """Detect shell chaining/substitution outside single quotes.
+
+        POSIX quoting rules: a backslash is a literal character inside single
+        quotes (no escape effect), and only acts as an escape outside single
+        quotes. Previously this method honored ``escaped`` globally, which made
+        ``git status'\\'; rm -rf ~`` look like the ``;`` stayed inside quotes —
+        but the real shell closes the quote at the ``'\\'`` idiom and executes
+        the payload after ``;``. We therefore only set/consume ``escaped`` when
+        not inside single quotes.
+        """
         in_single = False
         in_double = False
         escaped = False
 
         for idx, ch in enumerate(command):
+            if in_single:
+                # Inside single quotes every character (including backslash) is
+                # literal. Only an unescaped closing quote changes state.
+                if ch == "'":
+                    in_single = False
+                continue
             if escaped:
                 escaped = False
                 continue
@@ -403,12 +436,10 @@ class PermissionPolicy:
                 escaped = True
                 continue
             if ch == "'" and not in_double:
-                in_single = not in_single
+                in_single = True
                 continue
             if ch == '"' and not in_single:
                 in_double = not in_double
-                continue
-            if in_single:
                 continue
             if ch == "$" and idx + 1 < len(command) and command[idx + 1] == "(":
                 return True

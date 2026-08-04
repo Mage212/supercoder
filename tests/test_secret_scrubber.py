@@ -4,6 +4,10 @@ from supercoder.utils.secret_scrubber import MASK, scrub_secrets
 
 _GITHUB_PAT = "ghp_" + "a" * 36
 _OPENAI_KEY = "sk-" + "b" * 36
+# Modern OpenAI/Anthropic key formats (default since 2024) embed a hyphen after
+# the provider segment, which the legacy `sk-[A-Za-z0-9]{20,}` regex did not allow.
+_OPENAI_PROJ_KEY = "sk-proj-" + "AbCdEfGhIjKlMnOpQrSt"  # bare, no key= context
+_ANTHROPIC_KEY = "sk-ant-api03-" + "AbCdEfGhIjKlMnOpQrSt"
 
 
 class TestScrubPatterns:
@@ -15,6 +19,37 @@ class TestScrubPatterns:
     def test_masks_openrouter_key(self):
         scrubbed = scrub_secrets("sk-or-v1-abcdef1234567890")
         assert "sk-or-v1-abcdef1234567890" not in scrubbed
+
+    def test_masks_openai_proj_key_bare(self):
+        """M2: sk-proj- (default OpenAI format since 2024) in prose/traceback."""
+        scrubbed = scrub_secrets(f"Error: auth failed for {_OPENAI_PROJ_KEY}")
+        assert _OPENAI_PROJ_KEY not in scrubbed
+        assert MASK in scrubbed
+
+    def test_masks_anthropic_key_bare(self):
+        """M2: sk-ant- format in prose/traceback."""
+        scrubbed = scrub_secrets(f"Exception: key {_ANTHROPIC_KEY} rejected")
+        assert _ANTHROPIC_KEY not in scrubbed
+        assert MASK in scrubbed
+
+    def test_masks_openai_proj_key_in_traceback(self):
+        """Bare key appearing in a multiline traceback (no api_key= context)."""
+        traceback = f"Traceback (most recent call last):\n  File x.py, line 1\n    {_OPENAI_PROJ_KEY}\nAuthError: invalid"
+        scrubbed = scrub_secrets(traceback)
+        assert _OPENAI_PROJ_KEY not in scrubbed
+
+    def test_masks_google_ai_key_bare(self):
+        """R2-6: Google AI / GCP key (AIza...) in bare form (no key= context)."""
+        google_key = "AIzaSyA1234567890abcdefghijklmnopqrstuv"
+        scrubbed = scrub_secrets(f"Error: auth failed for {google_key}")
+        assert google_key not in scrubbed
+        assert MASK in scrubbed
+
+    def test_masks_replicate_token_bare(self):
+        """R2-6: Replicate API token (r8_...) in bare form."""
+        replicate_token = "r8_abcDEF1234567890ghijklmnop"
+        scrubbed = scrub_secrets(f"token rejected: {replicate_token}")
+        assert replicate_token not in scrubbed
 
     def test_masks_github_pat(self):
         scrubbed = scrub_secrets(f"token={_GITHUB_PAT}")

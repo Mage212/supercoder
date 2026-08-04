@@ -86,6 +86,44 @@ class CodeEditTool(BaseTool):
         if self.freshness_tracker:
             self.freshness_tracker.mark_written(path, source=self.definition.name)
 
+    @staticmethod
+    def _read_for_edit(path: Path) -> str:
+        """Read a file for editing, preserving its exact line endings.
+
+        newline="" disables universal-newline translation so CRLF files keep
+        their \\r\\n separators. With the default read_text(), \\r\\n is translated
+        to \\n on read and the file's line endings are silently rewritten to LF
+        on the next write (M4). Path.read_text() does not accept newline=, so
+        open the file explicitly. errors="replace" mirrors the file-read tool.
+
+        All _prepare_* operations must read through this helper so CRLF
+        preservation is consistent across search_replace, insert_after,
+        insert_before, replace_lines, and append.
+        """
+        with path.open("r", encoding="utf-8", errors="replace", newline="") as f:
+            return f.read()
+
+    @staticmethod
+    def _line_separator(content: str) -> str:
+        """Return the dominant line separator of ``content`` (\\r\\n or \\n).
+
+        Used by _join_lines so insert/replace operations that reconstruct a file
+        from splitlines() preserve the original CRLF endings instead of
+        flattening to LF (M4 scope).
+        """
+        return "\r\n" if "\r\n" in content else "\n"
+
+    @staticmethod
+    def _join_lines(lines: list[str], original_content: str) -> str:
+        """Join ``lines`` using the line separator of ``original_content``.
+
+        The insert/replace operations split the file into lines (dropping the
+        separator), modify the list, then rejoin. Rejoining with a hard-coded
+        "\\n" rewrites CRLF files to LF. This preserves the original separator.
+        """
+        sep = CodeEditTool._line_separator(original_content)
+        return sep.join(lines)
+
     @property
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
@@ -313,20 +351,25 @@ class CodeEditTool(BaseTool):
             return result
 
         # 2. Whitespace-normalized match (line-based)
+        # Use splitlines(keepends=True) so the separator (\n OR \r\n) is kept in
+        # each entry; char offsets are then sum(len(ln)) without a +1, which is
+        # correct for both LF and CRLF files. The previous code used plain
+        # splitlines() and added +1 per line, which dropped the \r of \r\n and
+        # corrupted CRLF files on whitespace/fuzzy matches (M4).
         search_lines_norm = self._normalize_whitespace(search).splitlines()
-        content_lines = content.splitlines()
-        content_norm_lines = [re.sub(r"\s+", " ", line.strip()) for line in content_lines]
+        content_lines_ke = content.splitlines(keepends=True)
+        content_norm_lines = [re.sub(r"\s+", " ", line.strip()) for line in content_lines_ke]
 
         if search_lines_norm and content_norm_lines:
             norm_match_len = len(search_lines_norm)
             for i in range(len(content_norm_lines) - norm_match_len + 1):
                 if content_norm_lines[i : i + norm_match_len] == search_lines_norm:
-                    start_char = sum(len(ln) + 1 for ln in content_lines[:i])
-                    end_char = (
-                        start_char
-                        + sum(len(ln) + 1 for ln in content_lines[i : i + norm_match_len])
-                        - 1
+                    start_char = sum(len(ln) for ln in content_lines_ke[:i])
+                    end_char = start_char + sum(
+                        len(ln) for ln in content_lines_ke[i : i + norm_match_len]
                     )
+                    # Slice the matched region out of the ORIGINAL content so the
+                    # exact separators (\r\n) are preserved in matched_text.
                     matched_text = content[start_char:end_char]
                     ratio = difflib.SequenceMatcher(None, search, matched_text).ratio()
                     result.update(
@@ -349,8 +392,8 @@ class CodeEditTool(BaseTool):
 
         if search_lines and content_lines_for_fuzzy:
             s = difflib.SequenceMatcher(None, search_lines, content_lines_for_fuzzy)
-            _ = s.get_matching_blocks()  # Force full computation
-            # Use find_longest_match as anchor, then expand
+            # find_longest_match computes its own state; no need to call
+            # get_matching_blocks first (it is a no-op, previously misleading).
             match = s.find_longest_match(0, len(search_lines), 0, len(content_lines_for_fuzzy))
             if match.size > 0:
                 # Expand around the longest match to cover full search span
@@ -374,9 +417,12 @@ class CodeEditTool(BaseTool):
                         best_j = el
 
                 if best_ratio >= threshold and best_i >= 0:
-                    matched_text = "\n".join(content_lines_for_fuzzy[best_i:best_j])
-                    start_char = sum(len(ln) + 1 for ln in content_lines_for_fuzzy[:best_i])
-                    end_char = start_char + len(matched_text)
+                    # M4: char offsets from the keepends splitlines (computed once
+                    # as content_lines_ke above), then slice the matched region
+                    # out of the original content (preserving \r\n).
+                    start_char = sum(len(ln) for ln in content_lines_ke[:best_i])
+                    end_char = start_char + sum(len(ln) for ln in content_lines_ke[best_i:best_j])
+                    matched_text = content[start_char:end_char]
                     result.update(
                         found=True,
                         match_type="fuzzy",
@@ -391,8 +437,11 @@ class CodeEditTool(BaseTool):
                 # Store best ratio for error reporting
                 result["best_ratio"] = best_ratio
                 if best_i >= 0:
-                    result["matched_text"] = "\n".join(content_lines_for_fuzzy[best_i:best_j])
-                    result["start"] = sum(len(ln) + 1 for ln in content_lines_for_fuzzy[:best_i])
+                    result["start"] = sum(len(ln) for ln in content_lines_ke[:best_i])
+                    result["matched_text"] = content[
+                        result["start"] : result["start"]
+                        + sum(len(ln) for ln in content_lines_ke[best_i:best_j])
+                    ]
                     result["end"] = result["start"] + len(result["matched_text"])
 
         return result
@@ -475,7 +524,8 @@ class CodeEditTool(BaseTool):
         if not search:
             return None, "Error: search string is required"
 
-        content_before = path.read_text(encoding="utf-8")
+        # newline="" preserves CRLF separators (see _read_for_edit, M4).
+        content_before = self._read_for_edit(path)
         match = self._find_best_match(content_before, search)
 
         if not match["found"]:
@@ -521,7 +571,7 @@ class CodeEditTool(BaseTool):
         if not after:
             return None, "Error: 'after' string is required"
 
-        content_before = path.read_text(encoding="utf-8")
+        content_before = self._read_for_edit(path)
         had_trailing_newline = content_before.endswith("\n")
         lines = content_before.splitlines()
 
@@ -557,9 +607,9 @@ class CodeEditTool(BaseTool):
         i = matching[0]
         new_lines = content.splitlines()
         lines = lines[: i + 1] + new_lines + lines[i + 1 :]
-        content_after = "\n".join(lines)
+        content_after = self._join_lines(lines, content_before)
         if had_trailing_newline:
-            content_after += "\n"
+            content_after += self._line_separator(content_before)
 
         return PreparedEdit(
             path=path,
@@ -576,7 +626,7 @@ class CodeEditTool(BaseTool):
         if not before:
             return None, "Error: 'before' string is required"
 
-        content_before = path.read_text(encoding="utf-8")
+        content_before = self._read_for_edit(path)
         had_trailing_newline = content_before.endswith("\n")
         lines = content_before.splitlines()
 
@@ -612,9 +662,9 @@ class CodeEditTool(BaseTool):
         i = matching[0]
         new_lines = content.splitlines()
         lines = lines[:i] + new_lines + lines[i:]
-        content_after = "\n".join(lines)
+        content_after = self._join_lines(lines, content_before)
         if had_trailing_newline:
-            content_after += "\n"
+            content_after += self._line_separator(content_before)
 
         return PreparedEdit(
             path=path,
@@ -628,7 +678,7 @@ class CodeEditTool(BaseTool):
         self, path: Path, start: int, end: int, content: str
     ) -> tuple[PreparedEdit | None, str]:
         """Prepare a replace-lines edit without writing it."""
-        content_before = path.read_text(encoding="utf-8")
+        content_before = self._read_for_edit(path)
         had_trailing_newline = content_before.endswith("\n")
         lines = content_before.splitlines()
         total = len(lines)
@@ -640,9 +690,9 @@ class CodeEditTool(BaseTool):
 
         new_lines = content.splitlines() if content else []
         lines = lines[: start - 1] + new_lines + lines[end:]
-        content_after = "\n".join(lines)
+        content_after = self._join_lines(lines, content_before)
         if had_trailing_newline:
-            content_after += "\n"
+            content_after += self._line_separator(content_before)
 
         return PreparedEdit(
             path=path,
@@ -654,7 +704,7 @@ class CodeEditTool(BaseTool):
 
     def _prepare_append(self, path: Path, content: str) -> tuple[PreparedEdit | None, str]:
         """Prepare an append edit without writing it."""
-        content_before = path.read_text(encoding="utf-8")
+        content_before = self._read_for_edit(path)
         if not content_before.endswith("\n"):
             content_before_normalized = content_before + "\n"
         else:

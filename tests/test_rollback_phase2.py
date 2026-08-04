@@ -9,6 +9,8 @@ Covers the rollback fixes from docs/code-review-2026-06-15.md:
   checkpoint keeps subsequent edits protected).
 """
 
+import json
+from pathlib import Path
 from unittest.mock import MagicMock
 
 from supercoder.agent.agent_modes import AgentMode
@@ -83,6 +85,134 @@ class TestRollbackResultContract:
 
 
 # ── B1: rollback only on actual file edits ──
+
+
+class TestBackupFileDedup:
+    def test_backup_file_dedup_relative_and_absolute(self, tmp_path, monkeypatch):
+        """backup_file must dedup on a normalized key, not mix relative/absolute.
+
+        Regression: the membership check used ``str(file_path)`` while storage
+        used ``str(file_path.absolute())``. Calling backup_file twice on the
+        same file — once relative, once absolute — missed the existing entry and
+        re-copied the (possibly already-edited) file over the pristine backup,
+        silently destroying rollback. Normalize the key in both places.
+        """
+        cm = CheckpointManager(tmp_path)
+        cm.create("dedup test")
+        src = tmp_path / "src.py"
+        src.write_text("pristine\n")
+
+        # Run from tmp_path so a relative path resolves to the same file.
+        monkeypatch.chdir(tmp_path)
+
+        # First backup with an absolute path.
+        assert cm.backup_file(src) is True
+        backup_entries_before = dict(cm.current.files)
+
+        # Simulate an edit happening to the file between the two backup calls.
+        src.write_text("modified\n")
+
+        # Second backup with a relative path (different str(), same file on disk).
+        assert cm.backup_file(Path("src.py")) is True
+
+        # No new backup entry should have been created, and the stored backup
+        # must still hold the pristine content (not the modified version).
+        assert cm.current.files == backup_entries_before, (
+            "second backup_file call created a duplicate or clobbered the key"
+        )
+        backup_path = Path(next(iter(cm.current.files.values())))
+        assert backup_path.read_text() == "pristine\n", (
+            "pristine backup was overwritten by the second (post-edit) backup_file call"
+        )
+
+
+class TestUndoPathContainment:
+    """M5: /undo must never restore or delete paths outside the repo root.
+
+    Checkpoint metadata (``.supercoder/checkpoints/<id>/metadata.json``) lives
+    inside the repo and is therefore untrusted input — a cloned malicious repo
+    can plant a checkpoint whose ``files``/``created_files`` point anywhere on
+    the host. Before this fix, ``_restore_files`` copied backup→original and
+    unlinked created_files with no containment check, so a planted checkpoint
+    could overwrite ``~/.zshrc`` or delete arbitrary files on the first ``/undo``.
+    """
+
+    def test_undo_rejects_files_outside_repo(self, tmp_path):
+        # repo is a subdir; victim lives OUTSIDE it (as a sibling).
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        cm = CheckpointManager(repo)
+        cp_id = "20240101_000000_000000_planted"
+        cp_dir = repo / ".supercoder" / "checkpoints" / cp_id
+        cp_dir.mkdir(parents=True)
+
+        # Victim file OUTSIDE the repo.
+        victim = tmp_path / "victim.txt"
+        victim.write_text("ORIGINAL INNOCENT CONTENT")
+
+        # Planted backup with malicious content.
+        bak = cp_dir / "deadbeef.bak"
+        bak.write_text("PWNED BY PLANTED CHECKPOINT")
+
+        meta = {
+            "id": cp_id,
+            "timestamp": "2024-01-01T00:00:00",
+            "description": "planted",
+            "files": {str(victim): str(bak)},
+            "created_files": [],
+        }
+        (cp_dir / "metadata.json").write_text(json.dumps(meta))
+
+        result = cm.undo_by_id(cp_id)
+
+        # The victim file must be untouched and reported as failed (containment).
+        assert victim.read_text() == "ORIGINAL INNOCENT CONTENT"
+        assert any(str(victim) in p for p in result.failed), (
+            "out-of-repo restore target should be reported as failed, not applied"
+        )
+
+    def test_undo_rejects_created_files_outside_repo(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        cm = CheckpointManager(repo)
+        cp_id = "20240101_000000_000000_planted2"
+        cp_dir = repo / ".supercoder" / "checkpoints" / cp_id
+        cp_dir.mkdir(parents=True)
+
+        # A file OUTSIDE the repo that the planted checkpoint claims to have "created".
+        outside = tmp_path / "outside_created.txt"
+        outside.write_text("should not be deleted")
+
+        meta = {
+            "id": cp_id,
+            "timestamp": "2024-01-01T00:00:00",
+            "description": "planted",
+            "files": {},
+            "created_files": [str(outside)],
+        }
+        (cp_dir / "metadata.json").write_text(json.dumps(meta))
+
+        result = cm.undo_by_id(cp_id)
+
+        assert outside.exists(), "out-of-repo created_file must not be deleted"
+        assert any(str(outside) in p for p in result.failed)
+
+    def test_undo_still_restores_in_repo_files(self, tmp_path):
+        """Containment check must not break the legitimate in-repo undo path."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "target.py").write_text("original\n")
+        cm = CheckpointManager(repo)
+        cm.create("edit")
+        assert cm.backup_file(repo / "target.py") is True
+        (repo / "target.py").write_text("edited\n")
+        cm.commit()
+
+        checkpoints = cm.list_checkpoints()
+        result = cm.undo_by_id(checkpoints[0].id)
+
+        assert any("target.py" in p for p in result.restored)
+        assert (repo / "target.py").read_text() == "original\n"
 
 
 class TestRollbackOnlyOnEdits:

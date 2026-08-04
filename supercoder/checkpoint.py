@@ -109,20 +109,27 @@ class CheckpointManager:
         if not file_path.exists():
             return False  # New file, nothing to backup
 
+        # Normalize the dedup key to the resolved absolute path. Previously the
+        # membership check used ``str(file_path)`` (raw, possibly relative) while
+        # storage used ``str(file_path.absolute())``, so the same file passed
+        # once relative and once absolute bypassed the dedup and the second
+        # (possibly already-edited) copy clobbered the pristine backup.
+        key = str(file_path.resolve())
+
         # Already backed up in this checkpoint
-        if str(file_path) in self.current.files:
+        if key in self.current.files:
             return True
 
         # Hashed backup name avoids collisions (a/b.py vs a__b.py both mapped to
         # the same "__"-joined string under the old scheme). The original path is
         # preserved in current.files / metadata.json, so the filename need not be
         # human-readable.
-        path_hash = hashlib.sha256(str(file_path.absolute()).encode("utf-8")).hexdigest()[:16]
+        path_hash = hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
         backup_path = self.checkpoint_dir / self.current.id / f"{path_hash}.bak"
 
         try:
             shutil.copy2(file_path, backup_path)
-            self.current.files[str(file_path.absolute())] = str(backup_path)
+            self.current.files[key] = str(backup_path)
             return True
         except Exception:
             return False
@@ -134,7 +141,7 @@ class CheckpointManager:
             file_path: Path to the new file
         """
         if self.current:
-            path_str = str(Path(file_path).absolute())
+            path_str = str(Path(file_path).resolve())
             if path_str not in self.current.created_files:
                 self.current.created_files.append(path_str)
 
@@ -255,6 +262,14 @@ class CheckpointManager:
             if not backup_path.exists():
                 failed.append(original)
                 continue
+            # M5: checkpoint metadata lives in the repo and is untrusted input.
+            # A planted checkpoint could point ``original`` at a path outside the
+            # repo (e.g. ``~/.zshrc``). Refuse to touch anything that does not
+            # resolve inside repo_root — same containment check as
+            # tool_utils.resolve_within_root and the PLAN-mode edit gate.
+            if not self._is_within_repo(original):
+                failed.append(original)
+                continue
             try:
                 # Ensure parent directory exists (in case it was deleted)
                 Path(original).parent.mkdir(parents=True, exist_ok=True)
@@ -268,6 +283,10 @@ class CheckpointManager:
 
         # Delete created files
         for created_path in checkpoint.created_files:
+            # M5: same containment check — never unlink paths outside the repo.
+            if not self._is_within_repo(created_path):
+                failed.append(created_path)
+                continue
             try:
                 p = Path(created_path)
                 if p.exists():
@@ -280,6 +299,18 @@ class CheckpointManager:
                 get_logger().log_error(exc)
 
         return restored, failed
+
+    def _is_within_repo(self, path: str | Path) -> bool:
+        """Return True iff ``path`` resolves inside repo_root.
+
+        Uses ``resolve()`` so symlinks and ``..`` components are collapsed
+        before the containment check, matching resolve_within_root semantics.
+        """
+        try:
+            Path(path).resolve().relative_to(self.repo_root.resolve())
+        except (ValueError, OSError):
+            return False
+        return True
 
     def _save_metadata(self, checkpoint: Checkpoint) -> None:
         """Save checkpoint metadata to disk."""

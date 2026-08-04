@@ -59,13 +59,18 @@ class CoderAgent:
         lean: bool = False,
         permissions: dict | None = None,
         loop_detection: dict | bool | None = None,
+        allow_persistent_permissions: bool = True,
+        allow_project_rules: bool = True,
+        allow_session_load: bool = True,
     ):
         self.llm = llm
         self.repo_root = Path(repo_root).resolve()
         self.streaming = streaming  # False = native API (default), True = deprecated streaming
         self.lean = lean  # Shorter prompts for weak/local models
         self.output_masker = ToolOutputMasker(self.repo_root)
-        self.permission_policy = PermissionPolicy(self.repo_root, permissions)
+        self.permission_policy = PermissionPolicy(
+            self.repo_root, permissions, allow_persistent=allow_persistent_permissions
+        )
         self.loop_detection = loop_detection
         self.freshness_tracker = FileFreshnessTracker(self.repo_root)
 
@@ -98,10 +103,14 @@ class CoderAgent:
         # RepoMap setup
         self.repo_map = RepoMap(self.repo_root) if use_repo_map else None
 
-        # Supercoder Rules setup
+        # Supercoder Rules setup. .supercoder/rules/*.md is injected into the
+        # system prompt as mandatory, override-priority instructions — a prompt-
+        # injection vector from a cloned malicious repo. Gate loading on the
+        # caller's trust decision (allow_project_rules); the loader is still
+        # constructed so ensure_rules_dir() works for trusted sessions.
         self.rules_loader = SupercoderRulesLoader(repo_root)
         self.rules_loader.ensure_rules_dir()  # Create .supercoder/rules/ if missing
-        project_rules = self.rules_loader.get_rules_for_prompt()
+        project_rules = self.rules_loader.get_rules_for_prompt() if allow_project_rules else ""
 
         # Store tool calling type for prompt generation
         self.tool_calling_type = tool_calling_type
@@ -132,8 +141,10 @@ class CoderAgent:
         # Multi-format tool call parser (used only in deprecated streaming mode)
         self.tool_parser = ToolCallParser(debug=False)
 
-        # Session management
-        self.session_manager = SessionManager(self.repo_root)
+        # Session management. allow_session_load gates deserialization of
+        # repo-local session JSON (R2-7): a planted .supercoder/sessions/*.json
+        # is injected verbatim into the model context on /continue.
+        self.session_manager = SessionManager(self.repo_root, allow_loading=allow_session_load)
         self.current_session: ChatSession | None = None
 
         self.debug = False
@@ -511,20 +522,23 @@ class CoderAgent:
         self._mode_policy_needs_announcement = True
 
     def set_tool_calling_type(self, tool_calling_type: str) -> None:
-        """Update tool calling type and rebuild system prompt.
+        """Update tool calling type and rebuild the system prompt.
 
-        Call this when switching to a model with a different tool_calling_type.
+        Always rebuilds. The caller (repl.cmd_model) updates ``self.lean`` (and
+        possibly tool_calling_type) before calling this, and a lean-only change
+        between two profiles sharing the same tool_calling_type must still swap
+        prompts — otherwise the lean toggle silently keeps the old prompt and the
+        75% token savings for weak/local models are lost.
         """
-        if tool_calling_type != self.tool_calling_type:
-            self.tool_calling_type = tool_calling_type
-            self.base_system_prompt = build_system_prompt(
-                self._tools_list,
-                rules=self._project_rules,
-                tool_calling_type=self.tool_calling_type,
-                native_tools=not self.streaming,
-                lean=self.lean,
-            )
-            self._update_system_prompt()
+        self.tool_calling_type = tool_calling_type
+        self.base_system_prompt = build_system_prompt(
+            self._tools_list,
+            rules=self._project_rules,
+            tool_calling_type=self.tool_calling_type,
+            native_tools=not self.streaming,
+            lean=self.lean,
+        )
+        self._update_system_prompt()
 
     def _check_mode_tool(self, tool_name: str, arguments: dict | None) -> ModeToolDecision:
         """Return the host-side mode decision for a requested tool call."""
