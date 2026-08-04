@@ -313,20 +313,25 @@ class CodeEditTool(BaseTool):
             return result
 
         # 2. Whitespace-normalized match (line-based)
+        # Use splitlines(keepends=True) so the separator (\n OR \r\n) is kept in
+        # each entry; char offsets are then sum(len(ln)) without a +1, which is
+        # correct for both LF and CRLF files. The previous code used plain
+        # splitlines() and added +1 per line, which dropped the \r of \r\n and
+        # corrupted CRLF files on whitespace/fuzzy matches (M4).
         search_lines_norm = self._normalize_whitespace(search).splitlines()
-        content_lines = content.splitlines()
-        content_norm_lines = [re.sub(r"\s+", " ", line.strip()) for line in content_lines]
+        content_lines_ke = content.splitlines(keepends=True)
+        content_norm_lines = [re.sub(r"\s+", " ", line.strip()) for line in content_lines_ke]
 
         if search_lines_norm and content_norm_lines:
             norm_match_len = len(search_lines_norm)
             for i in range(len(content_norm_lines) - norm_match_len + 1):
                 if content_norm_lines[i : i + norm_match_len] == search_lines_norm:
-                    start_char = sum(len(ln) + 1 for ln in content_lines[:i])
-                    end_char = (
-                        start_char
-                        + sum(len(ln) + 1 for ln in content_lines[i : i + norm_match_len])
-                        - 1
+                    start_char = sum(len(ln) for ln in content_lines_ke[:i])
+                    end_char = start_char + sum(
+                        len(ln) for ln in content_lines_ke[i : i + norm_match_len]
                     )
+                    # Slice the matched region out of the ORIGINAL content so the
+                    # exact separators (\r\n) are preserved in matched_text.
                     matched_text = content[start_char:end_char]
                     ratio = difflib.SequenceMatcher(None, search, matched_text).ratio()
                     result.update(
@@ -374,9 +379,13 @@ class CodeEditTool(BaseTool):
                         best_j = el
 
                 if best_ratio >= threshold and best_i >= 0:
-                    matched_text = "\n".join(content_lines_for_fuzzy[best_i:best_j])
-                    start_char = sum(len(ln) + 1 for ln in content_lines_for_fuzzy[:best_i])
-                    end_char = start_char + len(matched_text)
+                    # M4: compute char offsets from keepends splitlines so CRLF
+                    # separators are counted correctly, then slice the matched
+                    # region out of the original content (preserving \r\n).
+                    ke = content.splitlines(keepends=True)
+                    start_char = sum(len(ln) for ln in ke[:best_i])
+                    end_char = start_char + sum(len(ln) for ln in ke[best_i:best_j])
+                    matched_text = content[start_char:end_char]
                     result.update(
                         found=True,
                         match_type="fuzzy",
@@ -391,8 +400,11 @@ class CodeEditTool(BaseTool):
                 # Store best ratio for error reporting
                 result["best_ratio"] = best_ratio
                 if best_i >= 0:
-                    result["matched_text"] = "\n".join(content_lines_for_fuzzy[best_i:best_j])
-                    result["start"] = sum(len(ln) + 1 for ln in content_lines_for_fuzzy[:best_i])
+                    ke = content.splitlines(keepends=True)
+                    result["start"] = sum(len(ln) for ln in ke[:best_i])
+                    result["matched_text"] = content[
+                        result["start"] : result["start"] + sum(len(ln) for ln in ke[best_i:best_j])
+                    ]
                     result["end"] = result["start"] + len(result["matched_text"])
 
         return result
@@ -475,7 +487,13 @@ class CodeEditTool(BaseTool):
         if not search:
             return None, "Error: search string is required"
 
-        content_before = path.read_text(encoding="utf-8")
+        # newline="" disables universal-newline translation so CRLF files keep
+        # their \r\n separators. With the default read_text(), \r\n is translated
+        # to \n on read and the file's line endings are silently rewritten to LF
+        # on the next write (M4). Path.read_text() does not accept newline=, so
+        # open the file explicitly. errors="replace" mirrors the file-read tool.
+        with path.open("r", encoding="utf-8", errors="replace", newline="") as f:
+            content_before = f.read()
         match = self._find_best_match(content_before, search)
 
         if not match["found"]:
