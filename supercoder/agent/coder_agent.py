@@ -61,6 +61,7 @@ class CoderAgent:
         loop_detection: dict | bool | None = None,
         allow_persistent_permissions: bool = True,
         allow_project_rules: bool = True,
+        allow_session_load: bool = True,
     ):
         self.llm = llm
         self.repo_root = Path(repo_root).resolve()
@@ -140,8 +141,10 @@ class CoderAgent:
         # Multi-format tool call parser (used only in deprecated streaming mode)
         self.tool_parser = ToolCallParser(debug=False)
 
-        # Session management
-        self.session_manager = SessionManager(self.repo_root)
+        # Session management. allow_session_load gates deserialization of
+        # repo-local session JSON (R2-7): a planted .supercoder/sessions/*.json
+        # is injected verbatim into the model context on /continue.
+        self.session_manager = SessionManager(self.repo_root, allow_loading=allow_session_load)
         self.current_session: ChatSession | None = None
 
         self.debug = False

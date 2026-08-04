@@ -366,6 +366,7 @@ def main(
             loop_detection=config.loop_detection,
             allow_persistent_permissions=perms_trusted,
             allow_project_rules=decision.config_trusted,
+            allow_session_load=decision.config_trusted,
         )
         agent.set_debug(debug)
     except Exception as e:

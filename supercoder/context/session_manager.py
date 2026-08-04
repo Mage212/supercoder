@@ -94,9 +94,21 @@ class SessionManager:
     MAX_SESSIONS = 10
     SESSIONS_DIR = "sessions"
 
-    def __init__(self, project_root: Path):
+    def __init__(self, project_root: Path, *, allow_loading: bool = True):
+        """Initialize the session manager.
+
+        Args:
+            project_root: Repository root (sessions live under .supercoder/sessions).
+            allow_loading: When False, ``list_sessions`` returns [] and
+                ``load_session`` returns None. This gates DESERIALIZATION of
+                repo-local session JSON, which is injected verbatim into the
+                model context on /continue — a prompt-injection vector from a
+                cloned malicious repo (R2-7). Saving the current session still
+                works so a trusted run is never lost.
+        """
         self.project_root = Path(project_root)
         self.sessions_dir = self.project_root / ".supercoder" / self.SESSIONS_DIR
+        self.allow_loading = allow_loading
         self._ensure_sessions_dir()
 
     def _ensure_sessions_dir(self) -> None:
@@ -169,6 +181,10 @@ class SessionManager:
 
     def load_session(self, session_id: str) -> ChatSession | None:
         """Load session from JSON file."""
+        # R2-7: a planted session JSON is injected verbatim into the model
+        # context on /continue. Refuse to load from an untrusted repo.
+        if not self.allow_loading:
+            return None
         session_path = self._get_session_path(session_id)
 
         if not session_path.exists():
@@ -188,6 +204,10 @@ class SessionManager:
         Returns list of dicts with id, title, last_modified, is_compacted.
         Sorted by last_modified (newest first).
         """
+        # R2-7: do not surface sessions from an untrusted repo (prompt-injection
+        # vector via /continue replay).
+        if not self.allow_loading:
+            return []
         sessions = []
 
         for session_file in self.sessions_dir.glob("*.json"):
