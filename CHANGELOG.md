@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Security
+
+- **Per-repository trust gate for local config (C1/C2)**: `.supercoder.yaml` and `.supercoder/permissions.yaml` live inside the repo and are therefore untrusted input — a cloned malicious repo could redirect credentials (endpoint override) or auto-approve arbitrary commands (persistent allow rules). SuperCoder now loads these defensively (sensitive fields filtered out) and prompts once per repo before honoring them; the decision is remembered in `~/.supercoder/trusted-repos`. Non-interactive sessions stay safe. New `supercoder/trust.py` module.
+- **Shell-injection via allow rules (M1)**: the shell-control-operator detector honored backslash escaping globally, but POSIX treats backslash as literal inside single quotes. A command like `git status'\'; rm -rf ~` matched a `git status*` allow rule, was reported as having no control operator, and was auto-approved — while the real shell executed the payload after `;`. The detector now only honors `escaped` outside single quotes.
+- **Subprocess env sanitization (M3)**: spawned commands no longer inherit secret env vars (`*_API_KEY`, `*_TOKEN`, `OPENAI_*`, `SUPERCODER_*`, etc.), so `env`/`printenv` can no longer exfiltrate live credentials into tool output.
+- **/undo path containment (M5)**: checkpoint metadata is untrusted; `/undo` now refuses to restore or delete any path that resolves outside the repo root, blocking a planted-checkpoint attack that could overwrite `~/.zshrc` or delete arbitrary files.
+- **Secret scrubber covers modern key formats (M2)**: `sk-proj-…` (OpenAI, since 2024) and `sk-ant-api03-…` (Anthropic) are now redacted in bare form (tracebacks, command output), not only when preceded by a `key=` field name.
+
+### Correctness
+
+- **CRLF files preserved on edits (M4)**: `code-edit` read files with universal-newline translation (silently rewriting `\r\n` → `\n`) and computed whitespace/fuzzy match offsets with a `+1`-per-line heuristic that dropped the `\r`. Both are fixed (`open(newline="")` + `splitlines(keepends=True)`), so CRLF files keep their line endings and adjacent lines are no longer corrupted on non-exact matches.
+- **Lean prompt rebuild on model switch**: switching via `/model` between two profiles sharing the same `tool_calling_type` but differing in `lean` now rebuilds the system prompt (previously the lean flip was silently ignored, losing the ~75% token savings for weak/local models).
+- **Interrupted panel in native mode**: double-ESC abort now shows the "Interrupted" panel in the default native path, matching the (deprecated) streaming path.
+- **Checkpoint backup dedup**: `backup_file` now normalizes its dedup key to the resolved absolute path, so the same file passed once relative and once absolute no longer clobbers the pristine backup and breaks rollback.
+- **Loop-guard classification scoped to first line**: status-word matches ("denied"/"not allowed"/"cancelled"/"failed") in tool results now look only at the first line, so reading a docs file whose body mentions "denied" no longer triggers a false-positive loop stop.
+- **Abort listener logs errors**: the background keyboard listener no longer swallows exceptions silently (D-008); termios/select errors are now recorded for debugging.
+
 ## v0.4.2
 
 - **TUI Phase 2 — Personality**: Animated ASCII startup banner (hand-crafted logo with a ~1.5s brand color-cycling wave; `--no-banner` skips it, non-TTY/dumb terminals get a static panel). Wave-gradient loading text: the "Generating..." line now animates per tick with a teal ramp (`BRAND_RAMP`) and degrades to a solid color on 16-color terminals. Braille spinner frames and per-phase config centralized in `supercoder/ui/spinners.py`. Easter eggs (10% chance per turn, with Halloween/December seasonal pools) replace the generic loading label for a turn.
