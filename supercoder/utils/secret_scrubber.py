@@ -21,7 +21,11 @@ MASK = "[REDACTED]"
 # Compiled once at module load. Order matters only for readability — every
 # pattern is applied independently via re.sub on the whole string.
 _PATTERNS: list[re.Pattern[str]] = [
-    re.compile(r"sk-[A-Za-z0-9]{20,}"),  # OpenAI (>= 20 chars after sk-)
+    # OpenAI / Anthropic keys. Covers the legacy `sk-<alnum>` shape and the
+    # modern `sk-proj-...` / `sk-ant-api03-...` formats (default since 2024),
+    # which embed hyphens and underscores after the provider segment. The tail
+    # still requires >= 20 chars so short identifiers like `sk-learn` are safe.
+    re.compile(r"sk-(?:proj-|ant-)?[A-Za-z0-9_-]{20,}"),
     re.compile(r"sk-or-v1-[A-Za-z0-9-]+"),  # OpenRouter
     re.compile(r"ghp_[A-Za-z0-9]{36}"),  # GitHub PAT
     re.compile(r"gho_[A-Za-z0-9]{36}"),  # GitHub OAuth
