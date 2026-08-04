@@ -262,6 +262,14 @@ class CheckpointManager:
             if not backup_path.exists():
                 failed.append(original)
                 continue
+            # M5: checkpoint metadata lives in the repo and is untrusted input.
+            # A planted checkpoint could point ``original`` at a path outside the
+            # repo (e.g. ``~/.zshrc``). Refuse to touch anything that does not
+            # resolve inside repo_root — same containment check as
+            # tool_utils.resolve_within_root and the PLAN-mode edit gate.
+            if not self._is_within_repo(original):
+                failed.append(original)
+                continue
             try:
                 # Ensure parent directory exists (in case it was deleted)
                 Path(original).parent.mkdir(parents=True, exist_ok=True)
@@ -275,6 +283,10 @@ class CheckpointManager:
 
         # Delete created files
         for created_path in checkpoint.created_files:
+            # M5: same containment check — never unlink paths outside the repo.
+            if not self._is_within_repo(created_path):
+                failed.append(created_path)
+                continue
             try:
                 p = Path(created_path)
                 if p.exists():
@@ -287,6 +299,18 @@ class CheckpointManager:
                 get_logger().log_error(exc)
 
         return restored, failed
+
+    def _is_within_repo(self, path: str | Path) -> bool:
+        """Return True iff ``path`` resolves inside repo_root.
+
+        Uses ``resolve()`` so symlinks and ``..`` components are collapsed
+        before the containment check, matching resolve_within_root semantics.
+        """
+        try:
+            Path(path).resolve().relative_to(self.repo_root.resolve())
+        except (ValueError, OSError):
+            return False
+        return True
 
     def _save_metadata(self, checkpoint: Checkpoint) -> None:
         """Save checkpoint metadata to disk."""
