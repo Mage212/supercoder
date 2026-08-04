@@ -2,6 +2,8 @@
 
 import stat
 
+import pytest
+
 from supercoder.context.freshness import FileFreshnessTracker
 from supercoder.permissions import PermissionPolicy
 from supercoder.tools import (
@@ -192,6 +194,65 @@ class TestCodeEditTool:
         # alpha keeps its \r\n; CRLF stays balanced overall.
         assert b"alpha\r\n" in raw
         assert raw.count(b"\r") == raw.count(b"\n")
+
+    @pytest.mark.parametrize(
+        "operation,extra_args,verify",
+        [
+            (
+                "insert_after",
+                '"after": "line two", "content": "INSERTED"',
+                lambda raw: b"INSERTED" in raw,
+            ),
+            (
+                "insert_before",
+                '"before": "line two", "content": "INSERTED"',
+                lambda raw: b"INSERTED" in raw,
+            ),
+            (
+                "replace_lines",
+                '"startLine": 1, "endLine": 1, "content": "REPLACED"',
+                lambda raw: b"REPLACED" in raw,
+            ),
+            (
+                "append",
+                '"content": "APPENDED"',
+                lambda raw: b"APPENDED" in raw,
+            ),
+        ],
+    )
+    def test_code_edit_preserves_crlf_across_operations(
+        self, tmp_path, operation, extra_args, verify
+    ):
+        """R2-3 (M4 scope): ALL edit operations must preserve CRLF line endings.
+
+        Previously only search_replace was fixed; insert_after/insert_before/
+        replace_lines/append still used read_text() with universal-newline
+        translation, silently rewriting CRLF files to LF on every edit.
+        """
+        tool = CodeEditTool()
+        test_file = tmp_path / "crlf_all.py"
+        test_file.write_bytes(b"line one\r\nline two\r\nline three\r\n")
+
+        tool.execute(
+            f'''{{
+            "filepath": "{test_file}",
+            "operation": "{operation}",
+            {extra_args}
+        }}'''
+        )
+
+        raw = test_file.read_bytes()
+        # The operation took effect.
+        assert verify(raw), f"{operation} did not apply: {raw!r}"
+        # Untouched original lines must keep their CRLF endings. For replace_lines
+        # line one is replaced, so check the two lines that must survive intact.
+        assert b"line two\r\n" in raw, f"{operation} flattened original CRLF: {raw!r}"
+        assert b"line three\r\n" in raw, f"{operation} flattened original CRLF: {raw!r}"
+        # The original CRLF separators must survive on the untouched lines. The
+        # old read_text() path flattened ALL of them to LF (0 remaining).
+        assert raw.count(b"\r\n") >= 2, (
+            f"{operation} lost original CRLF separators on untouched lines: {raw!r}"
+        )
 
     def test_code_edit_aborts_when_checkpoint_backup_fails(self, tmp_path):
         """Existing files are not written when checkpoint backup cannot be created."""
