@@ -1993,3 +1993,60 @@ class TestSessionSavedOnLLMError:
         assert any(
             m.role == "user" and "important question" in m.content for m in loaded.messages
         ), "user message that triggered the error was not persisted"
+
+
+class TestLeanPromptRebuild:
+    """Regression: switching to a profile with the same tool_calling_type but a
+    different ``lean`` flag must still rebuild the system prompt.
+
+    Previously set_tool_calling_type() only rebuilt when tool_calling_type
+    changed, so a lean flip between two profiles sharing the same type kept the
+    old (long or short) prompt — defeating the 75% token savings lean is meant
+    to provide for weak/local models.
+    """
+
+    def _make_agent(self, *, lean: bool):
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+        from supercoder.tools.file_read import FileReadTool
+
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+        agent = CoderAgent(
+            llm=mock_llm,
+            tools=[FileReadTool()],
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            lean=lean,
+        )
+        return agent
+
+    def test_prompt_rebuilds_when_only_lean_changes(self):
+        agent = self._make_agent(lean=False)
+        full_prompt = agent.base_system_prompt
+        assert full_prompt, "baseline prompt must be non-empty"
+
+        # Simulate /model switching to a lean=True profile with the SAME
+        # tool_calling_type (repl.cmd_model sets agent.lean then calls this).
+        agent.lean = True
+        agent.set_tool_calling_type(agent.tool_calling_type)
+
+        lean_prompt = agent.base_system_prompt
+        assert lean_prompt != full_prompt, (
+            "system prompt was not rebuilt when only lean changed — "
+            "lean flip between same-tool_calling_type profiles is silently ignored"
+        )
+
+    def test_prompt_rebuilds_when_only_lean_changes_back(self):
+        agent = self._make_agent(lean=True)
+        lean_prompt = agent.base_system_prompt
+
+        agent.lean = False
+        agent.set_tool_calling_type(agent.tool_calling_type)
+
+        assert agent.base_system_prompt != lean_prompt, (
+            "system prompt was not rebuilt when lean flipped back to False"
+        )

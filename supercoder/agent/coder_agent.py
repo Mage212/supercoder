@@ -514,20 +514,23 @@ class CoderAgent:
         self._mode_policy_needs_announcement = True
 
     def set_tool_calling_type(self, tool_calling_type: str) -> None:
-        """Update tool calling type and rebuild system prompt.
+        """Update tool calling type and rebuild the system prompt.
 
-        Call this when switching to a model with a different tool_calling_type.
+        Always rebuilds. The caller (repl.cmd_model) updates ``self.lean`` (and
+        possibly tool_calling_type) before calling this, and a lean-only change
+        between two profiles sharing the same tool_calling_type must still swap
+        prompts — otherwise the lean toggle silently keeps the old prompt and the
+        75% token savings for weak/local models are lost.
         """
-        if tool_calling_type != self.tool_calling_type:
-            self.tool_calling_type = tool_calling_type
-            self.base_system_prompt = build_system_prompt(
-                self._tools_list,
-                rules=self._project_rules,
-                tool_calling_type=self.tool_calling_type,
-                native_tools=not self.streaming,
-                lean=self.lean,
-            )
-            self._update_system_prompt()
+        self.tool_calling_type = tool_calling_type
+        self.base_system_prompt = build_system_prompt(
+            self._tools_list,
+            rules=self._project_rules,
+            tool_calling_type=self.tool_calling_type,
+            native_tools=not self.streaming,
+            lean=self.lean,
+        )
+        self._update_system_prompt()
 
     def _check_mode_tool(self, tool_name: str, arguments: dict | None) -> ModeToolDecision:
         """Return the host-side mode decision for a requested tool call."""
