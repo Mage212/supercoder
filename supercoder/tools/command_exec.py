@@ -3,6 +3,7 @@
 import contextlib
 import os
 import platform
+import re
 import signal
 import subprocess
 import threading
@@ -39,6 +40,41 @@ INTERACTIVE_PATTERNS = [
     "top",
     "htop",
 ]
+
+# M3: env-var name patterns that must NOT be inherited by spawned commands.
+# A command like ``env`` or ``printenv`` would otherwise dump live API keys /
+# tokens into tool output, which flows into model context and persistent
+# storage. Matched case-insensitively against the variable NAME (not value).
+_SECRET_ENV_PATTERNS = [
+    re.compile(r"(?i)^OPENAI_"),
+    re.compile(r"(?i)^SUPERCODER_"),
+    re.compile(r"(?i)^ANTHROPIC_"),
+    re.compile(r"(?i)^AZURE_(?:OPENAI|AI)_"),
+    re.compile(r"(?i)^GOOGLE_AI_"),
+    re.compile(r"(?i)^HUGGING_FACE_"),
+    re.compile(r"(?i)^REPlicate_"),
+    re.compile(r"(?i)^TOGETHER_"),
+    re.compile(r"(?i)^GROQ_"),
+    re.compile(r"(?i)^MISTRAL_"),
+    re.compile(r"(?i)^DEEPSEEK_"),
+    # Generic secret shapes: *_API_KEY, *_TOKEN, *_SECRET, *_PASSWORD, *_PASSWD, *_CREDENTIALS
+    re.compile(r"(?i).+_API_KEY$"),
+    re.compile(r"(?i).+_TOKEN$"),
+    re.compile(r"(?i).+_SECRET$"),
+    re.compile(r"(?i).+_PASSWORD$"),
+    re.compile(r"(?i).+_PASSWD$"),
+    re.compile(r"(?i).+_CREDENTIALS$"),
+]
+
+
+def _is_secret_env_name(name: str) -> bool:
+    """Return True if an environment variable name looks like a secret."""
+    return any(pattern.match(name) for pattern in _SECRET_ENV_PATTERNS)
+
+
+def _sanitize_child_env() -> dict[str, str]:
+    """Return a copy of os.environ with secret-looking variables removed."""
+    return {k: v for k, v in os.environ.items() if not _is_secret_env_name(k)}
 
 
 class CommandExecutionTool(BaseTool):
@@ -131,6 +167,8 @@ class CommandExecutionTool(BaseTool):
         try:
             # Create process with stdin isolation to prevent hangs on interactive commands
             # Use start_new_session=True to create process group for proper tree killing
+            # M3: pass a sanitized env so API keys / tokens are not inherited and
+            # cannot be exfiltrated via `env` / `printenv`.
             proc = subprocess.Popen(
                 command,
                 shell=True,
@@ -139,6 +177,7 @@ class CommandExecutionTool(BaseTool):
                 stdin=subprocess.DEVNULL,  # CRITICAL: Isolate stdin to prevent hangs
                 text=True,
                 cwd=".",
+                env=_sanitize_child_env(),
                 start_new_session=True,  # Create new process group for tree killing
             )
 
