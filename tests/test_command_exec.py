@@ -66,3 +66,17 @@ class TestEnvSanitization:
         output = _run(tool, 'echo "$OPENAI_API_KEY"')
 
         assert "sk-proj-leak" not in output
+
+    def test_key_suffix_without_api_stripped(self, monkeypatch):
+        """R2-5: *_KEY without _API_ (STRIPE_SECRET_KEY, SIGNING_KEY) must be
+        stripped — these are common secret-naming conventions that previously
+        leaked into child env."""
+        for key in ("STRIPE_SECRET_KEY", "SIGNING_KEY", "ENCRYPTION_KEY"):
+            monkeypatch.setenv(key, f"leak-{key}-value")
+
+        tool = CommandExecutionTool()
+        output = _run(tool, "printenv")
+
+        for key in ("STRIPE_SECRET_KEY", "SIGNING_KEY", "ENCRYPTION_KEY"):
+            value = f"leak-{key}-value"
+            assert value not in output, f"{key}={value!r} leaked into child env"

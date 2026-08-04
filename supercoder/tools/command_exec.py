@@ -52,13 +52,16 @@ _SECRET_ENV_PATTERNS = [
     re.compile(r"(?i)^AZURE_(?:OPENAI|AI)_"),
     re.compile(r"(?i)^GOOGLE_AI_"),
     re.compile(r"(?i)^HUGGING_FACE_"),
-    re.compile(r"(?i)^REPlicate_"),
+    re.compile(r"(?i)^REPLICATE_"),
     re.compile(r"(?i)^TOGETHER_"),
     re.compile(r"(?i)^GROQ_"),
     re.compile(r"(?i)^MISTRAL_"),
     re.compile(r"(?i)^DEEPSEEK_"),
-    # Generic secret shapes: *_API_KEY, *_TOKEN, *_SECRET, *_PASSWORD, *_PASSWD, *_CREDENTIALS
+    # Generic secret shapes: *_API_KEY, *_KEY, *_TOKEN, *_SECRET, *_PASSWORD,
+    # *_PASSWD, *_CREDENTIALS. *_KEY catches STRIPE_SECRET_KEY / SIGNING_KEY /
+    # ENCRYPTION_KEY / PRIVATE_KEY that don't carry the _API_ segment.
     re.compile(r"(?i).+_API_KEY$"),
+    re.compile(r"(?i).+_KEY$"),
     re.compile(r"(?i).+_TOKEN$"),
     re.compile(r"(?i).+_SECRET$"),
     re.compile(r"(?i).+_PASSWORD$"),
