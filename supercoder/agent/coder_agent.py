@@ -60,6 +60,7 @@ class CoderAgent:
         permissions: dict | None = None,
         loop_detection: dict | bool | None = None,
         allow_persistent_permissions: bool = True,
+        allow_project_rules: bool = True,
     ):
         self.llm = llm
         self.repo_root = Path(repo_root).resolve()
@@ -101,10 +102,14 @@ class CoderAgent:
         # RepoMap setup
         self.repo_map = RepoMap(self.repo_root) if use_repo_map else None
 
-        # Supercoder Rules setup
+        # Supercoder Rules setup. .supercoder/rules/*.md is injected into the
+        # system prompt as mandatory, override-priority instructions — a prompt-
+        # injection vector from a cloned malicious repo. Gate loading on the
+        # caller's trust decision (allow_project_rules); the loader is still
+        # constructed so ensure_rules_dir() works for trusted sessions.
         self.rules_loader = SupercoderRulesLoader(repo_root)
         self.rules_loader.ensure_rules_dir()  # Create .supercoder/rules/ if missing
-        project_rules = self.rules_loader.get_rules_for_prompt()
+        project_rules = self.rules_loader.get_rules_for_prompt() if allow_project_rules else ""
 
         # Store tool calling type for prompt generation
         self.tool_calling_type = tool_calling_type
