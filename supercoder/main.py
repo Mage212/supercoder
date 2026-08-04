@@ -1,6 +1,7 @@
 """SuperCoder CLI entry point."""
 
 import sys
+from dataclasses import dataclass
 
 import click
 from rich.console import Console
@@ -14,6 +15,74 @@ from .logging import init_logger
 from .tools import ALL_TOOLS
 
 console = Console()
+
+
+@dataclass(frozen=True)
+class TrustDecision:
+    """Outcome of resolving per-repository trust at startup.
+
+    Two independent axes (BYPASS A regression): ``config_trusted`` gates
+    sensitive .supercoder.yaml fields (endpoint/credentials/models), and
+    ``perms_trusted`` gates .supercoder/permissions.yaml persistent command
+    rules. Both default to False for an untrusted repo and flip to True only on
+    an explicit user trust grant (or a prior trust-store entry).
+    """
+
+    config_trusted: bool
+    perms_trusted: bool
+    prompt_needed: bool
+
+
+def resolve_repo_trust(
+    *,
+    trusted_in_store: bool,
+    has_local_perms: bool,
+    local_config_sensitive: bool,
+    is_tty: bool,
+    user_trusts: bool | None,
+) -> TrustDecision:
+    """Pure decision function for the startup trust resolution.
+
+    Args:
+        trusted_in_store: whether the repo is already in the trust store.
+        has_local_perms: whether .supercoder/permissions.yaml exists in the repo.
+        local_config_sensitive: whether .supercoder.yaml carries sensitive keys.
+        is_tty: whether the session is interactive (can show a prompt).
+        user_trusts: the user's answer if a prompt was shown (None before asking).
+
+    Returns:
+        TrustDecision with the two independent trust axes and whether a prompt
+        is needed to decide. The caller re-asks resolve_repo_trust with
+        user_trusts set after prompting.
+
+    Semantics:
+        - A repo is fully trusted only via the trust store or an explicit grant.
+        - When there is nothing untrusted to honor (no sensitive config, no
+          local perms, or already trusted), no prompt is needed.
+        - A prompt is shown only in interactive sessions with something at stake.
+    """
+    if trusted_in_store:
+        # Already trusted: honor everything, no prompt.
+        return TrustDecision(config_trusted=True, perms_trusted=True, prompt_needed=False)
+
+    # Untrusted repo: both axes start False.
+    something_at_stake = local_config_sensitive or has_local_perms
+    if not something_at_stake:
+        # Nothing planted that requires trust — stay safe, no prompt.
+        return TrustDecision(config_trusted=False, perms_trusted=False, prompt_needed=False)
+
+    if not is_tty:
+        # Non-interactive: cannot prompt, stay safe.
+        return TrustDecision(config_trusted=False, perms_trusted=False, prompt_needed=False)
+
+    if user_trusts is None:
+        # Interactive, something at stake, not yet answered: prompt needed.
+        return TrustDecision(config_trusted=False, perms_trusted=False, prompt_needed=True)
+
+    # User answered.
+    if user_trusts:
+        return TrustDecision(config_trusted=True, perms_trusted=True, prompt_needed=False)
+    return TrustDecision(config_trusted=False, perms_trusted=False, prompt_needed=False)
 
 
 def _prompt_repo_trust(repo_path, *, sensitive_config: bool, has_local_perms: bool) -> bool:
@@ -139,32 +208,49 @@ def main(
     ).has_persistent_rules_file()
 
     config = Config.load(allow_sensitive_local=False)
-    # repo_trusted gates whether the agent may honor .supercoder/permissions.yaml.
-    repo_trusted = trust_store.is_trusted(repo_path) or not has_local_perms
 
-    if config.local_config_sensitive or has_local_perms:
-        if repo_trusted and config.local_config_sensitive:
-            # Already trusted on a previous run: honor sensitive local config.
-            config = Config.load(allow_sensitive_local=True)
-        elif sys.stdin.isatty():
-            # Interactive: ask the user whether to trust this repository.
-            if _prompt_repo_trust(
-                repo_path,
-                sensitive_config=config.local_config_sensitive,
-                has_local_perms=has_local_perms,
-            ):
-                trust_store.trust(repo_path)
-                repo_trusted = True
-                config = Config.load(allow_sensitive_local=True)
-            else:
-                repo_trusted = not has_local_perms
-        else:
-            # Non-interactive (e.g. piped input): stay safe, keep filtering.
-            repo_trusted = not has_local_perms
-            console.print(
-                "[yellow]Warning:[/] local config overrides ignored (untrusted repo, "
-                "non-interactive session). Trust it via an interactive run.\n"
-            )
+    # Resolve per-repository trust (BYPASS A): config_trusted and perms_trusted
+    # are INDEPENDENT axes. Previously a single ``repo_trusted`` defaulted to
+    # True when no permissions.yaml existed, which silently honored a planted
+    # .supercoder.yaml endpoint redirect with no prompt. See resolve_repo_trust.
+    decision = resolve_repo_trust(
+        trusted_in_store=trust_store.is_trusted(repo_path),
+        has_local_perms=has_local_perms,
+        local_config_sensitive=config.local_config_sensitive,
+        is_tty=sys.stdin.isatty(),
+        user_trusts=None,
+    )
+    if decision.prompt_needed:
+        granted = _prompt_repo_trust(
+            repo_path,
+            sensitive_config=config.local_config_sensitive,
+            has_local_perms=has_local_perms,
+        )
+        decision = resolve_repo_trust(
+            trusted_in_store=trust_store.is_trusted(repo_path),
+            has_local_perms=has_local_perms,
+            local_config_sensitive=config.local_config_sensitive,
+            is_tty=sys.stdin.isatty(),
+            user_trusts=granted,
+        )
+        if granted:
+            trust_store.trust(repo_path)
+    elif (
+        (config.local_config_sensitive or has_local_perms)
+        and not sys.stdin.isatty()
+        and not decision.config_trusted
+    ):
+        # Non-interactive with untrusted local files: inform the user.
+        console.print(
+            "[yellow]Warning:[/] local config overrides ignored (untrusted repo, "
+            "non-interactive session). Trust it via an interactive run.\n"
+        )
+
+    # Honor sensitive local config only when the config axis is trusted.
+    if decision.config_trusted and config.local_config_sensitive:
+        config = Config.load(allow_sensitive_local=True)
+    # The permissions axis is threaded into the agent (allow_persistent_permissions).
+    perms_trusted = decision.perms_trusted
     if model:  # noqa: SIM102
         # If the model name matches an existing profile, switch to it
         if not config.switch_to_model(model):
@@ -278,7 +364,7 @@ def main(
             lean=lean,
             permissions=config.permissions,
             loop_detection=config.loop_detection,
-            allow_persistent_permissions=repo_trusted,
+            allow_persistent_permissions=perms_trusted,
         )
         agent.set_debug(debug)
     except Exception as e:
