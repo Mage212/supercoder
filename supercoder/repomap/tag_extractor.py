@@ -54,27 +54,46 @@ class TagExtractor:
             self._cache[key] = tags
         return tags
 
-    @staticmethod
-    def _content_digest(file_path: str) -> str:
-        """Fast content fingerprint: blake2b of head+tail bytes.
+    # Source files up to this size are hashed in full (defeating any same-size
+    # edit, including middle-only edits). Larger files fall back to a bounded
+    # head+middle+tail sample — cheap, and still catches edits outside the
+    # first/last 4KB window that a head+tail-only digest would miss.
+    FULL_HASH_THRESHOLD = 32_768
+    SAMPLE_SIZE = 4096
 
-        Hashing only the first and last 4KB keeps this cheap for large files
-        (one bounded read) while still defeating the (mtime, size) collision
-        that a same-size edit produces. Full-file hashing would be more
-        rigorous but is unnecessary: any real source edit changes bytes near
-        the changed region, which the head or tail sample catches.
+    @staticmethod
+    def _content_digest(file_path: str, st) -> str:
+        """Content fingerprint used as a cache-key tie-breaker.
+
+        - Skips non-regular files (FIFOs, devices, sockets) to avoid blocking
+          on a special file and to ignore them deterministically. ``st`` is the
+          already-computed stat result from the caller.
+        - For files up to ``FULL_HASH_THRESHOLD`` bytes: hashes the whole file,
+          so any same-size edit (including a middle-only edit) invalidates.
+        - For larger files: hashes head + middle-window + tail samples, so an
+          edit anywhere changes at least one sample region.
         """
-        sample_size = 4096
+        import stat as stat_mod
+
+        if not stat_mod.S_ISREG(st.st_mode):
+            return "non-regular"
+
+        sample = TagExtractor.SAMPLE_SIZE
         h = hashlib.blake2b(digest_size=8)
         try:
             with open(file_path, "rb") as f:
-                h.update(f.read(sample_size))
-                # Read the tail only if the file is larger than one sample.
-                f.seek(0, 2)
-                total = f.tell()
-                if total > sample_size:
-                    f.seek(total - sample_size)
-                    h.update(f.read(sample_size))
+                total = st.st_size
+                if total <= TagExtractor.FULL_HASH_THRESHOLD:
+                    # Full-file hash: any byte change invalidates.
+                    h.update(f.read())
+                else:
+                    # Head + middle + tail sampling.
+                    h.update(f.read(sample))
+                    mid = total // 2
+                    f.seek(max(sample, mid - sample // 2))
+                    h.update(f.read(sample))
+                    f.seek(max(0, total - sample))
+                    h.update(f.read(sample))
         except OSError:
             return "missing"
         return h.hexdigest()
@@ -90,7 +109,7 @@ class TagExtractor:
         """
         p = Path(file_path)
         st = p.stat()
-        digest = cls._content_digest(file_path)
+        digest = cls._content_digest(file_path, st)
         return (str(p.resolve()), st.st_mtime_ns, st.st_size, digest)
 
     def _do_extract(self, file_path: str) -> list[Tag]:

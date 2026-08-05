@@ -243,3 +243,57 @@ class TestTagExtractorStaleCache:
 
         # Second call is a cache hit: no re-parse.
         assert calls["n"] == 1
+
+    def test_middle_only_edit_in_large_file_invalidates_cache(self, tmp_path):
+        """Regression (R4 N1): a same-size edit confined to the middle of a
+        file larger than the head+tail sample window must still invalidate.
+
+        The previous head+tail-only digest missed this: a >8KB file with the
+        edited definition sitting between the first and last 4KB produced an
+        identical digest and served stale tags.
+        """
+        import os
+
+        from supercoder.repomap.tag_extractor import TagExtractor
+
+        f = tmp_path / "big.py"
+        # Structure: large head pad | def in the middle | large tail pad.
+        # Total well above FULL_HASH_THRESHOLD so the sampling path runs, with
+        # the def outside both the first and last SAMPLE_SIZE windows.
+        head_pad = "x = 1\n" * 1000  # ~6KB
+        tail_pad = "y = 2\n" * 1000  # ~6KB
+        f.write_text(head_pad + "def alpha(): pass\n" + tail_pad)
+        extractor = TagExtractor()
+
+        fill_mtime_ns = f.stat().st_mtime_ns
+        first = extractor.extract(str(f))
+        assert [t.name for t in first] == ["alpha"]
+
+        # Same-size middle edit: 'alpha' -> 'bravo' (both 17 bytes).
+        f.write_text(head_pad + "def bravo(): pass\n" + tail_pad)
+        os.utime(f, ns=(fill_mtime_ns, fill_mtime_ns))
+
+        second = extractor.extract(str(f))
+        names = [t.name for t in second]
+        assert "bravo" in names, f"stale tags served for middle edit: {names}"
+        assert "alpha" not in names
+
+    def test_small_file_full_hash_invalidates_on_any_edit(self, tmp_path):
+        """Control (R4 N1): small files are hashed in full, so any edit
+        invalidates the cache regardless of where the bytes change."""
+        import os
+
+        from supercoder.repomap.tag_extractor import TagExtractor
+
+        f = tmp_path / "small.py"
+        f.write_text("def alpha(): pass\n")
+        extractor = TagExtractor()
+
+        fill_mtime_ns = f.stat().st_mtime_ns
+        assert [t.name for t in extractor.extract(str(f))] == ["alpha"]
+
+        # Different-size edit (full hash catches it even without size collision).
+        f.write_text("def renamed_longer(): pass\n")
+        os.utime(f, ns=(fill_mtime_ns, fill_mtime_ns))
+        names = [t.name for t in extractor.extract(str(f))]
+        assert "renamed_longer" in names
