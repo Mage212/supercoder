@@ -26,6 +26,7 @@ from ..tools.code_search import CodeSearchTool
 from ..tools.file_read import FileReadTool
 from ..tools.glob_tool import GlobTool
 from ..tools.project_structure import ProjectStructureTool
+from ..tools.recall import RecallTool
 from .agent_modes import MODE_CONFIGS, READ_ONLY_TOOLS, AgentMode
 from .loop_guard import AgentLoopGuard, LoopGuardDecision
 from .prompts import CACHE_AWARE_COMPACT_REQUEST, build_system_prompt
@@ -62,6 +63,7 @@ class CoderAgent:
         allow_persistent_permissions: bool = True,
         allow_project_rules: bool = True,
         allow_session_load: bool = True,
+        allow_offload_read: bool = False,
     ):
         self.llm = llm
         self.repo_root = Path(repo_root).resolve()
@@ -95,6 +97,13 @@ class CoderAgent:
                 t.permission_policy = self.permission_policy
                 if isinstance(t, FileReadTool):
                     t.freshness_tracker = self.freshness_tracker
+            # Recall tool: retrieval over JSONL log + offloaded outputs. Offload
+            # reads are repo-local and attacker-controllable (R2-7-class vector),
+            # gated behind allow_offload_read like session loading.
+            elif isinstance(t, RecallTool):
+                t.allowed_root = self.repo_root
+                t.permission_policy = self.permission_policy
+                t.allow_offload_read = allow_offload_read
             self.tools[t.definition.name] = t
 
         # Agent mode (code or ask)

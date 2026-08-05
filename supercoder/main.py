@@ -177,6 +177,12 @@ def _show_local_config(repo_path) -> None:
     default=False,
     help="Skip the animated startup banner",
 )
+@click.option(
+    "--no-log",
+    is_flag=True,
+    default=False,
+    help="Disable session logging to ~/.supercoder/logs/ (enabled by default)",
+)
 @click.version_option(version=__version__)
 def main(
     model: str,
@@ -187,6 +193,7 @@ def main(
     repo_map: bool,
     stream: bool,
     no_banner: bool,
+    no_log: bool,
 ):
     """SuperCoder - AI Coding Assistant for the Terminal."""
 
@@ -322,7 +329,12 @@ def main(
                 return
 
     # Initialize logger
-    logger = init_logger(config.model, enabled=config.debug)
+    # Session logging is on by default so the recall tool can retrieve past
+    # events (tool calls, results, commands, errors) that have been compacted
+    # out of the context window. --no-log disables it; --debug forces verbose
+    # logging regardless.
+    log_enabled = config.debug or not no_log
+    logger = init_logger(config.model, enabled=log_enabled)
 
     # Banner is displayed by the REPL (see repl.py run() method)
 
@@ -367,6 +379,7 @@ def main(
             allow_persistent_permissions=perms_trusted,
             allow_project_rules=decision.config_trusted,
             allow_session_load=decision.config_trusted,
+            allow_offload_read=decision.config_trusted,
         )
         agent.set_debug(debug)
     except Exception as e:

@@ -39,6 +39,7 @@ READ_ONLY_TOOLS = [
     "code-search",  # Search code patterns
     "glob",  # Find files by pattern
     "project-structure",  # Show directory structure
+    "recall",  # Search past events / recover compacted outputs
 ]
 
 ASK_MODE_TOOLS = READ_ONLY_TOOLS

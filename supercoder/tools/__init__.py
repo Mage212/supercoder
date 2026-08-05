@@ -7,6 +7,7 @@ from .command_exec import CommandExecutionTool
 from .file_read import FileReadTool
 from .glob_tool import GlobTool
 from .project_structure import ProjectStructureTool
+from .recall import RecallTool
 
 # All available tools
 ALL_TOOLS = [
@@ -16,6 +17,7 @@ ALL_TOOLS = [
     CodeEditTool(),
     ProjectStructureTool(),
     CommandExecutionTool(),
+    RecallTool(),
 ]
 
 # Aliases for tool names that models commonly hallucinate instead of the
@@ -60,6 +62,10 @@ TOOL_ALIASES: dict[str, str] = {
     "list": "project-structure",
     "tree": "project-structure",
     "structure": "project-structure",
+    # recall synonyms (retrieval over past events)
+    "search_log": "recall",
+    "history": "recall",
+    "recall_events": "recall",
 }
 
 __all__ = [
@@ -72,5 +78,6 @@ __all__ = [
     "FileReadTool",
     "GlobTool",
     "ProjectStructureTool",
+    "RecallTool",
     "ToolDefinition",
 ]

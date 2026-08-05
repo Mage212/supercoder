@@ -67,6 +67,7 @@ TOOL_ICONS: dict[str, str] = {
     "code-edit": "✏️",
     "project-structure": "🌲",
     "command-exec": "$",
+    "recall": "⏮",
 }
 
 # Default icon for tools not listed above (MCP tools, future builtins).

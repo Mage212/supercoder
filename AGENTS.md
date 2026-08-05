@@ -111,7 +111,7 @@ Tools are registered in `supercoder/tools/__init__.py` as `ALL_TOOLS`. The agent
 - Tool results are appended as `role="tool"` messages with `tool_call_id` before the next LLM call (native mode).
 - Shell commands require explicit user confirmation before execution.
 - The REPL uses prompt_toolkit for input; history stored in `.supercoder/history`.
-- Logs (JSONL) go to `~/.supercoder/logs/` (outside the project tree). Each session creates `session_YYYYMMDD_HHMMSS.jsonl`. Log writes are non-blocking.
+- Logs (JSONL) go to `~/.supercoder/logs/` (outside the project tree). Each session creates `session_YYYYMMDD_HHMMSS.jsonl`. Logging is **enabled by default** (disable with `--no-log`); secrets are scrubbed on every write. The `recall` tool searches past events in these logs and recovers large tool outputs that were compacted out of context.
 - Streaming mode (`chat_stream`) is deprecated — all new work should target native tool calling (`chat_turn`).
 
 
