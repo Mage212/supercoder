@@ -340,9 +340,11 @@ class TestRecallParseError:
 class TestRecallMalformedLog:
     """A hand-edited or partially flushed log can contain malformed timestamps.
 
-    The sort must not raise TypeError on null/numeric/missing timestamps;
-    the tool should return results (or a clean message), never a traceback.
-    Regression: R3 F3.
+    The sort must not raise TypeError on null/numeric timestamps (the genuine
+    F3 regressions) and must handle a missing timestamp key gracefully
+    (coverage — the pre-fix ``e.get("timestamp", "")`` already defaulted that
+    shape to a str, so it never crashed). The tool should return results (or a
+    clean message), never a traceback.
     """
 
     def test_null_timestamp_does_not_crash(self, log_dir):
@@ -381,7 +383,13 @@ class TestRecallMalformedLog:
         out = tool.execute(json.dumps({"query": "match", "session": "all"}))
         assert "match-a" in out and "match-b" in out
 
-    def test_missing_timestamp_does_not_crash(self, log_dir):
+    def test_missing_timestamp_handled_gracefully(self, log_dir):
+        """Coverage (not a regression): a missing timestamp key must not break
+        the tool. Note this does NOT reproduce F3 on pre-fix code — ``e.get(
+        "timestamp", "")`` already yields a str default for a missing key, so
+        the sort did not crash before the fix. The null and numeric cases
+        above are the genuine regressions; this one pins graceful handling of
+        the missing-key shape alongside them."""
         _write_session(
             log_dir,
             "session_20260805_080000.jsonl",
