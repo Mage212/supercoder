@@ -157,6 +157,18 @@ def _show_local_config(repo_path) -> None:
                 console.print(f"  {line}")
 
 
+def resolve_log_enabled(debug: bool, no_log: bool) -> bool:
+    """Decide whether session logging to ~/.supercoder/logs/ is on.
+
+    Logging is on by default (so the recall tool can retrieve past events that
+    were compacted out of context). ``--debug`` forces it on and overrides
+    ``--no-log``; ``--no-log`` opts out when not debugging. Extracted as a pure
+    function so the default-on inversion is unit-testable without booting the
+    REPL.
+    """
+    return debug or not no_log
+
+
 @click.command()
 @click.option("--model", "-m", default="", help="Model to use for the agent")
 @click.option("--endpoint", "-e", default="", help="LLM API endpoint (base URL)")
@@ -333,7 +345,7 @@ def main(
     # events (tool calls, results, commands, errors) that have been compacted
     # out of the context window. --no-log disables it; --debug forces verbose
     # logging regardless.
-    log_enabled = config.debug or not no_log
+    log_enabled = resolve_log_enabled(config.debug, no_log)
     logger = init_logger(config.model, enabled=log_enabled)
 
     # Banner is displayed by the REPL (see repl.py run() method)
