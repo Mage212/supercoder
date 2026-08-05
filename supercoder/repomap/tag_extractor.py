@@ -1,5 +1,6 @@
 """Extract code structure using tree-sitter."""
 
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -54,11 +55,43 @@ class TagExtractor:
         return tags
 
     @staticmethod
-    def _cache_key_for(file_path: str) -> tuple[str, int, int]:
-        """Build a cache key from path identity + freshness signals."""
+    def _content_digest(file_path: str) -> str:
+        """Fast content fingerprint: blake2b of head+tail bytes.
+
+        Hashing only the first and last 4KB keeps this cheap for large files
+        (one bounded read) while still defeating the (mtime, size) collision
+        that a same-size edit produces. Full-file hashing would be more
+        rigorous but is unnecessary: any real source edit changes bytes near
+        the changed region, which the head or tail sample catches.
+        """
+        sample_size = 4096
+        h = hashlib.blake2b(digest_size=8)
+        try:
+            with open(file_path, "rb") as f:
+                h.update(f.read(sample_size))
+                # Read the tail only if the file is larger than one sample.
+                f.seek(0, 2)
+                total = f.tell()
+                if total > sample_size:
+                    f.seek(total - sample_size)
+                    h.update(f.read(sample_size))
+        except OSError:
+            return "missing"
+        return h.hexdigest()
+
+    @classmethod
+    def _cache_key_for(cls, file_path: str) -> tuple[str, int, int, str]:
+        """Build a cache key from path identity + freshness + content digest.
+
+        The content digest is a tie-breaker for the (mtime_ns, size) collision
+        that occurs on filesystems with second-resolution mtime (NFS, some
+        Docker bind-mounts): two same-size edits within one mtime second would
+        otherwise be indistinguishable and serve stale tags.
+        """
         p = Path(file_path)
         st = p.stat()
-        return (str(p.resolve()), st.st_mtime_ns, st.st_size)
+        digest = cls._content_digest(file_path)
+        return (str(p.resolve()), st.st_mtime_ns, st.st_size, digest)
 
     def _do_extract(self, file_path: str) -> list[Tag]:
         """Uncached extraction implementation."""

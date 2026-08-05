@@ -44,7 +44,7 @@ class RepoMap:
         (as summarized by mtime + size) have not changed since the last call.
         """
         files = self._get_files()
-        cache_key = self._compute_cache_key(files)
+        cache_key = self._compute_cache_key(files, max_tokens)
 
         # Fast path: identical inputs → return cached render without touching
         # tree-sitter or rewriting repo_map.txt.
@@ -71,16 +71,18 @@ class RepoMap:
         self._cached_map = repo_map
         return repo_map
 
-    def _compute_cache_key(self, files: list[Path]) -> str:
+    def _compute_cache_key(self, files: list[Path], max_tokens: int) -> str:
         """Build a SHA256 digest over the selected files' identity + freshness.
 
         Keyed on (relative path, mtime_ns, size) so that content edits, path
         additions/removals, and reorderings all invalidate the cache, while
-        repeated calls on unchanged files keep the key stable.
+        repeated calls on unchanged files keep the key stable. ``max_tokens``
+        is part of the key so that a different render budget is honored rather
+        than served from a stale cache entry.
         """
         if not files:
             return "empty"
-        parts: list[str] = []
+        parts: list[str] = [f"max_tokens={max_tokens}"]
         for f in files:
             try:
                 rel = f.relative_to(self.root).as_posix()

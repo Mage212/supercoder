@@ -155,3 +155,91 @@ class TestRepoMapNoGraphLeak:
         """RepoMap no longer carries a networkx graph (dead code removed)."""
         repo_map = RepoMap(tmp_path)
         assert not hasattr(repo_map, "graph")
+
+
+class TestRepoMapCacheKey:
+    """The cache key must include max_tokens so a different limit is honored.
+
+    Regression: a cache hit returned the render from the previous max_tokens,
+    silently ignoring the requested limit (R3 F1).
+    """
+
+    def test_cache_key_includes_max_tokens(self, tmp_path):
+        # Enough functions that a small token budget truncates the render.
+        (tmp_path / "mod.py").write_text(
+            "def f1(): pass\ndef f2(): pass\ndef f3(): pass\ndef f4(): pass\n"
+        )
+        repo_map = RepoMap(tmp_path)
+
+        big = repo_map.get_repo_map(max_tokens=2000)
+        small = repo_map.get_repo_map(max_tokens=1)
+
+        # A 1-token budget must truncate; the two renders must differ.
+        assert big != small, "different max_tokens returned identical render (cache ignored limit)"
+        assert len(small) < len(big)
+
+    def test_cache_key_stable_for_same_max_tokens(self, tmp_path):
+        (tmp_path / "mod.py").write_text("def fn(): pass\n")
+        repo_map = RepoMap(tmp_path)
+
+        first = repo_map.get_repo_map(max_tokens=2000)
+        second = repo_map.get_repo_map(max_tokens=2000)
+        assert first == second
+
+
+class TestTagExtractorStaleCache:
+    """TagExtractor cache must not serve stale tags when (mtime, size) collide.
+
+    Regression: the cache was keyed on (path, mtime_ns, size) with no content
+    hash. A same-size edit in the same mtime second (realistic on NFS / Docker
+    bind-mounts with second-resolution mtime) returned the old tags (R3 F2).
+    """
+
+    def test_same_size_same_mtime_edit_invalidates_cache(self, tmp_path):
+        import os
+
+        from supercoder.repomap.tag_extractor import TagExtractor
+
+        f = tmp_path / "mod.py"
+        f.write_text("def alpha(): pass\n")  # 18 bytes
+        extractor = TagExtractor()
+
+        # Capture the mtime the cache will key on (the value at first extract).
+        fill_mtime_ns = f.stat().st_mtime_ns
+        first = extractor.extract(str(f))
+        assert [t.name for t in first] == ["alpha"]
+
+        # Same-size edit: 'alpha' -> 'bravo' (both 18 bytes).
+        f.write_text("def bravo(): pass\n")
+        # Force the EXACT same mtime_ns the cache key used, simulating a
+        # second-resolution filesystem where two same-size edits in the same
+        # second are indistinguishable by (mtime, size) alone.
+        os.utime(f, ns=(fill_mtime_ns, fill_mtime_ns))
+        assert f.stat().st_size == 18
+
+        second = extractor.extract(str(f))
+        names = [t.name for t in second]
+        assert "bravo" in names, f"stale tags served: {names}"
+        assert "alpha" not in names
+
+    def test_unchanged_file_cache_hit_skips_extract(self, tmp_path):
+        from supercoder.repomap.tag_extractor import TagExtractor
+
+        f = tmp_path / "mod.py"
+        f.write_text("def fn(): pass\n")
+        extractor = TagExtractor()
+
+        calls = {"n": 0}
+        original = extractor._do_extract
+
+        def counting_extract(file_path):
+            calls["n"] += 1
+            return original(file_path)
+
+        extractor._do_extract = counting_extract
+
+        extractor.extract(str(f))
+        extractor.extract(str(f))
+
+        # Second call is a cache hit: no re-parse.
+        assert calls["n"] == 1
