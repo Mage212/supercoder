@@ -26,7 +26,6 @@ from typing import Any
 
 from ..logging import LOG_DIR, get_logger
 from ..permissions import PermissionPolicy
-from ..trust import RepoTrustStore
 from .base import BaseTool, ToolDefinition
 from .tool_utils import resolve_within_root
 
@@ -55,13 +54,11 @@ class RecallTool(BaseTool):
         self,
         allowed_root: Path | None = None,
         permission_policy: PermissionPolicy | None = None,
-        trust_store: RepoTrustStore | None = None,
         allow_offload_read: bool = False,
         log_dir: Path | None = None,
     ):
         self.allowed_root = allowed_root
         self.permission_policy = permission_policy
-        self.trust_store = trust_store
         self.allow_offload_read = allow_offload_read
         self.log_dir = log_dir or LOG_DIR
 

@@ -211,6 +211,13 @@ class TestRecallOffloadRead:
         assert "SECRET" not in out
         assert "outside" in out.lower() or "error" in out.lower()
 
+    def test_no_trust_store_attribute(self):
+        # Regression guard: the trust_store parameter/attribute was removed as
+        # dead code (never injected, never read; allow_offload_read covers the
+        # gate). Ensure it does not silently come back.
+        tool = RecallTool()
+        assert not hasattr(tool, "trust_store")
+
 
 class TestRecallParseError:
     """Malformed arguments return a clean error, not a traceback."""
