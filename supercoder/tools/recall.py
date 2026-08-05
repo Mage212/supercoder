@@ -187,7 +187,10 @@ class RecallTool(BaseTool):
                 continue
 
         # Newest first by timestamp (stable sort preserves file order on ties).
-        matches.sort(key=lambda e: e.get("timestamp", ""), reverse=True)
+        # Coerce to str defensively: a hand-edited or partially flushed log can
+        # contain null / numeric timestamps, and comparing str with None raises
+        # TypeError (which would crash the tool instead of returning an error).
+        matches.sort(key=lambda e: str(e.get("timestamp") or ""), reverse=True)
         return matches[:limit]
 
     def _entry_matches(
@@ -261,6 +264,14 @@ class RecallTool(BaseTool):
                 "cloned malicious repo). Trust the repo and re-launch, or read host-owned "
                 "logs via the search mode instead."
             )
+
+        # Defense-in-depth: resolve_within_root does not confine when
+        # allowed_root is None, so a tool constructed without a root (e.g. in
+        # tests or a future wiring path) must not reach arbitrary files even
+        # when trust was granted. The agent always injects allowed_root
+        # alongside allow_offload_read, but refuse explicitly here too.
+        if self.allowed_root is None:
+            return "Error: offload reads require a configured project root"
 
         path, error = resolve_within_root(offload_input, self.allowed_root)
         if error or path is None:

@@ -157,6 +157,67 @@ class TestRecallJSONLSearch:
 
         assert "No matching events" in out or "no matches" in out.lower()
 
+    def test_results_ordered_newest_first(self, log_dir):
+        """The sort is newest-first by timestamp (R3 G6). Assert order, not
+        just presence — a flipped direction would otherwise pass."""
+        entries = []
+        # Write 5 entries with ASCENDING timestamps and distinct content so we
+        # can tell them apart; newest-first means the latest timestamp first.
+        for i in range(5):
+            entries.append(
+                {
+                    "type": "tool_result",
+                    "tool": "x",
+                    "result": f"item-{i}",
+                    "timestamp": f"2026-08-05T08:00:0{i}",
+                }
+            )
+        _write_session(log_dir, "session_20260805_080000.jsonl", entries)
+
+        tool = RecallTool(log_dir=log_dir)
+        out = tool.execute(json.dumps({"query": "item-", "session": "all", "limit": 3}))
+
+        # The three returned should be item-4, item-3, item-2 in that order.
+        pos4 = out.find("item-4")
+        pos3 = out.find("item-3")
+        pos2 = out.find("item-2")
+        assert pos4 != -1 and pos3 != -1 and pos2 != -1
+        assert pos4 < pos3 < pos2, "results not ordered newest-first"
+        # Older items must be excluded by the limit.
+        assert "item-0" not in out and "item-1" not in out
+
+    def test_current_session_searches_live_logger(self, log_dir, monkeypatch):
+        """The default session='current' resolves the live in-process logger
+        (R3 G4). All other search tests use session='all'; this covers the
+        production default."""
+        _write_session(
+            log_dir,
+            "session_20260805_080000.jsonl",
+            [
+                {
+                    "type": "tool_result",
+                    "tool": "x",
+                    "result": "live-session-match",
+                    "timestamp": "2026-08-05T08:00:00",
+                }
+            ],
+        )
+        live_log = log_dir / "session_20260805_080000.jsonl"
+        fake_logger = type(
+            "FakeLogger",
+            (),
+            {
+                "enabled": True,
+                "log_file": live_log,
+            },
+        )()
+        monkeypatch.setattr(logging_mod, "_logger", fake_logger)
+
+        tool = RecallTool(log_dir=log_dir)
+        # No explicit session arg -> default "current".
+        out = tool.execute(json.dumps({"query": "live-session-match"}))
+        assert "live-session-match" in out
+
 
 class TestRecallDisabledLog:
     """Graceful handling when logging is disabled."""
@@ -218,6 +279,19 @@ class TestRecallOffloadRead:
         tool = RecallTool()
         assert not hasattr(tool, "trust_store")
 
+    def test_offload_refused_without_allowed_root_even_when_trusted(self, tmp_path):
+        """Defense-in-depth (R3 F9): even with allow_offload_read=True, a tool
+        constructed without allowed_root must not reach arbitrary files —
+        resolve_within_root does not confine when the root is None."""
+        outside = tmp_path.parent / "secret_outside.txt"
+        outside.write_text("OUTSIDE SECRET")
+
+        tool = RecallTool(allow_offload_read=True, allowed_root=None)
+        out = tool.execute(json.dumps({"offload": str(outside)}))
+
+        assert "OUTSIDE SECRET" not in out
+        assert "error" in out.lower() or "root" in out.lower()
+
     def test_offload_read_logs_permission_denial(self, tmp_path, monkeypatch):
         """When permission_policy denies an offload read, log_permission_decision
         must be called (mirrors the file-read precedent)."""
@@ -261,3 +335,66 @@ class TestRecallParseError:
         tool = RecallTool(log_dir=log_dir)
         out = tool.execute("not valid json {")
         assert "Error" in out
+
+
+class TestRecallMalformedLog:
+    """A hand-edited or partially flushed log can contain malformed timestamps.
+
+    The sort must not raise TypeError on null/numeric/missing timestamps;
+    the tool should return results (or a clean message), never a traceback.
+    Regression: R3 F3.
+    """
+
+    def test_null_timestamp_does_not_crash(self, log_dir):
+        _write_session(
+            log_dir,
+            "session_20260805_080000.jsonl",
+            [
+                {
+                    "type": "tool_result",
+                    "tool": "x",
+                    "result": "match-a",
+                    "timestamp": "2026-08-05T08:00:00",
+                },
+                {"type": "tool_result", "tool": "x", "result": "match-b", "timestamp": None},
+            ],
+        )
+        tool = RecallTool(log_dir=log_dir)
+        out = tool.execute(json.dumps({"query": "match", "session": "all"}))
+        assert "match-a" in out and "match-b" in out
+
+    def test_numeric_timestamp_does_not_crash(self, log_dir):
+        _write_session(
+            log_dir,
+            "session_20260805_080000.jsonl",
+            [
+                {
+                    "type": "tool_result",
+                    "tool": "x",
+                    "result": "match-a",
+                    "timestamp": "2026-08-05T08:00:00",
+                },
+                {"type": "tool_result", "tool": "x", "result": "match-b", "timestamp": 12345},
+            ],
+        )
+        tool = RecallTool(log_dir=log_dir)
+        out = tool.execute(json.dumps({"query": "match", "session": "all"}))
+        assert "match-a" in out and "match-b" in out
+
+    def test_missing_timestamp_does_not_crash(self, log_dir):
+        _write_session(
+            log_dir,
+            "session_20260805_080000.jsonl",
+            [
+                {
+                    "type": "tool_result",
+                    "tool": "x",
+                    "result": "match-a",
+                    "timestamp": "2026-08-05T08:00:00",
+                },
+                {"type": "tool_result", "tool": "x", "result": "match-b"},
+            ],
+        )
+        tool = RecallTool(log_dir=log_dir)
+        out = tool.execute(json.dumps({"query": "match", "session": "all"}))
+        assert "match-a" in out and "match-b" in out
