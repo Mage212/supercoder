@@ -2050,3 +2050,115 @@ class TestLeanPromptRebuild:
         assert agent.base_system_prompt != lean_prompt, (
             "system prompt was not rebuilt when lean flipped back to False"
         )
+
+
+class TestRecallAgentWiring:
+    """R3 G2: CoderAgent must propagate allow_offload_read to the recall tool.
+
+    The unit tests on RecallTool pass the flag to its constructor directly, so
+    deleting the injection line in CoderAgent would break production while all
+    RecallTool tests stayed green. These tests pin the seam.
+    """
+
+    def _make_agent(self, tmp_path, **kwargs):
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+        from supercoder.tools import ALL_TOOLS
+
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+        return CoderAgent(
+            llm=mock_llm,
+            tools=ALL_TOOLS,
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+            **kwargs,
+        )
+
+    def test_allow_offload_read_propagated_to_recall_tool(self, tmp_path):
+        agent = self._make_agent(tmp_path, allow_offload_read=True)
+        recall = agent.tools["recall"]
+        assert recall.allow_offload_read is True
+        assert recall.allowed_root == agent.repo_root
+
+    def test_allow_offload_read_false_by_default(self, tmp_path):
+        agent = self._make_agent(tmp_path)
+        assert agent.tools["recall"].allow_offload_read is False
+
+
+class TestBuildToolResultMeta:
+    """R3 G3: command-exec tool results record the command in display_meta.
+
+    The producer-side injection (coder_agent _build_tool_result_meta) was
+    untested — the _last_test_result consumer tests fed display_meta by hand.
+    If the 'command' key were dropped, provenance would silently regress to
+    the body-substring heuristic.
+    """
+
+    def _make_agent(self, tmp_path):
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+        from supercoder.tools import ALL_TOOLS
+
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+        return CoderAgent(
+            llm=mock_llm,
+            tools=ALL_TOOLS,
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+        )
+
+    def test_command_exec_records_command(self, tmp_path):
+        agent = self._make_agent(tmp_path)
+        meta = agent._build_tool_result_meta(
+            name="command-exec",
+            tool_call_id="call_1",
+            arguments={"command": "pytest -x"},
+            masked=False,
+            offload_path=None,
+            original_size=10,
+            omitted_chars=0,
+        )
+        assert meta["command"] == "pytest -x"
+
+    def test_non_command_exec_command_is_none(self, tmp_path):
+        agent = self._make_agent(tmp_path)
+        meta = agent._build_tool_result_meta(
+            name="file-read",
+            tool_call_id="call_1",
+            arguments={"fileName": "x.py"},
+            masked=False,
+            offload_path=None,
+            original_size=10,
+            omitted_chars=0,
+        )
+        assert meta["command"] is None
+
+    def test_meta_has_expected_keys(self, tmp_path):
+        agent = self._make_agent(tmp_path)
+        meta = agent._build_tool_result_meta(
+            name="file-read",
+            tool_call_id="call_1",
+            arguments={},
+            masked=True,
+            offload_path=".supercoder/tool-outputs/x.txt",
+            original_size=10000,
+            omitted_chars=2000,
+        )
+        assert meta["tool_name"] == "file-read"
+        assert meta["tool_call_id"] == "call_1"
+        assert meta["status"] == "success"
+        assert meta["masked"] is True
+        assert meta["offload_path"] == ".supercoder/tool-outputs/x.txt"
+        assert meta["original_size"] == 10000
+        assert meta["omitted_chars"] == 2000
+        assert meta["truncation_kind"] == "offloaded"

@@ -1378,24 +1378,15 @@ class CoderAgent:
                             display_policy=self._tool_display_policy(
                                 name, masked_result.model_text, masked_result.masked, "success"
                             ),
-                            display_meta={
-                                "tool_name": name,
-                                "tool_call_id": tc.id,
-                                "status": "success",
-                                "masked": masked_result.masked,
-                                "offload_path": offload_path,
-                                "original_size": masked_result.original_size,
-                                "omitted_chars": masked_result.omitted_chars,
-                                # Record the command so provenance (_last_test_result)
-                                # can tell a test run from an unrelated command without
-                                # relying on a fragile substring match in the output.
-                                "command": arguments.get("command")
-                                if name == "command-exec"
-                                else None,
-                                "truncation_kind": "offloaded"
-                                if masked_result.masked
-                                else "inline",
-                            },
+                            display_meta=self._build_tool_result_meta(
+                                name=name,
+                                tool_call_id=tc.id,
+                                arguments=arguments,
+                                masked=masked_result.masked,
+                                offload_path=offload_path,
+                                original_size=masked_result.original_size,
+                                omitted_chars=masked_result.omitted_chars,
+                            ),
                         )
                     )
                     remember_loop_result(name, arguments, masked_result.model_text)
@@ -2130,6 +2121,37 @@ class CoderAgent:
         stats_after = self.context.get_stats()
 
         return (summary, stats_before, stats_after)
+
+    def _build_tool_result_meta(
+        self,
+        *,
+        name: str,
+        tool_call_id: str,
+        arguments: dict,
+        masked: bool,
+        offload_path: str | None,
+        original_size: int,
+        omitted_chars: int,
+    ) -> dict:
+        """Build the display_meta block attached to a successful tool result.
+
+        Records tool name/id, masking state, and — for command-exec — the
+        command string, so provenance (_last_test_result) can tell a test run
+        from an unrelated command without a fragile substring match in the
+        output. Extracted as a method so the command-injection rule is
+        unit-testable in isolation.
+        """
+        return {
+            "tool_name": name,
+            "tool_call_id": tool_call_id,
+            "status": "success",
+            "masked": masked,
+            "offload_path": offload_path,
+            "original_size": original_size,
+            "omitted_chars": omitted_chars,
+            "command": arguments.get("command") if name == "command-exec" else None,
+            "truncation_kind": "offloaded" if masked else "inline",
+        }
 
     def _build_provenance(self) -> str | None:
         """Build a host-generated provenance block for the checkpoint.

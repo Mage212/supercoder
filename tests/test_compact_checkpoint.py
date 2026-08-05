@@ -364,10 +364,13 @@ class TestSessionCompactPersistence:
         assert reloaded.load_session(session_id) is True
         assert reloaded.context.get_task_goal() == "goal that must survive reload"
 
-    def test_provenance_not_restored_as_live_field_on_load(self, tmp_path):
-        """By design, provenance is reconstructed fresh on the next compact
-        rather than restored from disk as a live context field. The string
-        survives only via the messages it was folded into."""
+    def test_provenance_field_round_trips_but_not_restored_to_context(self, tmp_path):
+        """The provenance field persists on the session object (round-trips
+        through save/load), but by design the agent's ContextWindowManager does
+        not carry a provenance attribute — provenance is rebuilt fresh by
+        _build_provenance on the next compact, not read back from disk. The
+        string also survives via the compact_summary message it was folded
+        into."""
         manager = SessionManager(tmp_path, allow_loading=True)
         session = ChatSession(
             id="sess2",
@@ -382,8 +385,10 @@ class TestSessionCompactPersistence:
 
         loaded = manager.load_session("sess2")
         assert loaded is not None
-        # Field persists on the session object...
-        assert loaded.provenance is not None
-        # ...but the agent's ContextWindowManager has no provenance attribute
-        # to restore into (provenance is rebuilt by _build_provenance, not read
-        # back from the session on load).
+        # Field round-trips on the session object.
+        assert loaded.provenance == "## Session Provenance\n- x: 1"
+
+        # And the agent's ContextWindowManager has no provenance attribute to
+        # restore into (it is rebuilt by _build_provenance, not read on load).
+        agent = CoderAgent(StubLLM(), tools=ALL_TOOLS, use_repo_map=False, repo_root=str(tmp_path))
+        assert not hasattr(agent.context, "provenance")
