@@ -65,6 +65,10 @@ class ContextWindowManager:
         # Kept separate from the system prompt so that repo changes do not
         # invalidate the system-prompt prefix in the LLM KV/prompt cache.
         self._repo_map_block: str = ""
+        # Original task goal captured from the first genuine user_input. Kept
+        # across compactions so the model does not lose the thread of the task
+        # after the recent context is summarized away.
+        self._task_goal: str | None = None
 
     def set_system_prompt(self, prompt: str) -> None:
         """Set the system prompt and calculate its tokens.
@@ -89,6 +93,20 @@ class ContextWindowManager:
             return False
         self._repo_map_block = text
         return True
+
+    def set_task_goal(self, goal: str) -> None:
+        """Capture the original task goal from the first user input.
+
+        Idempotent: only the first non-empty goal is kept. Subsequent user
+        messages (which may refocus within the same task) do not overwrite it,
+        so the goal survives unchanged across compactions.
+        """
+        if self._task_goal is None and goal and goal.strip():
+            self._task_goal = goal.strip()
+
+    def get_task_goal(self) -> str | None:
+        """Return the captured task goal, if any."""
+        return self._task_goal
 
     def set_tools_schema(self, tools_schema: list[dict] | None) -> None:
         """Set the native tools schema used for fallback request-size estimation."""
@@ -274,7 +292,10 @@ class ContextWindowManager:
         return [self.history[idx] for idx in sorted(selected)]
 
     def set_initial_summary(
-        self, summary: str, recent_messages: list[Message] | None = None
+        self,
+        summary: str,
+        recent_messages: list[Message] | None = None,
+        provenance: str | None = None,
     ) -> None:
         """Set a summary as the initial context after clearing history.
 
@@ -282,17 +303,39 @@ class ContextWindowManager:
         after clearing the conversation history. Recent messages can be kept
         verbatim after the summary to preserve the exact current working state.
 
+        The original task goal (captured via ``set_task_goal``) is re-injected
+        as its own ``user_input`` message after the summary, so the model does
+        not lose the thread of the task across compactions.
+
+        ``provenance`` is a host-generated block (git HEAD, changed files, last
+        test result) folded into the summary message, giving a deterministic
+        provenance anchor without an extra LLM call.
+
         Note: We use 'user' role so the model treats this as input context
         to remember, not as its own previous response.
         """
         self._last_response_total_tokens = None
+
+        summary_body = f"{provenance}\n\n{summary}" if provenance else summary
         self.history = [
             Message(
                 "user",
-                f"[Previous Context Summary - remember this information]\n\n{summary}",
+                f"[Previous Context Summary - remember this information]\n\n{summary_body}",
                 display_type="compact_summary",
             )
         ]
+
+        # Re-inject the original task goal so it survives compactions.
+        goal = self._task_goal
+        if goal:
+            self.history.append(
+                Message(
+                    "user",
+                    f"[Original Task Goal - do not lose this]\n\n{goal}",
+                    display_type="user_input",
+                )
+            )
+
         if recent_messages:
             self.history.extend(
                 msg

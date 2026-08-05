@@ -733,6 +733,7 @@ class CoderAgent:
                     "content": self._add_context_attachment(attachment),
                 }
             self.context.add_message(Message("user", user_message, display_type="user_input"))
+            self.context.set_task_goal(user_message)
             get_logger().log_user_input(user_message)
 
         # Update RepoMap if enabled
@@ -1506,6 +1507,7 @@ class CoderAgent:
                     "content": self._add_context_attachment(attachment),
                 }
             self.context.add_message(Message("user", user_message, display_type="user_input"))
+            self.context.set_task_goal(user_message)
             get_logger().log_user_input(user_message)
 
         tool_iterations = 0
@@ -1929,6 +1931,9 @@ class CoderAgent:
             self.context.clear()
             for msg in session.messages:
                 self.context.add_message(msg)
+            # Restore the captured task goal so it survives future compactions.
+            if session.task_goal:
+                self.context.set_task_goal(session.task_goal)
             return True
         return False
 
@@ -2096,17 +2101,119 @@ class CoderAgent:
                 stats_before,
             )
 
+        # Build a deterministic provenance block from host state (no extra LLM
+        # call). This anchors the checkpoint to git HEAD and records what
+        # changed and the last test result, so the model can resume reliably.
+        provenance = self._build_provenance()
+
         # Clear old history and keep an exact protected tail after the summary.
-        self.context.set_initial_summary(summary, recent_messages)
+        self.context.set_initial_summary(summary, recent_messages, provenance=provenance)
         self._mode_policy_needs_announcement = True
 
         # Update session with compacted state
         if self.current_session:
             self.session_manager.update_session_after_compact(
-                self.current_session, summary, recent_messages
+                self.current_session,
+                summary,
+                recent_messages,
+                provenance=provenance,
+                task_goal=self.context.get_task_goal(),
             )
 
         # Get stats after compaction
         stats_after = self.context.get_stats()
 
         return (summary, stats_before, stats_after)
+
+    def _build_provenance(self) -> str | None:
+        """Build a host-generated provenance block for the checkpoint.
+
+        Deterministic, no LLM call. Records the original task goal, git HEAD,
+        files changed this session, and the last test result. Returns None when
+        nothing useful could be gathered.
+        """
+        goal = self.context.get_task_goal()
+        git_head = self._git_head()
+        changed = self._session_changed_files()
+        last_test = self._last_test_result()
+
+        if not any([goal, git_head, changed, last_test]):
+            return None
+
+        lines = ["## Session Provenance"]
+        lines.append("")
+        goal_line = goal if goal else "(not captured)"
+        lines.append(f"- task goal: {goal_line}")
+        if git_head:
+            lines.append(f"- git HEAD: {git_head}")
+        if changed:
+            preview = ", ".join(changed[:20])
+            more = f" (+{len(changed) - 20} more)" if len(changed) > 20 else ""
+            lines.append(f"- files changed this session: {len(changed)} ({preview}{more})")
+        if last_test:
+            lines.append(f"- last test result: {last_test}")
+        return "\n".join(lines)
+
+    def _git_head(self) -> str | None:
+        """Return the current git HEAD short SHA, or None if not a git repo."""
+        import subprocess
+
+        try:
+            out = subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                cwd=self.repo_root,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if out.returncode == 0 and out.stdout.strip():
+                return out.stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return None
+
+    def _session_changed_files(self) -> list[str]:
+        """Return repo-relative paths changed in the working tree (git status)."""
+        import subprocess
+
+        try:
+            out = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=self.repo_root,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if out.returncode != 0:
+                return []
+            files: list[str] = []
+            for line in out.stdout.splitlines():
+                # Format: "XY path" (X/Y are status codes, path may be quoted).
+                if not line.strip():
+                    continue
+                path = line[3:].strip().strip('"')
+                if path:
+                    files.append(path)
+            return files
+        except (OSError, subprocess.SubprocessError):
+            return []
+
+    def _last_test_result(self) -> str | None:
+        """Scan recent history for the last command-exec test run outcome."""
+        for msg in reversed(self.context.history):
+            if msg.role != "tool" or msg.name != "command-exec":
+                continue
+            content = msg.content or ""
+            lowered = content.lower()
+            # Heuristic outcome detection for common test runners.
+            is_test = any(
+                tok in lowered for tok in ("pytest", "test", "jest", "cargo test", "go test")
+            )
+            if not is_test:
+                continue
+            if "passed" in lowered and "failed" not in lowered:
+                return f"PASS — {content.splitlines()[0][:80] if content.strip() else 'test run'}"
+            if "failed" in lowered or "error" in lowered:
+                return f"FAIL — {content.splitlines()[0][:80] if content.strip() else 'test run'}"
+            return f"RUN — {content.splitlines()[0][:80] if content.strip() else 'test run'}"
+        return None

@@ -22,6 +22,15 @@ class ChatSession:
     last_modified: str  # ISO format
     messages: list[Message] = field(default_factory=list)
     is_compacted: bool = False
+    # Original task goal captured from the first user_input. Survives
+    # compaction so the model keeps the thread of the task. This is model
+    # context, so loading it is covered by the session trust gate
+    # (allow_loading) — a planted value is an R2-7-class prompt-injection
+    # vector just like the messages list.
+    task_goal: str | None = None
+    # Host-generated provenance block from the last compaction (git HEAD,
+    # changed files, last test result). Also model context; trust-gated.
+    provenance: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert session to dictionary for JSON serialization."""
@@ -46,7 +55,7 @@ class ChatSession:
                 m["display_meta"] = msg.display_meta
             serialized_messages.append(m)
 
-        return {
+        data: dict[str, Any] = {
             "id": self.id,
             "title": self.title,
             "created_at": self.created_at,
@@ -54,6 +63,11 @@ class ChatSession:
             "is_compacted": self.is_compacted,
             "messages": serialized_messages,
         }
+        if self.task_goal is not None:
+            data["task_goal"] = self.task_goal
+        if self.provenance is not None:
+            data["provenance"] = self.provenance
+        return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ChatSession":
@@ -81,6 +95,8 @@ class ChatSession:
             last_modified=data.get("last_modified", ""),
             messages=messages,
             is_compacted=data.get("is_compacted", False),
+            task_goal=data.get("task_goal"),
+            provenance=data.get("provenance"),
         )
 
 
@@ -243,20 +259,42 @@ class SessionManager:
         return False
 
     def update_session_after_compact(
-        self, session: ChatSession, summary: str, recent_messages: list[Message] | None = None
+        self,
+        session: ChatSession,
+        summary: str,
+        recent_messages: list[Message] | None = None,
+        provenance: str | None = None,
+        task_goal: str | None = None,
     ) -> None:
         """Update session after context compaction.
 
-        Replaces old history with the summary plus any protected recent messages.
+        Replaces old history with the summary plus any protected recent messages,
+        and persists the host-generated provenance block and the original task
+        goal so they survive across sessions and compactions.
         """
         session.is_compacted = True
+        summary_body = f"{provenance}\n\n{summary}" if provenance else summary
         session.messages = [
             Message(
-                "user", f"[Previous Context Summary]\n\n{summary}", display_type="compact_summary"
+                "user",
+                f"[Previous Context Summary]\n\n{summary_body}",
+                display_type="compact_summary",
             )
         ]
+        if task_goal:
+            session.messages.append(
+                Message(
+                    "user",
+                    f"[Original Task Goal - do not lose this]\n\n{task_goal}",
+                    display_type="user_input",
+                )
+            )
         if recent_messages:
             session.messages.extend(recent_messages)
+        if provenance is not None:
+            session.provenance = provenance
+        if task_goal is not None:
+            session.task_goal = task_goal
         session.last_modified = datetime.now().isoformat()
 
         # Save updated session
