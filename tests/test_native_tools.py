@@ -973,6 +973,85 @@ class TestChatTurnEventFlow:
         assert len(offloaded) == 1
         assert "MIDDLE_ONLY_SECRET" in offloaded[0].read_text()
 
+    def test_command_exec_result_records_command_in_display_meta(self, tmp_path, monkeypatch):
+        """R4 N3 (producer end-to-end): a command-exec tool call flowing through
+        chat_turn must record the command string in the tool-result message's
+        display_meta, so provenance (_last_test_result) can classify it.
+
+        The TestBuildToolResultMeta unit tests only exercise the extracted
+        helper directly; this test pins the producer seam — that chat_turn
+        actually calls _build_tool_result_meta with the command-exec arguments
+        and the resulting context message carries display_meta["command"].
+        """
+        from supercoder.agent.coder_agent import CoderAgent
+        from supercoder.context import ContextConfig
+        from supercoder.tools.base import BaseTool, ToolDefinition
+
+        class FakeCommandExecTool(BaseTool):
+            """A command-exec namesake that bypasses real execution."""
+
+            @property
+            def definition(self):
+                return ToolDefinition(
+                    name="command-exec",
+                    description="Fake command-exec for producer-seam test.",
+                )
+
+            def execute(self, arguments):
+                return "3 passed in 1.2s"
+
+        # Allow the command via policy so no interactive confirmation is needed.
+        fake_logger = MagicMock()
+        monkeypatch.setattr("supercoder.agent.coder_agent.get_logger", lambda: fake_logger)
+        mock_llm = MagicMock()
+        mock_llm.model = "test-model"
+        mock_llm.config = MagicMock()
+        mock_llm.config.model = "test-model"
+        mock_llm.chat_with_tools_interruptible.side_effect = [
+            CompletionResult(
+                content="",
+                tool_calls=[
+                    NativeToolCall(
+                        id="call_cmd",
+                        name="command-exec",
+                        arguments={"command": "pytest -x"},
+                    )
+                ],
+                raw_tool_calls=[
+                    {
+                        "id": "call_cmd",
+                        "type": "function",
+                        "function": {
+                            "name": "command-exec",
+                            "arguments": '{"command": "pytest -x"}',
+                        },
+                    }
+                ],
+            ),
+            CompletionResult(content="Done.", tool_calls=[]),
+        ]
+
+        agent = CoderAgent(
+            llm=mock_llm,
+            tools=[FakeCommandExecTool()],
+            context_config=ContextConfig(max_tokens=32000),
+            streaming=False,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+            permissions={"command-exec": {"allow": ["pytest -x"]}},
+        )
+
+        list(agent.chat_turn("Run tests"))
+
+        tool_msgs = [m for m in agent.context.get_messages() if m.role == "tool"]
+        assert tool_msgs, "no tool-result message was added to context"
+        # The command was allowed and executed (not cancelled).
+        assert "cancelled" not in (tool_msgs[0].content or "").lower()
+        # Producer seam: the command string reached display_meta, so the
+        # _last_test_result consumer can classify this as a test run.
+        assert tool_msgs[0].display_meta["command"] == "pytest -x"
+        assert tool_msgs[0].display_meta["tool_name"] == "command-exec"
+
     def test_glob_is_available_in_ask_mode(self, tmp_path):
         """glob is a read-only discovery tool, so ASK mode includes it."""
         from supercoder.agent.agent_modes import AgentMode
