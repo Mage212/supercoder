@@ -218,6 +218,41 @@ class TestRecallOffloadRead:
         tool = RecallTool()
         assert not hasattr(tool, "trust_store")
 
+    def test_offload_read_logs_permission_denial(self, tmp_path, monkeypatch):
+        """When permission_policy denies an offload read, log_permission_decision
+        must be called (mirrors the file-read precedent)."""
+        from supercoder import logging as logging_mod
+        from supercoder.permissions import PermissionPolicy
+
+        offload_dir = tmp_path / ".supercoder" / "tool-outputs"
+        offload_dir.mkdir(parents=True)
+        offload_file = offload_dir / "20260805-080000-command-exec-abc.txt"
+        offload_file.write_text("SECRET CONTENT")
+
+        # Deny the offload directory via a configured path rule.
+        policy = PermissionPolicy(tmp_path, {"paths": {"deny": [".supercoder/tool-outputs/*"]}})
+        tool = RecallTool(allowed_root=tmp_path, permission_policy=policy, allow_offload_read=True)
+
+        calls = []
+        fake_logger = type(
+            "FakeLogger",
+            (),
+            {
+                "enabled": True,
+                "log_permission_decision": lambda self_, **kw: calls.append(kw),
+            },
+        )()
+        monkeypatch.setattr(logging_mod, "get_logger", lambda: fake_logger)
+        monkeypatch.setattr("supercoder.tools.recall.get_logger", lambda: fake_logger)
+
+        out = tool.execute(json.dumps({"offload": str(offload_file.relative_to(tmp_path))}))
+
+        # Content was not returned (denied)...
+        assert "SECRET CONTENT" not in out
+        # ...and the denial was logged exactly once with the recall tool name.
+        assert len(calls) == 1
+        assert calls[0]["tool_name"] == "recall"
+
 
 class TestRecallParseError:
     """Malformed arguments return a clean error, not a traceback."""
