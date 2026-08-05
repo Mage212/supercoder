@@ -1386,6 +1386,12 @@ class CoderAgent:
                                 "offload_path": offload_path,
                                 "original_size": masked_result.original_size,
                                 "omitted_chars": masked_result.omitted_chars,
+                                # Record the command so provenance (_last_test_result)
+                                # can tell a test run from an unrelated command without
+                                # relying on a fragile substring match in the output.
+                                "command": arguments.get("command")
+                                if name == "command-exec"
+                                else None,
                                 "truncation_kind": "offloaded"
                                 if masked_result.masked
                                 else "inline",
@@ -2199,21 +2205,49 @@ class CoderAgent:
             return []
 
     def _last_test_result(self) -> str | None:
-        """Scan recent history for the last command-exec test run outcome."""
+        """Scan recent history for the last command-exec test run outcome.
+
+        Classification is count-based: parses integer counts next to
+        passed/failed/error tokens rather than relying on bare substring
+        presence (which misclassified real pytest output like
+        ``3 passed, 0 failed`` as FAIL because the literal "failed" appeared).
+        """
+        import re
+
+        # Strict runner tokens for the fallback is_test check. The bare
+        # substring "test" is intentionally excluded: it false-positives on
+        # arbitrary command output (e.g. a filename "testing_notes.md" from ls).
+        runner_tokens = ("pytest", "jest", "cargo test", "go test", "unittest")
+
+        count_re = re.compile(r"(\d+)\s+(passed|failed|error|errors)\b", re.IGNORECASE)
+
         for msg in reversed(self.context.history):
             if msg.role != "tool" or msg.name != "command-exec":
                 continue
             content = msg.content or ""
             lowered = content.lower()
-            # Heuristic outcome detection for common test runners.
-            is_test = any(
-                tok in lowered for tok in ("pytest", "test", "jest", "cargo test", "go test")
+
+            # Prefer the recorded command when available; otherwise fall back
+            # to strict runner tokens in the output body.
+            command = ""
+            if isinstance(msg.display_meta, dict):
+                command = str(msg.display_meta.get("command") or "").lower()
+            is_test = any(tok in command for tok in runner_tokens) or any(
+                tok in lowered for tok in runner_tokens
             )
             if not is_test:
                 continue
-            if "passed" in lowered and "failed" not in lowered:
-                return f"PASS — {content.splitlines()[0][:80] if content.strip() else 'test run'}"
-            if "failed" in lowered or "error" in lowered:
-                return f"FAIL — {content.splitlines()[0][:80] if content.strip() else 'test run'}"
-            return f"RUN — {content.splitlines()[0][:80] if content.strip() else 'test run'}"
+
+            counts = {"passed": 0, "failed": 0, "error": 0}
+            for n, label in count_re.findall(content):
+                key = "error" if label.lower().startswith("error") else label.lower()
+                counts[key] += int(n)
+
+            first_line = content.splitlines()[0][:80] if content.strip() else "test run"
+            if counts["failed"] > 0 or counts["error"] > 0:
+                return f"FAIL — {first_line}"
+            if counts["passed"] > 0:
+                return f"PASS — {first_line}"
+            # Recognized test run but no parseable pass/fail counts yet.
+            return f"RUN — {first_line}"
         return None

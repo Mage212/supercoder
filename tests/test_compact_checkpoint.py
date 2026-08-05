@@ -220,3 +220,80 @@ class TestProvenanceBlock:
         # Goal was re-injected as its own user_input.
         goal_msgs = [m for m in messages if "the goal that must survive" in m.content]
         assert any(m.display_type == "user_input" for m in goal_msgs)
+
+
+class TestLastTestResult:
+    """_last_test_result classifies test-runner output by parsed counts.
+
+    The old substring heuristic misclassified real pytest output: pytest
+    prints ``3 passed, 0 failed in 1.2s`` and the presence of the literal
+    "failed" flipped it to FAIL. The fix parses numeric counts instead.
+    """
+
+    def _agent_with_test_result(self, tmp_path, tool_output, *, command=None):
+        agent = CoderAgent(StubLLM(), tools=ALL_TOOLS, use_repo_map=False, repo_root=str(tmp_path))
+        meta = {"command": command} if command else None
+        agent.context.add_message(
+            Message(
+                "tool",
+                tool_output,
+                tool_call_id="call_test",
+                name="command-exec",
+                display_type="tool_result",
+                display_meta=meta,
+            )
+        )
+        return agent
+
+    def test_pass_classification(self, tmp_path):
+        agent = self._agent_with_test_result(tmp_path, "3 passed in 1.2s", command="pytest -x")
+        result = agent._last_test_result()
+        assert result is not None
+        assert result.startswith("PASS")
+
+    def test_pass_with_zero_failed(self, tmp_path):
+        # Real pytest output: "3 passed, 0 failed" — the regression case.
+        agent = self._agent_with_test_result(
+            tmp_path, "3 passed, 0 failed in 1.2s", command="pytest"
+        )
+        result = agent._last_test_result()
+        assert result is not None
+        assert result.startswith("PASS"), f"expected PASS, got {result!r}"
+
+    def test_fail_classification(self, tmp_path):
+        agent = self._agent_with_test_result(
+            tmp_path, "1 failed, 2 passed in 1.0s", command="pytest"
+        )
+        result = agent._last_test_result()
+        assert result is not None
+        assert result.startswith("FAIL")
+
+    def test_error_classification(self, tmp_path):
+        agent = self._agent_with_test_result(tmp_path, "2 errors in 0.5s", command="pytest")
+        result = agent._last_test_result()
+        assert result is not None
+        assert result.startswith("FAIL")
+
+    def test_run_fallback_no_counts(self, tmp_path):
+        # Test output with no parseable pass/fail counts (e.g. still running
+        # or a runner without standard summary lines).
+        agent = self._agent_with_test_result(
+            tmp_path, "running test suite...\ncompiling", command="cargo test"
+        )
+        result = agent._last_test_result()
+        # Recognized as a test run but with no clear PASS/FAIL -> RUN.
+        assert result is not None
+        assert result.startswith("RUN")
+
+    def test_non_test_command_ignored(self, tmp_path):
+        # An unrelated command whose output happens to contain the substring
+        # "test" must not be misclassified as a test run.
+        agent = self._agent_with_test_result(
+            tmp_path, "testing_notes.md\nsrc/main.py", command="ls"
+        )
+        assert agent._last_test_result() is None
+
+    def test_no_test_in_history(self, tmp_path):
+        agent = CoderAgent(StubLLM(), tools=ALL_TOOLS, use_repo_map=False, repo_root=str(tmp_path))
+        # No messages at all.
+        assert agent._last_test_result() is None
