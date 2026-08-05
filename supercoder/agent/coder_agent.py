@@ -480,22 +480,35 @@ class CoderAgent:
         self._mode_policy_needs_announcement = False
 
     def _update_system_prompt(self):
-        """Update system prompt with latest RepoMap if enabled."""
-        prompt = self.base_system_prompt
+        """Set the stable system prompt (without RepoMap).
 
-        if self.repo_map:
-            try:
-                map_content = self.repo_map.get_repo_map(max_tokens=2000)
-                if map_content:
-                    prompt += f"\n\n# Repository Structure\n{map_content}"
-            except Exception as e:
-                if self.debug:
-                    console.print(f"[red]Error generating RepoMap: {e}[/]")
-                get_logger().log_error(e)
-
-        self.context.set_system_prompt(prompt)
+        The RepoMap now lives in its own stable message (see
+        ``_update_repo_map_block``) so that the system-prompt prefix stays
+        byte-stable across turns for LLM prompt caching, even when files change.
+        """
+        self.context.set_system_prompt(self.base_system_prompt)
         # Log the updated system prompt
-        get_logger().log_system_prompt(prompt)
+        get_logger().log_system_prompt(self.base_system_prompt)
+
+    def _update_repo_map_block(self):
+        """Refresh the stable repo-map block if the RepoMap is enabled.
+
+        The block is emitted by ``ContextWindowManager.get_messages_for_api``
+        as a separate ``user`` message between the system prompt and history,
+        so a changing map invalidates only that block and the tail — never the
+        system-prompt prefix.
+        """
+        if not self.repo_map:
+            return
+        try:
+            map_content = self.repo_map.get_repo_map(max_tokens=2000)
+        except Exception as e:
+            if self.debug:
+                console.print(f"[red]Error generating RepoMap: {e}[/]")
+            get_logger().log_error(e)
+            return
+        block = f"# Repository Structure\n{map_content}" if map_content else ""
+        self.context.set_repo_map_block(block)
 
     def _get_tools_for_mode(self) -> list:
         """Return tools available in current mode."""
@@ -715,7 +728,7 @@ class CoderAgent:
 
         # Update RepoMap if enabled
         if self.repo_map:
-            self._update_system_prompt()
+            self._update_repo_map_block()
 
         tool_iterations = 0
         malformed_tool_retries = 0
@@ -1466,7 +1479,7 @@ class CoderAgent:
 
         # Update RepoMap occasionally
         if self.repo_map:
-            self._update_system_prompt()
+            self._update_repo_map_block()
 
         # Create checkpoint for this interaction (will be committed after successful tool execution)
         checkpoint_active = False

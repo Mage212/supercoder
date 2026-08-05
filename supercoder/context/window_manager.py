@@ -61,11 +61,34 @@ class ContextWindowManager:
         self._system_tokens: int = 0
         self._last_response_total_tokens: int | None = None
         self._tools_schema: list[dict] | None = None
+        # Stable repo-map block injected between the system prompt and history.
+        # Kept separate from the system prompt so that repo changes do not
+        # invalidate the system-prompt prefix in the LLM KV/prompt cache.
+        self._repo_map_block: str = ""
 
     def set_system_prompt(self, prompt: str) -> None:
-        """Set the system prompt and calculate its tokens."""
+        """Set the system prompt and calculate its tokens.
+
+        Equality-guarded: an identical prompt is a no-op so that callers which
+        rebuild the prompt string each turn do not force a re-tokenization or
+        churn the prefix for LLM prompt caching.
+        """
+        if prompt == self._system_prompt:
+            return
         self._system_prompt = prompt
         self._system_tokens = self.counter.count(prompt)
+
+    def set_repo_map_block(self, text: str) -> bool:
+        """Set the stable repo-map block. Returns True if it changed.
+
+        The block is emitted by ``get_messages_for_api`` as a separate
+        ``user`` message immediately after the system prompt, so that the
+        system-prompt prefix stays byte-stable even when the map changes.
+        """
+        if text == self._repo_map_block:
+            return False
+        self._repo_map_block = text
+        return True
 
     def set_tools_schema(self, tools_schema: list[dict] | None) -> None:
         """Set the native tools schema used for fallback request-size estimation."""
@@ -84,10 +107,17 @@ class ContextWindowManager:
 
         Filters out display-only messages (e.g. reasoning) that should
         not be sent back to the model.
+
+        The layout is ``[system][repo_map?][history...]``. Keeping the repo
+        map in its own message (rather than appending it to the system prompt)
+        preserves the system-prompt prefix in the LLM KV/prompt cache when the
+        map changes during a session.
         """
         messages = []
         if self._system_prompt:
             messages.append(Message("system", self._system_prompt))
+        if self._repo_map_block:
+            messages.append(Message("user", self._repo_map_block))
         messages.extend(m for m in self.history if m.display_type != "thinking")
         return messages
 

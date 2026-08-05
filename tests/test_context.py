@@ -263,3 +263,98 @@ class TestContextWindowManager:
         assert len(messages) == 2
         assert messages[0].display_type == "compact_summary"
         assert messages[1].content == "latest"
+
+
+class TestSystemPromptEqualityGuard:
+    """set_system_prompt must be a no-op for identical prompts.
+
+    This keeps the system-prompt prefix stable for LLM prompt caching even
+    when callers rebuild the prompt string each turn.
+    """
+
+    def test_identical_prompt_skips_retokenization(self):
+        cm = ContextWindowManager(ContextConfig())
+        cm.set_system_prompt("You are a coding assistant.")
+        first_tokens = cm._system_tokens
+
+        # Spy on the token counter to prove it is not called again.
+        calls = {"n": 0}
+        original = cm.counter.count
+
+        def counting_count(text):
+            calls["n"] += 1
+            return original(text)
+
+        cm.counter.count = counting_count
+
+        cm.set_system_prompt("You are a coding assistant.")
+        assert cm._system_tokens == first_tokens
+        assert calls["n"] == 0
+
+    def test_changed_prompt_retokenizes(self):
+        cm = ContextWindowManager(ContextConfig())
+        cm.set_system_prompt("first prompt")
+
+        cm.set_system_prompt("second, different prompt")
+        # Token count may coincidentally match for tiny strings on some
+        # counters, so assert via the prompt string instead.
+        assert cm._system_prompt == "second, different prompt"
+        assert cm._system_tokens == cm.counter.count("second, different prompt")
+        # Sanity: the stored prompt really did change.
+        assert cm._system_tokens is not None
+
+
+class TestRepoMapStableMessage:
+    """The repo-map block lives in its own message, not the system prompt.
+
+    Layout for API calls is ``[system][repo_map?][history...]`` so that edits
+    to the map invalidate only the repo-map block and the tail — never the
+    system-prompt prefix.
+    """
+
+    def test_set_repo_map_block_returns_true_on_change(self):
+        cm = ContextWindowManager(ContextConfig())
+        assert cm.set_repo_map_block("# Repository Structure\n...") is True
+        # Same content → no change → False
+        assert cm.set_repo_map_block("# Repository Structure\n...") is False
+        # New content → change → True
+        assert cm.set_repo_map_block("# Repository Structure\nv2") is True
+
+    def test_message_order_system_repo_map_history(self):
+        cm = ContextWindowManager(ContextConfig())
+        cm.set_system_prompt("SYSTEM")
+        cm.set_repo_map_block("REPO_MAP")
+        cm.add_message(Message("user", "hello", display_type="user_input"))
+
+        msgs = cm.get_messages_for_api()
+
+        assert len(msgs) == 3
+        assert msgs[0].role == "system"
+        assert msgs[0].content == "SYSTEM"
+        assert msgs[1].role == "user"
+        assert msgs[1].content == "REPO_MAP"
+        assert msgs[2].content == "hello"
+
+    def test_system_prompt_stable_when_repo_map_changes(self):
+        """Changing the repo map must not touch the system-prompt content."""
+        cm = ContextWindowManager(ContextConfig())
+        cm.set_system_prompt("STABLE SYSTEM")
+        cm.set_repo_map_block("REPO_MAP_A")
+
+        msgs_before = cm.get_messages_for_api()
+        sys_before = msgs_before[0].content
+
+        cm.set_repo_map_block("REPO_MAP_B")
+
+        msgs_after = cm.get_messages_for_api()
+        assert msgs_after[0].content == sys_before == "STABLE SYSTEM"
+        assert msgs_after[1].content == "REPO_MAP_B"
+
+    def test_no_repo_map_block_when_empty(self):
+        cm = ContextWindowManager(ContextConfig())
+        cm.set_system_prompt("SYSTEM")
+        cm.add_message(Message("user", "hi", display_type="user_input"))
+
+        msgs = cm.get_messages_for_api()
+        # Only system + history; no empty repo-map message inserted.
+        assert [m.role for m in msgs] == ["system", "user"]

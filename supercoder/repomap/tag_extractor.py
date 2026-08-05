@@ -28,7 +28,40 @@ class TagExtractor:
         self._cache = {}
 
     def extract(self, file_path: str) -> list[Tag]:
-        """Extract tags from a file."""
+        """Extract tags from a file, cached by (path, mtime, size).
+
+        The cache avoids re-running the tree-sitter parse on every RepoMap
+        regeneration when the file's contents have not changed. This matters
+        because RepoMap may be invoked on every agent turn, and extraction is
+        the dominant cost of a cache miss (one full parse per file).
+        """
+        try:
+            key = self._cache_key_for(file_path)
+        except OSError:
+            # File vanished between discovery and read; fall through to extract
+            # which will handle the missing file.
+            key = None
+
+        if key is not None:
+            cached = self._cache.get(key)
+            if cached is not None:
+                return cached
+
+        tags = self._do_extract(file_path)
+
+        if key is not None:
+            self._cache[key] = tags
+        return tags
+
+    @staticmethod
+    def _cache_key_for(file_path: str) -> tuple[str, int, int]:
+        """Build a cache key from path identity + freshness signals."""
+        p = Path(file_path)
+        st = p.stat()
+        return (str(p.resolve()), st.st_mtime_ns, st.st_size)
+
+    def _do_extract(self, file_path: str) -> list[Tag]:
+        """Uncached extraction implementation."""
         if not HAS_TREE_SITTER:
             return self._fallback_extract(file_path)
 
