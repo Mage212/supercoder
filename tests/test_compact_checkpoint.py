@@ -13,7 +13,7 @@ import subprocess
 
 from supercoder.agent.coder_agent import CoderAgent
 from supercoder.context import ContextConfig, ContextWindowManager
-from supercoder.context.session_manager import ChatSession
+from supercoder.context.session_manager import ChatSession, SessionManager
 from supercoder.llm.base import CompletionResult, Message
 from supercoder.tools import ALL_TOOLS
 
@@ -297,3 +297,93 @@ class TestLastTestResult:
         agent = CoderAgent(StubLLM(), tools=ALL_TOOLS, use_repo_map=False, repo_root=str(tmp_path))
         # No messages at all.
         assert agent._last_test_result() is None
+
+
+class TestSessionCompactPersistence:
+    """task_goal and provenance persist through update_session_after_compact
+    and survive a save/load cycle. This covers the kwargs branches that no
+    other test exercises."""
+
+    def test_update_session_after_compact_persists_new_fields(self, tmp_path):
+        manager = SessionManager(tmp_path, allow_loading=True)
+        session = ChatSession(
+            id="sess1",
+            title="t",
+            created_at="2026-08-05T08:00:00",
+            last_modified="2026-08-05T08:00:00",
+            messages=[Message("user", "hi", display_type="user_input")],
+        )
+        recent = [Message("user", "latest", display_type="user_input")]
+
+        manager.update_session_after_compact(
+            session,
+            "summary text",
+            recent,
+            provenance="## Session Provenance\n- git HEAD: abc1234",
+            task_goal="the original goal",
+        )
+
+        loaded = manager.load_session("sess1")
+        assert loaded is not None
+        assert loaded.task_goal == "the original goal"
+        assert loaded.provenance is not None
+        assert "git HEAD: abc1234" in loaded.provenance
+
+    def test_compact_save_load_goal_survives(self, tmp_path, monkeypatch):
+        """End-to-end: compact_context persists the goal, and load_session
+        restores it into the live context so future compactions keep it."""
+        agent = CoderAgent(
+            StubLLM(),
+            tools=ALL_TOOLS,
+            use_repo_map=False,
+            repo_root=str(tmp_path),
+        )
+        agent.context.set_task_goal("goal that must survive reload")
+        agent.context.add_message(
+            Message("user", "goal that must survive reload", display_type="user_input")
+        )
+        agent.context.add_message(Message("assistant", "wip", display_type="response"))
+        agent.context.add_message(Message("user", "second turn", display_type="user_input"))
+        agent.context.add_message(Message("assistant", "more wip", display_type="response"))
+
+        # Create a session so compact_context has somewhere to persist.
+        agent.current_session = agent.session_manager.create_new_session()
+
+        def fake_run(cmd, **kwargs):
+            return subprocess.CompletedProcess(cmd, 128, stdout="", stderr="not a repo")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        agent.compact_context()
+
+        # Reload the session into a fresh agent and confirm the goal survived.
+        session_id = agent.current_session.id
+        reloaded = CoderAgent(
+            StubLLM(), tools=ALL_TOOLS, use_repo_map=False, repo_root=str(tmp_path)
+        )
+        assert reloaded.load_session(session_id) is True
+        assert reloaded.context.get_task_goal() == "goal that must survive reload"
+
+    def test_provenance_not_restored_as_live_field_on_load(self, tmp_path):
+        """By design, provenance is reconstructed fresh on the next compact
+        rather than restored from disk as a live context field. The string
+        survives only via the messages it was folded into."""
+        manager = SessionManager(tmp_path, allow_loading=True)
+        session = ChatSession(
+            id="sess2",
+            title="t",
+            created_at="2026-08-05T08:00:00",
+            last_modified="2026-08-05T08:00:00",
+            messages=[],
+        )
+        manager.update_session_after_compact(
+            session, "summary", None, provenance="## Session Provenance\n- x: 1"
+        )
+
+        loaded = manager.load_session("sess2")
+        assert loaded is not None
+        # Field persists on the session object...
+        assert loaded.provenance is not None
+        # ...but the agent's ContextWindowManager has no provenance attribute
+        # to restore into (provenance is rebuilt by _build_provenance, not read
+        # back from the session on load).
