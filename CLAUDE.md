@@ -97,7 +97,7 @@ Tools are registered in `supercoder/tools/__init__.py` as `ALL_TOOLS`. The agent
 
 ### RepoMap
 
-`supercoder/repomap/` — Uses tree-sitter to extract symbols from code files, builds a networkx graph of references, generates a token-limited summary injected into the system prompt. Persisted to `.supercoder/repomap/repo_map.txt`.
+`supercoder/repomap/` — Uses tree-sitter to extract symbols from code files and generates a token-limited summary emitted as a stable message (between the system prompt and history) so the system-prompt prefix stays cache-friendly. Persisted to `.supercoder/repomap/repo_map.txt`.
 
 ### REPL
 

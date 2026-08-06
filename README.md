@@ -65,7 +65,7 @@ Modifies your codebase seamlessly using diff-based operations. Every edit is **a
 Leverage project-specific rules to guide the agent. Place `.md` files in `.supercoder/rules/` and they will be automatically loaded into the agent's context. In lean mode, rules are compacted but still included. Rules are injected into the system prompt, so in an **untrusted repository** they are gated behind the [repository trust](#-repository-trust-untrusted-repos) decision.
 
 ### 🗺️ RepoMap Support
-Uses `tree-sitter` and `networkx` to generate a high-level map of your repository, helping the LLM understand relationships between files and symbols. Runtime artifacts, virtual environments, cache folders, and `.supercoder` internals are ignored to avoid prompt pollution.
+Uses `tree-sitter` to generate a high-level map of your repository, helping the LLM understand relationships between files and symbols. Runtime artifacts, virtual environments, cache folders, and `.supercoder` internals are ignored to avoid prompt pollution.
 
 ### 🧠 Context Management
 - **API Usage Tracking**: The status footer uses the latest API `usage.total_tokens` when available, so the visible context number matches proxy/provider accounting instead of relying only on local prompt estimates.
@@ -370,7 +370,6 @@ supercoder/
 - `click` — CLI framework
 - `rich` — Beautiful terminal output
 - `prompt-toolkit` — Interactive input
-- `networkx` — Graph-based RepoMap
 - `tree-sitter-languages` — Code parsing for RepoMap
 - `tiktoken` — Token counting
 - `pyyaml` — Configuration files

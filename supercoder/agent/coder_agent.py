@@ -145,7 +145,7 @@ class CoderAgent:
         config = context_config or ContextConfig()
         self.context = ContextWindowManager(config)
         self.context.set_tools_schema(self._tools_schema)
-        self._update_system_prompt()
+        self._set_base_system_prompt()
 
         # Multi-format tool call parser (used only in deprecated streaming mode)
         self.tool_parser = ToolCallParser(debug=False)
@@ -488,11 +488,11 @@ class CoderAgent:
         )
         self._mode_policy_needs_announcement = False
 
-    def _update_system_prompt(self):
-        """Set the stable system prompt (without RepoMap).
+    def _set_base_system_prompt(self):
+        """Set the stable base system prompt (without RepoMap).
 
-        The RepoMap now lives in its own stable message (see
-        ``_update_repo_map_block``) so that the system-prompt prefix stays
+        The RepoMap lives in its own stable message (see
+        ``_update_repo_map_block``) so the system-prompt prefix stays
         byte-stable across turns for LLM prompt caching, even when files change.
         """
         self.context.set_system_prompt(self.base_system_prompt)
@@ -560,7 +560,7 @@ class CoderAgent:
             native_tools=not self.streaming,
             lean=self.lean,
         )
-        self._update_system_prompt()
+        self._set_base_system_prompt()
 
     def _check_mode_tool(self, tool_name: str, arguments: dict | None) -> ModeToolDecision:
         """Return the host-side mode decision for a requested tool call."""
@@ -2234,8 +2234,6 @@ class CoderAgent:
         presence (which misclassified real pytest output like
         ``3 passed, 0 failed`` as FAIL because the literal "failed" appeared).
         """
-        import re
-
         # Strict runner tokens for the fallback is_test check. The bare
         # substring "test" is intentionally excluded: it false-positives on
         # arbitrary command output (e.g. a filename "testing_notes.md" from ls).

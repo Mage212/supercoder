@@ -29,17 +29,14 @@ from ..permissions import PermissionPolicy
 from .base import BaseTool, ToolDefinition
 from .tool_utils import resolve_within_root
 
-# Per-event content fields searched for a substring query.
-_CONTENT_FIELDS_BY_TYPE: dict[str, tuple[str, ...]] = {
-    "tool_call": ("tool", "arguments"),
-    "tool_result": ("tool", "result"),
-    "error": ("error",),
+# Extra fields searched per event type IN ADDITION to the common union
+# {content, result, arguments, error} in _entry_matches. Only types whose
+# searchable fields fall outside that union are listed here; for all other
+# types the union alone is sufficient.
+_EXTRA_FIELDS_BY_TYPE: dict[str, tuple[str, ...]] = {
     "tool_output_masked": ("tool",),
-    "user": ("content",),
-    "assistant": ("content",),
     "permission_decision": ("tool", "subject", "reason"),
     "edit_confirm": ("filepath",),
-    "default": ("content", "result", "arguments", "error"),
 }
 
 
@@ -201,13 +198,11 @@ class RecallTool(BaseTool):
             return False
         if not query_lower:
             return True  # type filter only
-        fields = (
-            _CONTENT_FIELDS_BY_TYPE.get(etype, _CONTENT_FIELDS_BY_TYPE["default"])
-            if isinstance(etype, str)
-            else _CONTENT_FIELDS_BY_TYPE["default"]
-        )
-        # Also always search the union of common fields as a fallback.
-        search_fields = set(fields) | {"content", "result", "arguments", "error"}
+        # Always search the common content-bearing fields, plus any extra
+        # fields this event type carries outside that union.
+        search_fields = {"content", "result", "arguments", "error"}
+        if isinstance(etype, str):
+            search_fields |= set(_EXTRA_FIELDS_BY_TYPE.get(etype, ()))
         for key in search_fields:
             value = entry.get(key)
             if isinstance(value, str) and query_lower in value.lower():
