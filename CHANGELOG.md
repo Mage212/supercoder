@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.4.4
+
+Epoch-based memory architecture: the first release aimed specifically at long sessions on **local LLMs** (llama-server / vLLM / SGLang). The goal is to minimize KV/prompt-cache invalidation, keep the task thread across compactions, and let the model reach past events that were compacted out of the context window. Security is unchanged from v0.4.3.
+
+### Features
+
+- **Prefix-cache-friendly RepoMap**: the repository map moved out of the system prompt into its own stable `user` message (between system and history), so the system-prompt prefix stays byte-stable across turns — even when files change in CODE mode. Previously the map was appended to the system prompt suffix and regenerated every turn, which invalidated the prefix on every call. File selection and rendering are now sorted (deterministic across filesystem inode order), and a content-hash cache reuses the prior render without re-running tree-sitter when files are unchanged. The on-disk `repo_map.txt` and a new `repo_map.meta.json` sidecar are rewritten only on a cache miss. `set_system_prompt` is now equality-guarded so identical prompts skip re-tokenization. The dead `networkx.MultiDiGraph` (created and fed but never read — a monotonic memory leak) was removed.
+- **`recall` retrieval tool**: session logging is now **on by default** (`--no-log` opts out; `--debug` forces it on) so past events are recoverable. The new `recall` tool searches current and past session logs by content/type/time and recovers the full text of large tool outputs that were compacted out of context. The JSONL log is host-owned and always searchable; reading repo-local offloaded outputs (`.supercoder/tool-outputs/`) is gated behind the repository trust decision (`allow_offload_read`, mirroring `allow_session_load`), since a planted file there is an R2-7-class prompt-injection vector.
+- **Compact with goal re-injection + structured checkpoint**: `/compact` now captures the original task goal from the first user message and re-injects it after every compaction, so the model keeps the thread of the task across context resets (the goal previously survived only if the model happened to include it in its free-text summary). A host-generated provenance block (git HEAD, files changed this session via `git status --porcelain`, last test result scanned from recent `command-exec` outputs) is folded into the summary with no extra LLM call. The captured goal and provenance persist on the session (`ChatSession.task_goal` / `.provenance`) and are covered by the existing session trust gate. `load_session` restores the goal into the live context.
+
+### Correctness
+
+- **Count-based test-run classification**: the provenance "last test result" line now parses integer pass/fail/error counts instead of relying on substrings. Real pytest output like `3 passed, 0 failed` was previously misclassified as FAIL because the literal "failed" appeared. The classifier also prefers the recorded command (now stored on `command-exec` tool results in `display_meta`) over fragile substring matching, so non-test commands whose output happens to contain "test" are no longer misclassified.
+- **RepoMap cache key includes `max_tokens`**: a cache hit previously returned the render from the PREVIOUS `max_tokens` and silently ignored the requested limit. `max_tokens` is now part of the digest.
+- **TagExtractor cache defeat on same-size/same-mtime edits**: the per-file tag cache was keyed on `(path, mtime_ns, size)` with no content signal, so a same-size edit within one mtime second (realistic on NFS / Docker bind-mounts with second-resolution mtime) returned the OLD tags. The key now includes a content fingerprint: files up to 32KB are hashed in full (any byte change invalidates, including middle-only edits); larger files hash head + middle-window + tail samples. Non-regular files (FIFOs/devices) are skipped to avoid a blocking open.
+- **`recall` no longer crashes on malformed timestamps**: the result sort coerced timestamps with `e.get("timestamp","")`, which raised `TypeError` (and propagated to the agent loop) when a hand-edited or partially flushed log contained `null`/numeric timestamps. The sort key is now string-coerced.
+- **Offload reads require a configured project root**: `RecallTool(allow_offload_read=True, allowed_root=None)` previously reached files outside the repo because `resolve_within_root` does not confine when the root is `None`. The tool now refuses explicitly (defense-in-depth — production wiring always injects both).
+
+### Tests
+
+- Test count grew from 531 to 606 (+75). New suites: `test_repomap_cache` (determinism, cache, content-digest), `test_recall_tool` (search, offload trust-gate, malformed logs, ordering, producer seam), `test_compact_checkpoint` (goal capture/re-injection, provenance, session round-trip, count-based test classification), `test_log_enabled` (default-on logging truth table + main() delegation). Existing suites gained producer-end-to-end, trust-gate, and wiring coverage. Every code fix from the two independent audit rounds is covered by a regression test that fails on the pre-fix code.
+
 ## Unreleased
 
 ### Security

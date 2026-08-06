@@ -1,6 +1,6 @@
 # 🤖 SuperCoder
 
-[![Version](https://img.shields.io/badge/version-0.4.3-blue.svg)](https://github.com/Mage212/supercoder)
+[![Version](https://img.shields.io/badge/version-0.4.4-blue.svg)](https://github.com/Mage212/supercoder)
 [![Python](https://img.shields.io/badge/python-3.11+-green.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -8,19 +8,15 @@
 
 ---
 
-## 🆕 What's New in v0.4.3
+## 🆕 What's New in v0.4.4
 
-This is a **security and correctness** release prompted by a full code review. It closes several attack vectors that mattered when running SuperCoder inside a **cloned or untrusted repository**, plus a number of correctness bugs.
+This release adds an **epoch-based memory architecture** aimed at long sessions on **local LLMs** (llama-server / vLLM / SGLang): minimize KV/prompt-cache invalidation, keep the task thread across compactions, and let the model reach past events that were compacted out of the context window. It is the first step of a broader direction; security is unchanged from v0.4.3.
 
-- **Per-Repository Trust Gate**: files inside a repository (`.supercoder.yaml`, `.supercoder/permissions.yaml`, `.supercoder/rules/*.md`, `.supercoder/sessions/*.json`) are now treated as **untrusted input** by default. A cloned malicious repo can no longer silently redirect your credentials (via a planted `base_url`), auto-approve arbitrary shell commands (via planted permission rules), or inject prompt instructions (via planted rules or a planted session replayed on `/continue`). On the first run in a repo that carries any of these, SuperCoder shows what would be overridden and asks whether to trust it; the answer is remembered in `~/.supercoder/trusted-repos`. Non-interactive sessions stay safe. Safe tuning fields (`temperature`, `max_context_tokens`, `loop_detection`, …) are always honored from local config.
-- **Shell-Injection Hardening (allow rules)**: the shell-control-operator detector now follows POSIX quoting — backslash is literal inside single quotes. A command like `git status'\'; rm -rf ~` previously matched a `git status*` allow rule, was reported as having no control operator, and was auto-approved while the real shell executed the payload after `;`. The detector now flags it correctly.
-- **Subprocess Secret Scrubbing**: spawned commands no longer inherit secret environment variables (`*_API_KEY`, `*_KEY`, `*_TOKEN`, `*_SECRET`, `OPENAI_*`, `SUPERCODER_*`, …), so `env` / `printenv` can no longer exfiltrate live credentials into tool output.
-- **`/undo` Path Containment**: checkpoint metadata is untrusted; `/undo` now refuses to restore or delete any path that resolves outside the repo root, blocking a planted-checkpoint attack that could overwrite `~/.zshrc` or delete arbitrary files.
-- **Secret Scrubber Coverage**: `sk-proj-…` / `sk-ant-api03-…` (OpenAI/Anthropic, since 2024), Google AI (`AIza…`), and Replicate (`r8_…`) tokens are now redacted in bare form — not only when preceded by a `key=` field name.
-- **CRLF Preservation on Edits**: all `code-edit` operations (`search_replace`, `insert_after`, `insert_before`, `replace_lines`, `append`) now preserve Windows line endings — previously a single `search_replace` was fixed while the other four silently rewrote CRLF files to LF.
-- **Other Fixes**: lean prompt is now correctly rebuilt when switching models that differ only in the `lean` flag; double-ESC abort shows the "Interrupted" panel in native mode; checkpoint backup dedup no longer clobbers the pristine backup when a path is passed both relative and absolute; loop-guard status-word classification is scoped to the first line so reading a docs file that mentions "denied" no longer trips a false-positive loop stop.
-
-See [CHANGELOG.md](CHANGELOG.md) for the full release history.
+- **Prefix-cache-friendly RepoMap**: the repository map moved out of the system prompt into its own stable message (between system and history), so the system-prompt prefix is now byte-stable across turns — even when files change in CODE mode. File selection and rendering are sorted and content-hash cached, so unchanged files reuse the prior render without re-running tree-sitter. The on-disk `repo_map.txt` and a new `repo_map.meta.json` sidecar are rewritten only on a cache miss.
+- **`recall` retrieval tool**: session logging is now **on by default** (`--no-log` to opt out), and the new `recall` tool searches current and past session logs (tool calls, results, commands, errors) and recovers the full text of large tool outputs that were compacted out of context. JSONL log reads are host-owned and always available; reading repo-local offloaded outputs (`.supercoder/tool-outputs/`) is gated behind the repository trust decision, like sessions and rules.
+- **Compact with goal re-injection + structured checkpoint**: `/compact` now captures the original task goal from the first user message and re-injects it after every compaction, so the model keeps the thread of the task across context resets. A host-generated provenance block (git HEAD, files changed this session, last test result) is folded into the summary without an extra LLM call. Both the goal and the provenance persist on the session and are covered by the existing session trust gate.
+- **Count-based test-run classification**: the provenance "last test result" line now parses integer pass/fail/error counts instead of relying on substrings — real pytest output like `3 passed, 0 failed` was previously misclassified as FAIL.
+- **Removed dead `networkx` dependency**: RepoMap no longer builds a graph (it never built edges even before), so the dependency is gone and the lockfile is lighter.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
@@ -65,18 +61,20 @@ Modifies your codebase seamlessly using diff-based operations. Every edit is **a
 Leverage project-specific rules to guide the agent. Place `.md` files in `.supercoder/rules/` and they will be automatically loaded into the agent's context. In lean mode, rules are compacted but still included. Rules are injected into the system prompt, so in an **untrusted repository** they are gated behind the [repository trust](#-repository-trust-untrusted-repos) decision.
 
 ### 🗺️ RepoMap Support
-Uses `tree-sitter` to generate a high-level map of your repository, helping the LLM understand relationships between files and symbols. Runtime artifacts, virtual environments, cache folders, and `.supercoder` internals are ignored to avoid prompt pollution.
+Uses `tree-sitter` to generate a high-level map of your repository, helping the LLM understand relationships between files and symbols. Runtime artifacts, virtual environments, cache folders, and `.supercoder` internals are ignored to avoid prompt pollution. The map is emitted as its own stable message (between the system prompt and history) and is content-hash cached, so the system-prompt prefix stays cache-friendly for local LLM backends and unchanged files don't re-run tree-sitter on every turn.
 
 ### 🧠 Context Management
 - **API Usage Tracking**: The status footer uses the latest API `usage.total_tokens` when available, so the visible context number matches proxy/provider accounting instead of relying only on local prompt estimates.
 - **Fallback Payload Counting**: If a backend omits usage, SuperCoder estimates the serialized chat payload, including messages, native tool schemas, assistant tool calls, reasoning, and response content.
 - **Cache-Aware Compaction**: Use `/compact` to summarize conversation history without switching to a separate summarization prompt, which keeps local-model prompt cache useful.
+- **Goal Re-injection**: The original task goal (from your first message) is captured and re-injected after every compaction, so the model keeps the thread of the task across context resets. A host-generated provenance block (git HEAD, files changed this session, last test result) is folded into the summary with no extra LLM call.
 - **Auto-Compact**: Long sessions compact automatically after model responses around 75% of total context, with emergency trimming left as a fallback.
 - **Protected Recent Steps**: After compacting, SuperCoder keeps the summary plus the last 6 exact conversation steps.
 - **Tool Output Compaction**: Large tool outputs are compacted for the model, stored in full under `.supercoder/tool-outputs/`, and displayed in the CLI as clean user-facing previews.
+- **Recall Tool**: The `recall` tool searches current and past session logs and recovers the full text of tool outputs that were compacted out of context — the model no longer has to "forget" anything that was rolled out of the window.
 
 ### 🧪 Debug Diagnostics
-Run with `--debug` to write JSONL logs to `~/.supercoder/logs/`. Logs include native tool-call metadata, fallback parse/retry events, tool result masking events, permission decisions, permission rule changes, edit confirmations, freshness checks, approval/preflight outcomes, offload paths, API request messages, reasoning, responses, and errors.
+Session logging writes JSONL logs to `~/.supercoder/logs/` **by default** (use `--no-log` to opt out; `--debug` forces it on). Logs include native tool-call metadata, fallback parse/retry events, tool result masking events, permission decisions, permission rule changes, edit confirmations, freshness checks, approval/preflight outcomes, offload paths, API request messages, reasoning, responses, and errors. All log writes are secret-scrubbed.
 
 ### 💾 Session Persistence
 - **Auto-Save**: Your conversation is automatically saved after each message exchange.
